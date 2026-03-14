@@ -1,0 +1,44 @@
+from __future__ import annotations
+
+from prostanet.shared.contracts import FieldSpec, module_schema
+
+
+LOCALIZED_SCHEMA = module_schema(
+    "localized_initial",
+    "Diagnóstico inicial localizado o regional con ganglios regionales positivos y sin metástasis a distancia",
+    "Estratificación de riesgo, vigilancia activa y elegibilidad terapéutica alineadas con la Red Nacional Integral del Cáncer (NCCN) 5.2026 y comparadas con la Asociación Europea de Urología (EAU) 2026.",
+    fields=[
+        FieldSpec("age", "Edad", "number", required=True, default=65, group="Contexto clínico", group_order=1, clinical_role="required", unit="años"),
+        FieldSpec("life_expectancy_years", "Esperanza de vida", "number", default=15, group="Contexto clínico", group_order=1, clinical_role="required", unit="años", evidence_tags=["nccn_primary", "eau_2026"]),
+        FieldSpec("psa", "Antígeno prostático específico (PSA)", "number", required=True, default=8.5, group="Estadificación primaria", group_order=2, clinical_role="required", unit="ng/mL"),
+        FieldSpec("psad", "Densidad del antígeno prostático específico (PSAD)", "number", default=0.10, group="Estadificación primaria", group_order=2, clinical_role="decision_refiner", unit="ng/mL/cc", derived_from=["psa", "prostate_volume_ml"], evidence_tags=["psad"], benchmark_note="Se alinea con pathways MRI + PSAD y con benchmarks de producto tipo MSK/EAU."),
+        FieldSpec("clinical_tstage", "Estadio clínico T", "select", required=True, options=["T1c", "T2a", "T2b", "T2c", "T3a", "T3b", "T4"], default="T2a", group="Estadificación primaria", group_order=2, clinical_role="required"),
+        FieldSpec("gleason_primary", "Gleason primario", "select", required=True, options=["3", "4", "5"], default="3", group="Patología de biopsia", group_order=3, clinical_role="required"),
+        FieldSpec("gleason_secondary", "Gleason secundario", "select", required=True, options=["3", "4", "5"], default="4", group="Patología de biopsia", group_order=3, clinical_role="required"),
+        FieldSpec("isup_grade", "Grupo de grado de la Sociedad Internacional de Patología Urológica (ISUP)", "select", required=True, options=["1", "2", "3", "4", "5"], default="2", group="Patología de biopsia", group_order=3, clinical_role="required"),
+        FieldSpec("num_cores_positive", "Cores positivos", "number", required=True, default=2, group="Patología de biopsia", group_order=3, clinical_role="required", unit="cores"),
+        FieldSpec("total_cores", "Cores totales", "number", required=True, default=12, group="Patología de biopsia", group_order=3, clinical_role="required", unit="cores"),
+        FieldSpec("max_core_involvement", "Máximo compromiso por cilindro", "number", default=0.2, help_text="Use 0.20 para representar 20 % de compromiso.", group="Patología de biopsia", group_order=3, clinical_role="decision_refiner", unit="proporción"),
+        FieldSpec("percent_pattern_4", "Porcentaje de patrón 4", "number", default=10, group="Patología de biopsia", group_order=3, clinical_role="decision_refiner", unit="%", evidence_tags=["active_surveillance", "risk_refinement"]),
+        FieldSpec("cribriform_pattern", "Patrón cribiforme", "select", options=["0", "1"], default="0", group="Patología de biopsia", group_order=3, clinical_role="decision_refiner"),
+        FieldSpec("intraductal_carcinoma", "Carcinoma intraductal", "select", options=["0", "1"], default="0", group="Patología de biopsia", group_order=3, clinical_role="decision_refiner"),
+        FieldSpec("prior_mpmri", "Resonancia magnética previa disponible", "select", options=["0", "1"], default="1", group="Imagen y riesgo", group_order=4, clinical_role="decision_refiner", evidence_tags=["mpmri"]),
+        FieldSpec("prostate_volume_ml", "Volumen prostático", "number", default=40, group="Imagen y riesgo", group_order=4, clinical_role="decision_refiner", unit="mL", evidence_tags=["psad", "mpmri"]),
+        FieldSpec("nodal_status", "Estado ganglionar", "select", options=["N0", "N1"], default="N0", group="Imagen y riesgo", group_order=4, clinical_role="required"),
+        FieldSpec("metastasis_site", "Sitio de metástasis", "select", options=["M0"], default="M0", group="Imagen y riesgo", group_order=4, clinical_role="required"),
+        FieldSpec("genomic_classifier", "Clasificador genómico", "select", options=["No realizado", "Decipher", "Prolaris", "Oncotype"], default="No realizado", group="Refinadores biológicos", group_order=5, clinical_role="optional", evidence_tags=["genomic_classifier"], benchmark_note="Captura opcional para benchmarking y refinamiento sin sobreescribir el riesgo de guías."),
+        FieldSpec("genomic_classifier_result", "Resultado del clasificador genómico", "select", options=["No aplica", "Bajo", "Intermedio", "Alto"], default="No aplica", group="Refinadores biológicos", group_order=5, clinical_role="optional", evidence_tags=["genomic_classifier"], conditional_visibility={"genomic_classifier": ["Decipher", "Prolaris", "Oncotype"]}),
+        FieldSpec("risk_calculator_pathway", "Pathway MRI + PSAD / calculadora", "select", options=["No usado", "EAU MRI + PSAD", "Calculadora externa"], default="No usado", group="Refinadores biológicos", group_order=5, clinical_role="decision_refiner", evidence_tags=["benchmark"]),
+        FieldSpec("family_history_positive", "Historia familiar relevante", "select", options=["0", "1"], default="0", group="Refinadores biológicos", group_order=5, clinical_role="decision_refiner", evidence_tags=["family_history"]),
+        FieldSpec("brca2_family_risk", "BRCA2 conocido o altamente sospechado", "select", options=["0", "1"], default="0", group="Refinadores biológicos", group_order=5, clinical_role="decision_refiner", evidence_tags=["germline"]),
+        FieldSpec("micro_us_available", "Micro-US disponible", "select", options=["0", "1"], default="0", group="Refinadores biológicos", group_order=5, clinical_role="optional", evidence_tags=["phase2_placeholder"]),
+        FieldSpec("rare_histology_variant", "Variante histológica agresiva poco común", "select", options=["0", "1"], default="0", group="Refinadores biológicos", group_order=5, clinical_role="optional", evidence_tags=["phase2_placeholder"]),
+        FieldSpec("neuroendocrine_features", "Rasgos neuroendocrinos emergentes", "select", options=["0", "1"], default="0", group="Refinadores biológicos", group_order=5, clinical_role="optional", evidence_tags=["phase2_placeholder"]),
+        FieldSpec("baseline_urinary_qol", "Función urinaria basal", "number", default=85, group="Resultados reportados por el paciente", group_order=6, clinical_role="decision_refiner", unit="0-100", evidence_tags=["qol"]),
+        FieldSpec("baseline_sexual_qol", "Función sexual basal", "number", default=70, group="Resultados reportados por el paciente", group_order=6, clinical_role="decision_refiner", unit="0-100", evidence_tags=["qol"]),
+        FieldSpec("baseline_bowel_qol", "Función intestinal basal", "number", default=92, group="Resultados reportados por el paciente", group_order=6, clinical_role="decision_refiner", unit="0-100", evidence_tags=["qol"]),
+        FieldSpec("ipss_score", "Puntaje internacional de síntomas prostáticos (IPSS)", "number", default=8, group="Resultados reportados por el paciente", group_order=6, clinical_role="monitoring", unit="0-35", evidence_tags=["qol"]),
+        FieldSpec("iief5_score", "Índice internacional de función eréctil de 5 preguntas (IIEF-5)", "number", default=18, group="Resultados reportados por el paciente", group_order=6, clinical_role="monitoring", unit="5-25", evidence_tags=["qol"]),
+        FieldSpec("confirmatory_biopsy_planned", "Biopsia confirmatoria planificada para vigilancia activa", "select", options=["0", "1"], default="1", group="Resultados reportados por el paciente", group_order=6, clinical_role="monitoring", evidence_tags=["active_surveillance"], benchmark_note="Acerca el flujo al seguimiento tipo Canary PASS."),
+    ],
+)

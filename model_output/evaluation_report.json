@@ -1,0 +1,50 @@
+{
+  "risk_accuracy": 0.9333333333333333,
+  "risk_auc_roc": 0.9912505545149561,
+  "treatment_accuracy": 0.37833333333333335,
+  "cure_rate_mae": 0.062498431861885646,
+  "survival_5y_mae": 0.07654924302070726,
+  "survival_10y_mae": 0.0791151816000614,
+  "survival_constraint_violations": 0,
+  "cv_average": {
+    "risk_accuracy": 0.926,
+    "risk_auc_roc": 0.9872404933704519,
+    "treatment_accuracy": 0.36133333333333334,
+    "cure_rate_mae": 0.0629611173023066,
+    "survival_5y_mae": 0.07471702401571138,
+    "survival_10y_mae": 0.0815748912439931,
+    "survival_constraint_violations": 0.0
+  },
+  "folds": [
+    {
+      "risk_accuracy": 0.921,
+      "risk_auc_roc": 0.9884360601344959,
+      "treatment_accuracy": 0.378,
+      "cure_rate_mae": 0.06413851869104707,
+      "survival_5y_mae": 0.07536364431563611,
+      "survival_10y_mae": 0.0782971990910518,
+      "survival_constraint_violations": 0,
+      "fold": 1
+    },
+    {
+      "risk_accuracy": 0.93,
+      "risk_auc_roc": 0.9849103927659303,
+      "treatment_accuracy": 0.359,
+      "cure_rate_mae": 0.06290378516866002,
+      "survival_5y_mae": 0.07228858012848637,
+      "survival_10y_mae": 0.08255021420601272,
+      "survival_constraint_violations": 0,
+      "fold": 2
+    },
+    {
+      "risk_accuracy": 0.927,
+      "risk_auc_roc": 0.9883750272109296,
+      "treatment_accuracy": 0.347,
+      "cure_rate_mae": 0.06184104804721265,
+      "survival_5y_mae": 0.07649884760301166,
+      "survival_10y_mae": 0.0838772604349148,
+      "survival_constraint_violations": 0,
+      "fold": 3
+    }
+  ]
+}

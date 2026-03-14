@@ -1,0 +1,1286 @@
+{% extends "layouts/base_clinical.html" %}
+
+{% block head_extra %}
+    <style>
+        .section-header {
+            border-bottom: 1px solid #334155;
+            padding-bottom: 0.5rem;
+            margin-bottom: 1rem;
+            color: #94a3b8;
+            font-weight: 600;
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+    </style>
+{% endblock %}
+
+{% block content %}
+        <div class="mx-auto max-w-4xl">
+
+            <form id="intakeForm" class="space-y-8">
+                <input type="hidden" name="assessment_id" value="{{ assessment_id or '' }}">
+                <input type="hidden" name="assessment_state" value="">
+
+                <section id="assessmentContext" class="hidden pn-surface border border-emerald-700/50 bg-emerald-950/10">
+                    <h2 class="section-header text-emerald-400 border-emerald-900/50">Evaluación clínica importada desde el centro clínico</h2>
+                    <div class="space-y-4 text-sm">
+                        <div>
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Módulo clínico</div>
+                            <div id="assessmentModule" class="mt-1 text-white font-medium"></div>
+                        </div>
+                        <div>
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Recomendación principal según la Red Nacional Integral del Cáncer (NCCN)</div>
+                            <div id="assessmentPrimary" class="mt-1 text-slate-200"></div>
+                        </div>
+                        <div>
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Comparación con la Asociación Europea de Urología (EAU)</div>
+                            <div id="assessmentComparison" class="mt-1 text-slate-300"></div>
+                        </div>
+                        <div>
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Resumen clínico</div>
+                            <div id="assessmentSummary" class="mt-1 text-slate-300"></div>
+                        </div>
+                        <div>
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Fundamentos personalizados</div>
+                            <ul id="assessmentHighlights" class="mt-1 space-y-2 text-sm text-slate-300 list-disc pl-5"></ul>
+                        </div>
+                    </div>
+                </section>
+
+                <section id="stateScopedSummary" class="hidden pn-surface border border-cyan-700/40 bg-cyan-950/10">
+                    <h2 class="section-header text-cyan-300 border-cyan-900/50">Ingreso guiado por estado clínico</h2>
+                    <div class="grid gap-4 md:grid-cols-2">
+                        <div>
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Estado importado</div>
+                            <div id="assessmentStateLabel" class="mt-1 text-white font-medium"></div>
+                            <p id="stateScopedDescription" class="mt-2 text-sm text-slate-300"></p>
+                        </div>
+                        <div>
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Qué se captura aquí</div>
+                            <ul id="stateScopedBullets" class="mt-2 list-disc pl-5 text-sm text-slate-300 space-y-1"></ul>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 1. Identidad -->
+                <section class="pn-surface">
+                    <h2 class="section-header text-blue-400 border-blue-900/50">1. Identidad del paciente (número de seguridad social)</h2>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div>
+                            <label class="block text-xs font-medium mb-1 text-slate-400">Nombre Completo</label>
+                            <input type="text" name="full_name" required
+                                class="input-dark border-blue-500/50 focus:border-blue-500"
+                                placeholder="Apellido Paterno, Materno, Nombre">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1 text-slate-400">Número de seguridad social (11 dígitos)</label>
+                            <input type="text" name="nss" required pattern="\d{11}"
+                                class="input-dark border-blue-500/50 focus:border-blue-500 font-mono"
+                                placeholder="00000000000">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1 text-slate-400">Fecha de Nacimiento</label>
+                            <input type="date" name="dob" required class="input-dark">
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 2. Perfil Biológico Basal -->
+                <section class="pn-surface" data-intake-scope="all">
+                    <h2 id="baselineSectionHeading" class="section-header text-emerald-400 border-emerald-900/50">2. Perfil biológico y laboratorios basales</h2>
+                    <p id="baselineSectionHint" class="text-xs text-slate-500 mb-4">Variables basales para contextualizar la evaluación importada y sostener el longitudinal sin inventar tratamientos.</p>
+
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Antígeno prostático específico basal (PSA) (ng/mL)</label>
+                            <input type="number" step="0.01" name="baseline_psa" class="input-dark">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Testosterona (ng/dL)</label>
+                            <input type="number" step="1" name="testosterone_baseline" class="input-dark">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Hemoglobina (g/dL)</label>
+                            <input type="number" step="0.1" name="hemoglobin" class="input-dark">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Fosfatasa alcalina (UI/L)</label>
+                            <input type="number" step="1" name="alp" class="input-dark">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Lactato deshidrogenasa (LDH) (UI/L)</label>
+                            <input type="number" step="1" name="ldh" class="input-dark">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Albúmina (g/dL)</label>
+                            <input type="number" step="0.1" name="albumin" class="input-dark">
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 3. Estadificación y volumen -->
+                <section class="pn-surface" data-intake-scope="localized,postlocal,advanced">
+                    <h2 id="stagingSectionHeading" class="section-header text-purple-400 border-purple-900/50">3. Estadificación y volumen de enfermedad</h2>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Sitio de metástasis predominante</label>
+                            <select name="metastasis_site" class="input-dark" onchange="updateVolumeCheck()">
+                                <option value="M0">Sin metástasis a distancia (M0)</option>
+                                <option value="Hueso">Hueso (Esqueleto Axial/Apendicular)</option>
+                                <option value="Ganglio">Ganglionar (N1/M1a)</option>
+                                <option value="Visceral">Visceral (Pulmón/Hígado - M1c)</option>
+                            </select>
+                        </div>
+
+                        <div id="volumeSection" class="opacity-50 pointer-events-none transition-opacity">
+                            <label class="block text-xs font-medium mb-1">Clasificación de volumen según el estudio CHAARTED</label>
+                            <select name="volume_disease" class="input-dark">
+                                <option value="Low">Bajo Volumen</option>
+                                <option value="High">Alto Volumen (Visceral o >4 lesiones óseas)</option>
+                            </select>
+                            <p class="text-[10px] text-slate-500 mt-1">El alto volumen orienta a valorar terapia triplete o docetaxel.</p>
+                        </div>
+                    </div>
+
+                    <div class="bg-slate-800/50 p-4 rounded border border-slate-700/50">
+                        <label class="flex items-center gap-3 cursor-pointer">
+                            <input type="checkbox" name="has_bone_scan"
+                                class="w-5 h-5 rounded text-purple-500 bg-slate-700 border-slate-600">
+                            <div>
+                                <span class="text-sm font-medium">Gammagrama óseo disponible</span>
+                                <p class="text-xs text-slate-500">¿Se cuenta con reporte en imagen?</p>
+                            </div>
+                        </label>
+                    </div>
+                </section>
+
+                <!-- 3.1 Datos avanzados -->
+                <section class="pn-surface" data-intake-scope="diagnostic">
+                    <h2 class="section-header text-fuchsia-300 border-fuchsia-900/50">3. Contexto diagnóstico refinado</h2>
+                    <p class="text-xs text-slate-500 mb-4">Datos que afinan la ruta diagnóstica, rebiopsia y benchmarking MRI + PSAD sin activar trayectoria terapéutica falsa.</p>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Fecha de resonancia magnética multiparamétrica</label>
+                            <input type="date" name="mpmri_date" class="input-dark">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Calidad de resonancia magnética multiparamétrica</label>
+                            <select name="mpmri_quality" class="input-dark">
+                                <option value="Adecuada">Adecuada</option>
+                                <option value="Subóptima">Subóptima</option>
+                                <option value="No disponible">No disponible</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Localización de la lesión índice</label>
+                            <select name="index_lesion_location" class="input-dark">
+                                <option value="No especificada" selected>No especificada</option>
+                                <option value="Zona periférica posterior">Zona periférica posterior</option>
+                                <option value="Zona periférica anterior">Zona periférica anterior</option>
+                                <option value="Zona de transición">Zona de transición</option>
+                                <option value="Estroma fibromuscular anterior">Estroma fibromuscular anterior</option>
+                                <option value="Base">Base</option>
+                                <option value="Tercio medio">Tercio medio</option>
+                                <option value="Ápice">Ápice</option>
+                                <option value="Multifocal u otra">Multifocal u otra</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Tamaño de la lesión índice (mm)</label>
+                            <input type="number" step="1" name="index_lesion_size_mm" class="input-dark">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Volumen prostático (mL)</label>
+                            <input type="number" step="1" name="prostate_volume_ml" class="input-dark">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Velocidad de PSA (ng/mL/año)</label>
+                            <input type="number" step="0.01" name="psa_velocity_ng_ml_year" class="input-dark">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Tipo de biopsia prevista</label>
+                            <select name="planned_biopsy_type" class="input-dark">
+                                <option value="Dirigida + sistemática">Dirigida + sistemática</option>
+                                <option value="Dirigida">Dirigida</option>
+                                <option value="Sistemática">Sistemática</option>
+                                <option value="Pendiente">Pendiente</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Vía de biopsia prevista</label>
+                            <select name="planned_biopsy_route" class="input-dark">
+                                <option value="Transperineal">Transperineal</option>
+                                <option value="Transrectal">Transrectal</option>
+                                <option value="No definida">No definida</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Pathway MRI + PSAD / calculadora</label>
+                            <select name="risk_calculator_pathway" class="input-dark">
+                                <option value="No usado">No usado</option>
+                                <option value="EAU MRI + PSAD">EAU MRI + PSAD</option>
+                                <option value="Calculadora externa">Calculadora externa</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Sospecha o resultado germinal</label>
+                            <select name="germline_status" class="input-dark">
+                                <option value="Desconocido">Desconocido</option>
+                                <option value="Sospechado">Sospechado</option>
+                                <option value="Conocido">Conocido</option>
+                            </select>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="pn-surface" data-intake-scope="localized">
+                    <h2 class="section-header text-lime-300 border-lime-900/50">3.1 Riesgo localizado y vigilancia activa</h2>
+                    <p class="text-xs text-slate-500 mb-4">Captura refinadores locales, riesgo genómico opcional y resultados basales reportados por el paciente.</p>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                            <label class="block text-xs font-medium mb-1">% de patrón 4</label>
+                            <input type="number" step="1" name="percent_pattern_4" class="input-dark">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Resonancia magnética previa disponible</label>
+                            <select name="prior_mpmri" class="input-dark">
+                                <option value="1">Sí</option>
+                                <option value="0">No</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Clasificador genómico</label>
+                            <select name="genomic_classifier" class="input-dark">
+                                <option value="No realizado">No realizado</option>
+                                <option value="Decipher">Decipher</option>
+                                <option value="Prolaris">Prolaris</option>
+                                <option value="Oncotype">Oncotype</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Resultado del clasificador genómico</label>
+                            <select name="genomic_classifier_result" class="input-dark">
+                                <option value="No aplica">No aplica</option>
+                                <option value="Bajo">Bajo</option>
+                                <option value="Intermedio">Intermedio</option>
+                                <option value="Alto">Alto</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Pathway MRI + PSAD / calculadora</label>
+                            <select name="risk_calculator_pathway" class="input-dark">
+                                <option value="No usado">No usado</option>
+                                <option value="EAU MRI + PSAD">EAU MRI + PSAD</option>
+                                <option value="Calculadora externa">Calculadora externa</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">BRCA2 conocido o altamente sospechado</label>
+                            <select name="brca2_family_risk" class="input-dark">
+                                <option value="0">No</option>
+                                <option value="1">Sí</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Biopsia confirmatoria planificada para vigilancia activa</label>
+                            <select name="confirmatory_biopsy_planned" class="input-dark">
+                                <option value="1">Sí</option>
+                                <option value="0">No</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Micro-US disponible</label>
+                            <select name="micro_us_available" class="input-dark">
+                                <option value="0">No</option>
+                                <option value="1">Sí</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Variante histológica agresiva poco común</label>
+                            <select name="rare_histology_variant" class="input-dark">
+                                <option value="0">No</option>
+                                <option value="1">Sí</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Rasgos neuroendocrinos emergentes</label>
+                            <select name="neuroendocrine_features" class="input-dark">
+                                <option value="0">No</option>
+                                <option value="1">Sí</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Función urinaria basal (0-100)</label>
+                            <input type="number" step="1" name="baseline_urinary_qol" class="input-dark">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Función sexual basal (0-100)</label>
+                            <input type="number" step="1" name="baseline_sexual_qol" class="input-dark">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Función intestinal basal (0-100)</label>
+                            <input type="number" step="1" name="baseline_bowel_qol" class="input-dark">
+                        </div>
+                    </div>
+                </section>
+
+                <section class="pn-surface" data-intake-scope="postlocal">
+                    <h2 class="section-header text-rose-300 border-rose-900/50">3.2 Contexto poslocal y rescate</h2>
+                    <p class="text-xs text-slate-500 mb-4">Datos que afinan la ruta posprostatectomía, recurrencia bioquímica y rescate pélvico.</p>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Fecha del tratamiento local principal</label>
+                            <input type="date" name="local_therapy_date" class="input-dark">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">PSA ultrasensible documentado</label>
+                            <select name="ultrasensitive_psa_assay" class="input-dark">
+                                <option value="1">Sí</option>
+                                <option value="0">No</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Tiempo a recurrencia (meses)</label>
+                            <input type="number" step="1" name="time_to_recurrence_months" class="input-dark">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Decipher / riesgo genómico</label>
+                            <select name="decipher_risk" class="input-dark">
+                                <option value="No realizado">No realizado</option>
+                                <option value="Bajo">Bajo</option>
+                                <option value="Intermedio">Intermedio</option>
+                                <option value="Alto">Alto</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Localización del margen positivo</label>
+                            <input type="text" name="margin_location" class="input-dark" placeholder="Ápex / posterolateral">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Elegible para rescate pélvico</label>
+                            <select name="eligible_pelvic_therapy" class="input-dark">
+                                <option value="1">Sí</option>
+                                <option value="0">No</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Rescate local potencialmente curativo factible</label>
+                            <select name="salvage_local_feasible" class="input-dark">
+                                <option value="1">Sí</option>
+                                <option value="0">No</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Candidato clínico a rescate local</label>
+                            <select name="local_salvage_candidate" class="input-dark">
+                                <option value="1">Sí</option>
+                                <option value="0">No</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Imagen convencional sin metástasis (M0)</label>
+                            <select name="conventional_imaging_m0" class="input-dark">
+                                <option value="1">Sí</option>
+                                <option value="0">No</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Modalidad de imagen predominante</label>
+                            <select name="imaging_modality" class="input-dark">
+                                <option value="Convencional">Convencional</option>
+                                <option value="PSMA-PET">PSMA-PET</option>
+                                <option value="Mixta">Mixta</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">PSMA-PET realizado</label>
+                            <select name="psma_pet_done" class="input-dark">
+                                <option value="0">No</option>
+                                <option value="1">Sí</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Resultado dominante de PSMA-PET</label>
+                            <select name="psma_pet_result" class="input-dark">
+                                <option value="No realizado">No realizado</option>
+                                <option value="Negativo">Negativo</option>
+                                <option value="Local/pélvico">Local/pélvico</option>
+                                <option value="Oligometastásico">Oligometastásico</option>
+                                <option value="Diseminado">Diseminado</option>
+                            </select>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="pn-surface" data-intake-scope="advanced">
+                    <details class="group">
+                        <summary class="flex justify-between items-center font-medium cursor-pointer list-none">
+                            <h2 class="section-header text-purple-400 border-purple-900/50 mb-0">3.1 Datos avanzados (medicina de precisión y función)</h2>
+                            <span class="transition group-open:rotate-180">
+                                <svg fill="none" height="24" shape-rendering="geometricPrecision" stroke="currentColor"
+                                    stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                                    viewBox="0 0 24 24" width="24">
+                                    <path d="M6 9l6 6 6-6"></path>
+                                </svg>
+                            </span>
+                        </summary>
+                        <div class="text-xs text-slate-500 mt-2 mb-4">Variables para seleccionar terapias dirigidas, inmunoterapia y ajustes de dosis.</div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4 group-open:animate-fadeIn">
+                            <!-- Genómica -->
+                            <div class="bg-slate-800/50 p-4 rounded border border-slate-700/50">
+                                <label class="flex items-center gap-3 cursor-pointer mb-3">
+                                    <input type="checkbox" name="genomic_test_done"
+                                        class="w-4 h-4 rounded text-purple-500 bg-slate-700 border-slate-600">
+                                    <span class="text-sm font-medium">Panel genético realizado</span>
+                                </label>
+
+                                <div class="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label class="block text-xs font-medium mb-1">Estado de reparación por recombinación homóloga con genes BRCA y ATM</label>
+                                        <select name="hrr_status" class="input-dark">
+                                            <option value="Desconocido">Desconocido</option>
+                                            <option value="Negativo">Negativo (sin alteraciones detectadas)</option>
+                                            <option value="Positivo">Positivo (con alteración patogénica)</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-medium mb-1">Estado de inestabilidad microsatelital</label>
+                                        <select name="msi_status" class="input-dark">
+                                            <option value="Estable">Estable a nivel microsatelital</option>
+                                            <option value="Inestable">Inestabilidad microsatelital alta</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-medium mb-1">Gen HRR predominante</label>
+                                        <select name="hrr_gene" class="input-dark">
+                                            <option value="Desconocido">Desconocido</option>
+                                            <option value="BRCA2">BRCA2</option>
+                                            <option value="BRCA1">BRCA1</option>
+                                            <option value="ATM">ATM</option>
+                                            <option value="PALB2">PALB2</option>
+                                            <option value="CDK12">CDK12</option>
+                                            <option value="Otro">Otro</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-medium mb-1">Fuente del biomarcador</label>
+                                        <select name="biomarker_source" class="input-dark">
+                                            <option value="Desconocida">Desconocida</option>
+                                            <option value="Tejido primario">Tejido primario</option>
+                                            <option value="Biopsia metastásica">Biopsia metastásica</option>
+                                            <option value="ctDNA">ctDNA</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-medium mb-1">Fecha del informe molecular</label>
+                                        <input type="date" name="molecular_report_date" class="input-dark">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-medium mb-1">Fuente del ensayo molecular</label>
+                                        <select name="molecular_assay_source" class="input-dark">
+                                            <option value="Desconocida">Desconocida</option>
+                                            <option value="Tejido primario">Tejido primario</option>
+                                            <option value="Biopsia metastásica">Biopsia metastásica</option>
+                                            <option value="ctDNA">ctDNA</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-medium mb-1">Fecha del ensayo molecular</label>
+                                        <input type="date" name="molecular_assay_date" class="input-dark">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-medium mb-1">Estado BRCA2</label>
+                                        <select name="brca2_status" class="input-dark">
+                                            <option value="Desconocido">Desconocido</option>
+                                            <option value="Positivo">Positivo</option>
+                                            <option value="Negativo">Negativo</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-medium mb-1">Carga mutacional tumoral alta</label>
+                                        <select name="tmb_high" class="input-dark">
+                                            <option value="0">No</option>
+                                            <option value="1">Sí</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Función y síntomas -->
+                            <div class="bg-slate-800/50 p-4 rounded border border-slate-700/50">
+                                <div class="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label class="block text-xs font-medium mb-1">Función hepática según Child-Pugh</label>
+                                        <select name="child_pugh_score" class="input-dark">
+                                            <option value="A">Clase A (compensada)</option>
+                                            <option value="B">Clase B (compromiso moderado)</option>
+                                            <option value="C">Clase C (compromiso grave, contraindica abiraterona o docetaxel)</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-medium mb-1">Sintomatología dolorosa</label>
+                                        <select name="pain_symptoms" class="input-dark">
+                                            <option value="Asintomatico">Asintomático</option>
+                                            <option value="Leve">Leve (No requiere opioides)</option>
+                                            <option value="Moderado-Severo">Moderado/Severo (Requiere opioides)</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-medium mb-1">Fragilidad clínica</label>
+                                        <select name="frailty_status" class="input-dark">
+                                            <option value="Fit">Fit</option>
+                                            <option value="Vulnerable">Vulnerable</option>
+                                            <option value="Frail">Frail</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-medium mb-1">Calidad de vida basal (0-100)</label>
+                                        <input type="number" step="1" name="baseline_qol" class="input-dark">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-medium mb-1">PSMA positivo</label>
+                                        <select name="psma_positive" class="input-dark">
+                                            <option value="0">No</option>
+                                            <option value="1">Sí</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-medium mb-1">Lesiones dominantes PSMA-negativas</label>
+                                        <select name="psma_negative_dominant_lesions" class="input-dark">
+                                            <option value="0">No</option>
+                                            <option value="1">Sí</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-medium mb-1">Testosterona en rango de castración confirmada</label>
+                                        <select name="castrate_testosterone_confirmed" class="input-dark">
+                                            <option value="1">Sí</option>
+                                            <option value="0">No</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-medium mb-1">Contexto de línea en mCRPC</label>
+                                        <select name="mcrpc_line_context" class="input-dark">
+                                            <option value="first_line_mcrpc">Primera línea mCRPC</option>
+                                            <option value="post_arpi_pre_taxane">Post-ARPI pre-taxano</option>
+                                            <option value="post_taxane">Post-taxano</option>
+                                            <option value="later_line">Líneas posteriores</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-medium mb-1">Apto para docetaxel</label>
+                                        <select name="docetaxel_fit" class="input-dark">
+                                            <option value="1">Sí</option>
+                                            <option value="0">No</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-medium mb-1">Candidato a diferir o evitar docetaxel</label>
+                                        <select name="chemotherapy_delay_candidate" class="input-dark">
+                                            <option value="0">No</option>
+                                            <option value="1">Sí</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+                </section>
+
+                <section class="pn-surface" data-intake-scope="advanced">
+                    <h2 class="section-header text-emerald-300 border-emerald-900/50">3.2 Bundles de seguridad y salud ósea</h2>
+                    <p class="text-xs text-slate-500 mb-4">Estos datos alimentan benchmarking real de seguridad, soporte óseo y rutas de precisión en mHSPC/mCRPC.</p>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                            <label class="block text-xs font-medium mb-1">DXA basal realizada</label>
+                            <select name="dxa_baseline_done" class="input-dark">
+                                <option value="0">No</option>
+                                <option value="1">Sí</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Calcio y vitamina D iniciados</label>
+                            <select name="calcium_vitd_started" class="input-dark">
+                                <option value="0">No</option>
+                                <option value="1">Sí</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Protección ósea iniciada</label>
+                            <select name="bone_protection_started" class="input-dark">
+                                <option value="0">No</option>
+                                <option value="1">Sí</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Variante histológica agresiva poco común</label>
+                            <select name="rare_histology_variant" class="input-dark">
+                                <option value="0">No</option>
+                                <option value="1">Sí</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Rasgos neuroendocrinos emergentes</label>
+                            <select name="neuroendocrine_features" class="input-dark">
+                                <option value="0">No</option>
+                                <option value="1">Sí</option>
+                            </select>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 4. Terapia Sistémica Inicial -->
+                <section class="pn-surface border-l-4 border-l-amber-500" data-intake-scope="advanced">
+                    <h2 class="section-header text-amber-400 border-amber-900/50">4. Esquema de tratamiento inicial</h2>
+                    <p class="text-xs text-slate-500 mb-4">Esta sección solo aparece en enfermedad avanzada. No debe llenarse en estudio diagnóstico, localizado o rutas de rescate poslocal.</p>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Línea terapéutica</label>
+                            <select name="line_of_therapy" class="input-dark">
+                                <option value="1">Primera línea en enfermedad metastásica sensible a la castración</option>
+                                <option value="2">Segunda línea o posterior en enfermedad resistente a la castración con metástasis</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Esquema farmacológico</label>
+                            <select name="drug_scheme" class="input-dark bg-slate-800 font-medium text-amber-100">
+                                <option value="">Sin esquema sistémico al ingreso</option>
+                                <optgroup label="Monoterapia (no recomendada por las guías actuales)">
+                                    <option value="ADT_MONO">Solo terapia de privación androgénica (ADT)</option>
+                                </optgroup>
+                                <optgroup label="Dobletes con terapia de privación androgénica">
+                                    <option value="ADT_ENZALUTAMIDE">Terapia de privación androgénica (ADT) + enzalutamida según los estudios ARCHES y ENZAMET</option>
+                                    <option value="ADT_APALUTAMIDE">Terapia de privación androgénica (ADT) + apalutamida según el estudio TITAN</option>
+                                    <option value="ADT_ABIRATERONE">Terapia de privación androgénica + abiraterona según el estudio LATITUDE</option>
+                                </optgroup>
+                                <optgroup label="Tripletes para alto volumen">
+                                    <option value="ADT_DOCETAXEL_DAROLUTAMIDE">Terapia de privación androgénica (ADT) + docetaxel + darolutamida según el estudio ARASENS
+                                    </option>
+                                    <option value="ADT_DOCETAXEL_ABIRATERONE">Terapia de privación androgénica (ADT) + docetaxel + abiraterona según el estudio PEACE-1
+                                    </option>
+                                </optgroup>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Comorbilidades críticas y contraindicaciones</label>
+                            <div class="space-y-2">
+                                <label class="flex items-center gap-2 text-sm text-slate-400">
+                                    <input type="checkbox" name="comorb_seizure" class="rounded text-amber-500">
+                                    Convulsiones o riesgo de caídas (evitar enzalutamida o apalutamida)
+                                </label>
+                                <label class="flex items-center gap-2 text-sm text-slate-400">
+                                    <input type="checkbox" name="comorb_cardio" class="rounded text-amber-500">
+                                    Evento cardiovascular reciente (precaución con abiraterona)
+                                </label>
+                                <label class="flex items-center gap-2 text-sm text-slate-400">
+                                    <input type="checkbox" name="cv_risk_documented" value="1" class="rounded text-amber-500">
+                                    Riesgo cardiovascular basal documentado
+                                </label>
+                                <label class="flex items-center gap-2 text-sm text-slate-400">
+                                    <input type="checkbox" name="drug_interaction_reviewed" value="1" class="rounded text-amber-500">
+                                    Interacciones farmacológicas revisadas
+                                </label>
+                                <label class="flex items-center gap-2 text-sm text-slate-400">
+                                    <input type="checkbox" name="hepatic_risk_factors" value="1" class="rounded text-amber-500">
+                                    Factores de riesgo hepático presentes
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- FASE 6: Historial Terapéutico Previo (Colapsable) -->
+                <div class="pn-surface mb-6 rounded-2xl" data-intake-scope="localized,postlocal,advanced">
+                    <button type="button" class="flex items-center justify-between w-full text-left"
+                        onclick="toggleSection('priorHistory')">
+                        <div class="flex items-center gap-2">
+                            <span class="text-xl">📜</span>
+                            <h2 class="text-xl font-bold text-white">Historial terapéutico previo (opcional)</h2>
+                        </div>
+                        <svg id="arrow-priorHistory" class="w-5 h-5 text-slate-400 transform transition-transform"
+                            fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7">
+                            </path>
+                        </svg>
+                    </button>
+
+                    <div id="priorHistory" class="hidden mt-4 space-y-6 border-t border-slate-700 pt-4">
+                        <p class="text-sm text-slate-400 mb-4">Documente tratamientos recibidos antes del diagnóstico actual o en líneas previas.</p>
+
+                        <!-- Radioterapia -->
+                        <div>
+                            <h3 class="text-sm font-semibold text-purple-300 mb-2">Radioterapia</h3>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <label
+                                    class="flex items-center gap-2 p-3 bg-slate-700/50 rounded border border-slate-600 cursor-pointer hover:bg-slate-700 transition">
+                                    <input type="checkbox" name="rt_primary_received"
+                                        class="w-4 h-4 text-purple-600 bg-slate-800 border-slate-600 rounded">
+                                    <span class="text-slate-200">¿Recibió radioterapia a la próstata o al lecho prostático?</span>
+                                </label>
+                                <div>
+                                    <label class="block text-xs text-slate-400 mb-1">Dosis Total (Gy)</label>
+                                    <input type="number" name="rt_primary_dose_gy" placeholder="Ej. 70"
+                                        class="w-full bg-slate-900 border border-slate-600 rounded p-2 text-white focus:border-purple-500 focus:ring-1 focus:ring-purple-500">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Sistémico -->
+                        <div>
+                            <h3 class="text-sm font-semibold text-purple-300 mb-2">Tratamiento Sistémico Previo</h3>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div>
+                                    <label class="block text-xs text-slate-400 mb-1">Ciclos Docetaxel Previos</label>
+                                    <input type="number" name="prior_docetaxel_cycles" placeholder="0"
+                                        class="w-full bg-slate-900 border border-slate-600 rounded p-2 text-white">
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-slate-400 mb-1">Inhibidor previo de la vía del receptor androgénico</label>
+                                    <select name="prior_arpi_agent"
+                                        class="w-full bg-slate-900 border border-slate-600 rounded p-2 text-white">
+                                        <option value="">Ninguno</option>
+                                        <option value="Abiraterona">Abiraterona</option>
+                                        <option value="Enzalutamida">Enzalutamida</option>
+                                        <option value="Apalutamida">Apalutamida</option>
+                                        <option value="Darolutamida">Darolutamida</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-slate-400 mb-1">Duración del inhibidor previo de la vía del receptor androgénico (meses)</label>
+                                    <input type="number" name="prior_arpi_duration" placeholder="0"
+                                        class="w-full bg-slate-900 border border-slate-600 rounded p-2 text-white">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 5. DEMOGRÁFICOS MÉXICO (Fase C) -->
+                <section class="pn-surface">
+                    <details class="group">
+                        <summary class="flex justify-between items-center font-medium cursor-pointer list-none">
+                            <h2 class="section-header text-teal-400 border-teal-900/50 mb-0">5. Perfil demográfico de México para investigación</h2>
+                            <span class="transition group-open:rotate-180">
+                                <svg fill="none" height="24" shape-rendering="geometricPrecision" stroke="currentColor"
+                                    stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                                    viewBox="0 0 24 24" width="24">
+                                    <path d="M6 9l6 6 6-6"></path>
+                                </svg>
+                            </span>
+                        </summary>
+                        <div class="text-xs text-slate-500 mt-2 mb-4">Variables sociodemográficas para investigación en población mexicana.</div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+                            <div>
+                                <label class="block text-xs font-medium mb-1 text-slate-400">Estado de Residencia</label>
+                                <select name="estado_residencia" class="input-dark">
+                                    <option value="">-- Seleccionar --</option>
+                                    <option value="Aguascalientes">Aguascalientes</option>
+                                    <option value="Baja California">Baja California</option>
+                                    <option value="Baja California Sur">Baja California Sur</option>
+                                    <option value="Campeche">Campeche</option>
+                                    <option value="Chiapas">Chiapas</option>
+                                    <option value="Chihuahua">Chihuahua</option>
+                                    <option value="CDMX">Ciudad de México</option>
+                                    <option value="Coahuila">Coahuila</option>
+                                    <option value="Colima">Colima</option>
+                                    <option value="Durango">Durango</option>
+                                    <option value="Estado de Mexico">Estado de México</option>
+                                    <option value="Guanajuato">Guanajuato</option>
+                                    <option value="Guerrero">Guerrero</option>
+                                    <option value="Hidalgo">Hidalgo</option>
+                                    <option value="Jalisco">Jalisco</option>
+                                    <option value="Michoacan">Michoacán</option>
+                                    <option value="Morelos">Morelos</option>
+                                    <option value="Nayarit">Nayarit</option>
+                                    <option value="Nuevo Leon">Nuevo León</option>
+                                    <option value="Oaxaca">Oaxaca</option>
+                                    <option value="Puebla">Puebla</option>
+                                    <option value="Queretaro">Querétaro</option>
+                                    <option value="Quintana Roo">Quintana Roo</option>
+                                    <option value="San Luis Potosi">San Luis Potosí</option>
+                                    <option value="Sinaloa">Sinaloa</option>
+                                    <option value="Sonora">Sonora</option>
+                                    <option value="Tabasco">Tabasco</option>
+                                    <option value="Tamaulipas">Tamaulipas</option>
+                                    <option value="Tlaxcala">Tlaxcala</option>
+                                    <option value="Veracruz">Veracruz</option>
+                                    <option value="Yucatan">Yucatán</option>
+                                    <option value="Zacatecas">Zacatecas</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium mb-1 text-slate-400">Institución de seguridad social</label>
+                                <select name="seguridad_social" class="input-dark">
+                                    <option value="">-- Seleccionar --</option>
+                                    <option value="IMSS">IMSS</option>
+                                    <option value="ISSSTE">ISSSTE</option>
+                                    <option value="IMSS-Bienestar">IMSS-Bienestar</option>
+                                    <option value="SEDENA">SEDENA/SEMAR</option>
+                                    <option value="Privado">Privado / Particular</option>
+                                    <option value="Sin_seguridad">Sin seguridad social</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium mb-1 text-slate-400">Escolaridad</label>
+                                <select name="escolaridad" class="input-dark">
+                                    <option value="">-- Seleccionar --</option>
+                                    <option value="Sin_estudios">Sin estudios</option>
+                                    <option value="Primaria">Primaria</option>
+                                    <option value="Secundaria">Secundaria</option>
+                                    <option value="Preparatoria">Preparatoria</option>
+                                    <option value="Licenciatura">Licenciatura</option>
+                                    <option value="Posgrado">Posgrado</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+                            <div>
+                                <label class="block text-xs font-medium mb-1 text-slate-400">Tabaquismo</label>
+                                <select name="tabaquismo" class="input-dark">
+                                    <option value="nunca">Nunca fumador</option>
+                                    <option value="ex_fumador">Ex-fumador</option>
+                                    <option value="activo_leve">Activo leve (&lt;10 cig/día)</option>
+                                    <option value="activo_moderado">Activo moderado (10-20 cig/día)</option>
+                                    <option value="activo_severo">Activo severo (&gt;20 cig/día)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium mb-1 text-slate-400">Paquetes-año</label>
+                                <input type="number" step="0.5" name="paquetes_anio" placeholder="0" class="input-dark">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium mb-1 text-slate-400">Actividad Física</label>
+                                <select name="actividad_fisica" class="input-dark">
+                                    <option value="sedentario">Sedentario</option>
+                                    <option value="leve">Leve (caminar)</option>
+                                    <option value="moderado">Moderado (ejercicio 3-5x/sem)</option>
+                                    <option value="intenso">Intenso (deporte diario)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
+                            <label class="flex items-center gap-2 p-3 bg-slate-800/50 rounded border border-slate-700 cursor-pointer hover:bg-slate-700/50">
+                                <input type="checkbox" name="diabetes_mellitus" class="w-4 h-4 rounded text-teal-500 bg-slate-700 border-slate-600">
+                                <span class="text-sm text-slate-300">Diabetes mellitus</span>
+                            </label>
+                            <label class="flex items-center gap-2 p-3 bg-slate-800/50 rounded border border-slate-700 cursor-pointer hover:bg-slate-700/50">
+                                <input type="checkbox" name="hipertension" class="w-4 h-4 rounded text-teal-500 bg-slate-700 border-slate-600">
+                                <span class="text-sm text-slate-300">Hipertensión</span>
+                            </label>
+                            <label class="flex items-center gap-2 p-3 bg-slate-800/50 rounded border border-slate-700 cursor-pointer hover:bg-slate-700/50">
+                                <input type="checkbox" name="sindrome_metabolico" class="w-4 h-4 rounded text-teal-500 bg-slate-700 border-slate-600">
+                                <span class="text-sm text-slate-300">Síndrome metabólico</span>
+                            </label>
+                            <div>
+                                <label class="block text-xs font-medium mb-1 text-slate-400">Puntaje internacional de síntomas prostáticos (0-35)</label>
+                                <input type="number" min="0" max="35" name="ipss_score" placeholder="0" class="input-dark">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+                            <div>
+                                <label class="block text-xs font-medium mb-1 text-slate-400">Ocupación</label>
+                                <input type="text" name="ocupacion" placeholder="Ej. Obrero, Profesionista" class="input-dark">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium mb-1 text-slate-400">Estado Civil</label>
+                                <select name="estado_civil" class="input-dark">
+                                    <option value="">-- Seleccionar --</option>
+                                    <option value="Soltero">Soltero</option>
+                                    <option value="Casado">Casado</option>
+                                    <option value="Union_libre">Unión libre</option>
+                                    <option value="Divorciado">Divorciado</option>
+                                    <option value="Viudo">Viudo</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium mb-1 text-slate-400">Índice internacional de función eréctil de 5 preguntas (5-25)</label>
+                                <input type="number" min="5" max="25" name="iief5_score" placeholder="25" class="input-dark">
+                            </div>
+                        </div>
+                    </details>
+                </section>
+
+                <div class="pt-6">
+                    <button type="button" onclick="submitPatient()"
+                        class="pn-btn pn-btn-primary w-full py-4 text-base font-bold">
+                        REGISTRAR PACIENTE EN LA COHORTE
+                    </button>
+                    <p class="text-center text-xs text-slate-500 mt-3">Al guardar, el paciente quedará vinculado con la evaluación clínica modular y aparecerá en pacientes, tablero y perfil longitudinal.</p>
+                </div>
+
+            </form>
+        </div>
+
+        <!-- Results Modal -->
+        <div id="resultsModal"
+            class="fixed inset-0 bg-black/80 hidden items-center justify-center z-50 backdrop-blur-sm">
+            <div class="pn-modal-shell max-w-2xl w-full mx-4 overflow-hidden transform transition-all scale-95 opacity-0"
+                id="modalContent">
+
+                <!-- Header -->
+                <div class="bg-slate-800 p-6 border-b border-slate-700 flex justify-between items-center">
+                    <div>
+                        <h2 class="text-xl font-bold text-white flex items-center gap-2">
+                            <span class="text-2xl">🧬</span> Paciente registrado correctamente
+                        </h2>
+                        <p class="text-sm text-slate-400 mt-1" id="modalSubTitle">NSS: --</p>
+                    </div>
+                    <button onclick="closeModal()" class="text-slate-400 hover:text-white transition-colors">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+
+                <!-- Content -->
+                <div class="p-6 max-h-[70vh] overflow-y-auto space-y-6" id="recommendationsBody">
+                    <!-- Dynamic Content -->
+                </div>
+
+                <!-- Footer -->
+                <div class="bg-slate-800/50 p-4 border-t border-slate-700 flex justify-end gap-3">
+                    <a id="modalProfileLink" href="/patients"
+                        class="pn-btn pn-btn-primary px-4 py-2 text-sm">Ir al perfil del paciente</a>
+                    <a id="modalPatientsLink" href="/patients"
+                        class="pn-btn pn-btn-secondary px-4 py-2 text-sm">Ir a pacientes</a>
+                    <a id="modalDashboardLink" href="/dashboard"
+                        class="pn-btn pn-btn-secondary px-4 py-2 text-sm">Ir al tablero clínico</a>
+                </div>
+            </div>
+        </div>
+{% endblock %}
+
+{% block page_scripts %}
+    <script>
+        const humanizeClinicalText = window.clinicalPresentation?.humanize || ((value) => value);
+        const assessmentId = '{{ assessment_id or "" }}';
+        let assessmentState = '';
+        const intakeScopeConfig = {
+            diagnostic: {
+                label: 'Ruta diagnóstica / biopsia negativa previa',
+                description: 'Aquí capturamos MRI, PSAD, cinética de PSA y plan de biopsia. No se debe registrar una línea sistémica ficticia.',
+                bullets: [
+                    'Mínimo para decidir: PSA, PSAD, tacto rectal y resonancia magnética multiparamétrica.',
+                    'Refinadores: volumen prostático, lesión índice, cinética de PSA y pathway MRI + PSAD.',
+                    'No se precarga esquema sistémico ni volumen metastásico.'
+                ],
+                baselineHeading: '2. Datos basales para estudio diagnóstico',
+                baselineHint: 'Use este bloque para biomarcadores basales y deje el tratamiento sistémico vacío mientras no exista cáncer confirmado.',
+                stagingHeading: '3. Estadificación y volumen de enfermedad',
+            },
+            localized: {
+                label: 'Ruta localizada inicial',
+                description: 'Priorizamos patología, MRI, refinadores genómicos opcionales y PROs basales antes de elegir vigilancia activa o tratamiento local.',
+                bullets: [
+                    'Mínimo para decidir: PSA, estadio T, grupo de grado y carga de cilindros positivos.',
+                    'Refinadores: porcentaje de patrón 4, MRI previa, BRCA2/familia y clasificador genómico.',
+                    'No se muestra un esquema sistémico inicial por defecto.'
+                ],
+                baselineHeading: '2. Perfil basal y laboratorio de riesgo local',
+                baselineHint: 'Documente biomarcadores y calidad de vida basal para comparar vigilancia activa, cirugía y radioterapia.',
+                stagingHeading: '3. Estadificación y volumen de enfermedad',
+            },
+            postlocal: {
+                label: 'Ruta posprostatectomía / recurrencia bioquímica',
+                description: 'Priorizamos cronología de PSA ultrasensible, rescate pélvico e imagen antes de subir a una ruta sistémica.',
+                bullets: [
+                    'Mínimo para decidir: PSA actual, PSADT, antecedente local y elegibilidad pélvica.',
+                    'Refinadores: Decipher, localización de margen, tiempo a recurrencia e imagen PSMA o convencional.',
+                    'No se precarga terapia sistémica salvo enfermedad avanzada confirmada.'
+                ],
+                baselineHeading: '2. Perfil basal y laboratorio del contexto poslocal',
+                baselineHint: 'Use este bloque para sostener rescate, seguimiento de PSA y decisiones de recurrencia sin inventar una línea sistémica.',
+                stagingHeading: '3. Estadificación y volumen de enfermedad',
+            },
+            advanced: {
+                label: 'Ruta avanzada',
+                description: 'Aquí sí se habilita el bloque de tratamiento, secuencia terapéutica, biomarcadores, seguridad y benchmarking operativo.',
+                bullets: [
+                    'Mínimo para decidir: estado metastásico, línea, biomarcadores accionables y confirmación de castración.',
+                    'Refinadores: PSMA, gen HRR, fragilidad, riesgo cardiovascular, interacciones farmacológicas y riesgo hepático.',
+                    'Se habilita el registro del esquema sistémico inicial cuando realmente aplica.'
+                ],
+                baselineHeading: '2. Perfil biológico y laboratorios basales',
+                baselineHint: 'Variables críticas para sostener intensificación, seguridad y monitoreo en enfermedad avanzada.',
+                stagingHeading: '3. Estadificación y volumen de enfermedad',
+            },
+        };
+
+        function setFormField(name, value) {
+            if (value === undefined || value === null || value === '') {
+                return;
+            }
+            const field = document.querySelector(`[name="${name}"]`);
+            if (!field) {
+                return;
+            }
+            if (field.type === 'checkbox') {
+                field.checked = ['1', 'true', 'yes', 'si', 'on'].includes(String(value).toLowerCase());
+                return;
+            }
+            field.value = value;
+        }
+
+        function stateToScope(state) {
+            if (state === 'diagnostic_workup' || state === 'post_negative_biopsy_followup') {
+                return 'diagnostic';
+            }
+            if (state === 'localized_initial') {
+                return 'localized';
+            }
+            if (state === 'post_prostatectomy' || state === 'recurrence_bcr') {
+                return 'postlocal';
+            }
+            if (state) {
+                return 'advanced';
+            }
+            return '';
+        }
+
+        function applyIntakeState(state, stateLabel = '') {
+            const scope = stateToScope(state);
+            assessmentState = state;
+            document.querySelector('[name="assessment_state"]').value = state || '';
+
+            const summary = document.getElementById('stateScopedSummary');
+            const heading = document.getElementById('baselineSectionHeading');
+            const hint = document.getElementById('baselineSectionHint');
+            const stagingHeading = document.getElementById('stagingSectionHeading');
+
+            if (!scope) {
+                summary.classList.add('hidden');
+                document.querySelectorAll('[data-intake-scope]').forEach((section) => {
+                    section.classList.remove('hidden');
+                    section.querySelectorAll('input, select, textarea').forEach((field) => {
+                        field.disabled = false;
+                    });
+                });
+                return;
+            }
+
+            const config = intakeScopeConfig[scope];
+            summary.classList.remove('hidden');
+            document.getElementById('assessmentStateLabel').textContent = stateLabel || state;
+            document.getElementById('stateScopedDescription').textContent = config.description;
+            document.getElementById('stateScopedBullets').innerHTML = config.bullets.map(item => `<li>${item}</li>`).join('');
+            heading.textContent = config.baselineHeading;
+            hint.textContent = config.baselineHint;
+            stagingHeading.textContent = config.stagingHeading;
+
+            document.querySelectorAll('[data-intake-scope]').forEach((section) => {
+                const scopes = section.dataset.intakeScope.split(',');
+                const visible = scopes.includes(scope) || scopes.includes('all');
+                section.classList.toggle('hidden', !visible);
+                section.querySelectorAll('input, select, textarea').forEach((field) => {
+                    if (field.name === 'assessment_id' || field.name === 'assessment_state') {
+                        return;
+                    }
+                    field.disabled = !visible;
+                });
+            });
+
+            if (scope !== 'advanced') {
+                setFormField('metastasis_site', 'M0');
+                setFormField('volume_disease', 'Low');
+                setFormField('line_of_therapy', '1');
+                setFormField('drug_scheme', '');
+            } else {
+                setFormField('line_of_therapy', stateToLineOfTherapy(state));
+            }
+            updateVolumeCheck();
+        }
+
+        function stateToLineOfTherapy(state) {
+            if (state === 'm0_crpc' || state === 'm1_crpc') {
+                return '2';
+            }
+            return '1';
+        }
+
+        function renderList(items, emptyMessage) {
+            if (!items || !items.length) {
+                return `<li>${emptyMessage}</li>`;
+            }
+            return items.map(item => `<li>${humanizeClinicalText(item)}</li>`).join('');
+        }
+
+        async function loadAssessmentContext() {
+            if (!assessmentId) {
+                return;
+            }
+            try {
+                const response = await fetch(`/api/clinical-assessments/${assessmentId}`);
+                const data = await response.json();
+                if (!data.success) {
+                    return;
+                }
+                const assessment = data.assessment;
+                const input = assessment.input_snapshot || {};
+                const result = assessment.display_result || {};
+                const primary = result.nccn_primary || {};
+
+                document.getElementById('assessmentContext').classList.remove('hidden');
+                document.getElementById('assessmentModule').textContent = assessment.module_label || assessment.module_id;
+                document.getElementById('assessmentPrimary').textContent = humanizeClinicalText(primary.trayectoria_recomendada || result.nccn_primary?.recommendation || 'Sin recomendación principal disponible.');
+                document.getElementById('assessmentComparison').textContent = humanizeClinicalText(result.eau_comparison?.explicacion_breve || result.eau_comparison?.comparison?.summary || 'Sin comparación estructurada disponible.');
+                document.getElementById('assessmentSummary').textContent = humanizeClinicalText(primary.resumen_del_caso || result.report_sections?.summary || 'Sin resumen clínico disponible.');
+                document.getElementById('assessmentHighlights').innerHTML = renderList(primary.fundamentos_personalizados || [], 'Sin fundamentos personalizados adicionales.');
+                applyIntakeState(assessment.state, assessment.state_label || assessment.module_label || assessment.state);
+
+                Object.entries(input).forEach(([name, value]) => {
+                    setFormField(name, value);
+                });
+                setFormField('baseline_psa', input.psa ?? input.baseline_psa);
+                setFormField('metastasis_site', input.metastasis_site);
+                setFormField('volume_disease', input.volume_disease);
+                setFormField('hrr_status', input.hrr_status);
+                setFormField('msi_status', input.msi_status);
+                setFormField('child_pugh_score', input.child_pugh_score);
+                setFormField('pain_symptoms', input.pain_symptoms);
+                setFormField('prior_docetaxel_cycles', input.prior_docetaxel_cycles);
+                window.clinicalPresentation?.normalizeDocument();
+            } catch (error) {
+                console.error('No se pudo cargar la evaluación clínica:', error);
+            }
+        }
+
+        function updateVolumeCheck() {
+            const site = document.querySelector('[name="metastasis_site"]').value;
+            const volSec = document.getElementById('volumeSection');
+
+            if (site === 'M0') {
+                volSec.classList.add('opacity-50', 'pointer-events-none');
+                document.querySelector('[name="volume_disease"]').value = 'Low';
+            } else {
+                volSec.classList.remove('opacity-50', 'pointer-events-none');
+            }
+        }
+
+        async function submitPatient() {
+            const formData = new FormData(document.getElementById('intakeForm'));
+            const data = Object.fromEntries(formData.entries());
+
+            // Map multiselect checkboxes logic manually if needed
+            data.comorbilidades = {
+                seizure: formData.get('comorb_seizure') === 'on',
+                cardio: formData.get('comorb_cardio') === 'on'
+            };
+            if (stateToScope(assessmentState) !== 'advanced') {
+                data.drug_scheme = '';
+                data.line_of_therapy = '1';
+            }
+
+            try {
+                const response = await fetch('/api/register_patient', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showResultsModal(result);
+                } else {
+                    alert('Error: ' + result.error);
+                }
+            } catch (e) {
+                alert('Error de conexión: ' + e);
+            }
+        }
+
+        function showResultsModal(data) {
+            const modal = document.getElementById('resultsModal');
+            const content = document.getElementById('modalContent');
+            const body = document.getElementById('recommendationsBody');
+
+            document.getElementById('modalSubTitle').innerText = `NSS: ${data.nss}`;
+            document.getElementById('modalProfileLink').href = data.next_routes?.profile || '/patients';
+            document.getElementById('modalPatientsLink').href = data.next_routes?.patients || '/patients';
+            document.getElementById('modalDashboardLink').href = data.next_routes?.dashboard || '/dashboard';
+
+            let html = '';
+            if (data.assessment && data.assessment.display_result) {
+                const result = data.assessment.display_result;
+                const primary = result.nccn_primary || {};
+                const eligible = (result.eligible_treatments || []).map(item => {
+                    if (typeof item === 'string') return `<li>${humanizeClinicalText(item)}</li>`;
+                    return `<li><span class="font-medium text-white">${humanizeClinicalText(item.name)}</span><br><span class="text-slate-400">${humanizeClinicalText(item.notes || '')}</span></li>`;
+                }).join('');
+                html += `<div class="bg-blue-900/20 border border-blue-500/30 p-4 rounded-lg">
+                            <h3 class="text-blue-400 font-bold uppercase text-xs tracking-wider mb-2">Evaluación clínica vinculada al ingreso</h3>
+                            <p class="text-lg text-white font-medium">${data.assessment.module_label || 'Módulo clínico'}</p>
+                            <p class="mt-2 text-sm text-slate-300">${humanizeClinicalText(primary.resumen_del_caso || result.report_sections?.summary || 'Sin resumen clínico estructurado.')}</p>
+                            <div class="mt-4 rounded-lg border border-slate-700/50 bg-slate-950/40 p-3">
+                                <p class="text-xs uppercase tracking-wider text-slate-500">Trayectoria recomendada</p>
+                                <p class="mt-2 text-sm text-slate-200">${humanizeClinicalText(primary.trayectoria_recomendada || result.nccn_primary?.recommendation || 'Sin recomendación estructurada.')}</p>
+                            </div>
+                            <div class="mt-4">
+                                <p class="text-xs uppercase tracking-wider text-slate-500 mb-2">Fundamentos personalizados</p>
+                                <ul class="space-y-2 text-sm text-slate-300">${renderList(primary.fundamentos_personalizados || [], 'Sin fundamentos adicionales.')}</ul>
+                            </div>
+                         </div>
+                         <div>
+                            <h3 class="text-slate-400 font-bold uppercase text-xs tracking-wider mt-6 mb-3">Tratamientos elegibles del documento de ingreso</h3>
+                            <ul class="space-y-2 text-sm text-slate-300">${eligible || '<li>Sin tratamientos estructurados.</li>'}</ul>
+                         </div>`;
+            } else {
+                const recs = data.recommendations || {};
+                html += `<div class="bg-blue-900/20 border border-blue-500/30 p-4 rounded-lg">
+                            <h3 class="text-blue-400 font-bold uppercase text-xs tracking-wider mb-2">Registro completado</h3>
+                            <p class="text-sm text-slate-300">${data.msg}</p>
+                         </div>`;
+                if (recs.error) {
+                    html += `<p class="text-sm text-amber-300">${recs.error}</p>`;
+                }
+            }
+
+            if (data.warning) {
+                html += `<div class="mt-6 bg-amber-900/20 border border-amber-500/30 p-4 rounded-lg">
+                            <h3 class="text-amber-400 font-bold uppercase text-xs tracking-wider mb-2">Advertencia</h3>
+                            <p class="text-sm text-amber-200/90">${data.warning}</p>
+                         </div>`;
+            }
+
+            body.innerHTML = html;
+
+            // Mostrar Modal
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            setTimeout(() => {
+                content.classList.remove('scale-95', 'opacity-0');
+                content.classList.add('scale-100', 'opacity-100');
+            }, 10);
+            window.clinicalPresentation?.normalizeDocument();
+        }
+
+        function closeModal() {
+            const modal = document.getElementById('resultsModal');
+            const content = document.getElementById('modalContent');
+
+            content.classList.remove('scale-100', 'opacity-100');
+            content.classList.add('scale-95', 'opacity-0');
+
+            setTimeout(() => {
+                modal.classList.add('hidden');
+                modal.classList.remove('flex');
+                window.location.href = '/patients';
+            }, 300);
+        }
+
+        applyIntakeState('', '');
+        loadAssessmentContext();
+        window.clinicalPresentation?.normalizeDocument();
+    </script>
+{% endblock %}

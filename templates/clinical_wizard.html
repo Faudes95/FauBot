@@ -1,0 +1,792 @@
+{% extends "layouts/base_clinical.html" %}
+{% from "components/clinical_ui.html" import badge, surface_card %}
+
+{% block content %}
+    {% set role_tones = {
+        'required': 'success',
+        'decision_refiner': 'info',
+        'monitoring': 'warning',
+        'optional': 'muted',
+    } %}
+    <div class="grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
+        {% call surface_card("Datos clínicos", "Asistente clínico por estadio", "Capture las variables mínimas del módulo para producir una recomendación clínica trazable y compatible con el flujo longitudinal.") %}
+            <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
+                <div class="flex flex-wrap items-center gap-2">
+                    {{ badge(schema.module, "muted", "font-mono normal-case") }}
+                    {{ badge("NCCN primaria + EAU comparativa", "info") }}
+                </div>
+                <div class="flex items-center gap-3">
+                    <a href="/clinical-hub" class="pn-btn pn-btn-ghost">Volver al centro clínico</a>
+                    <button id="submitWizard" class="pn-btn pn-btn-primary">Evaluar módulo</button>
+                </div>
+            </div>
+            <div class="mb-5 grid gap-3 md:grid-cols-3">
+                <div class="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4">
+                    <p class="text-xs uppercase tracking-[0.2em] text-emerald-300">Mínimo para decidir</p>
+                    <p class="mt-2 text-sm text-slate-200">Variables que cambian la recomendación principal.</p>
+                </div>
+                <div class="rounded-2xl border border-cyan-500/20 bg-cyan-500/10 p-4">
+                    <p class="text-xs uppercase tracking-[0.2em] text-cyan-300">Afina la recomendación</p>
+                    <p class="mt-2 text-sm text-slate-200">Refinadores clínicos y biomoleculares que suben o bajan intensidad.</p>
+                </div>
+                <div class="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4">
+                    <p class="text-xs uppercase tracking-[0.2em] text-amber-300">Monitoreo y benchmarking</p>
+                    <p class="mt-2 text-sm text-slate-200">Datos que hacen más seguro y comparable el flujo longitudinal.</p>
+                </div>
+            </div>
+            <form id="wizardForm" class="space-y-5">
+                {% set ns = namespace(current_group='') %}
+                {% for field in schema.fields %}
+                    {% if field.group != ns.current_group %}
+                        {% if not loop.first %}
+                                </div>
+                            </section>
+                        {% endif %}
+                        <section class="rounded-3xl border border-slate-800 bg-slate-950/40 p-5">
+                            <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+                                <div>
+                                    <p class="text-xs uppercase tracking-[0.2em] text-slate-500">{{ field.group or 'Datos clínicos' }}</p>
+                                    <p class="mt-1 text-sm text-slate-400">Complete primero los campos marcados como mínimos para decidir.</p>
+                                </div>
+                            </div>
+                            <div class="grid gap-4 md:grid-cols-2">
+                        {% set ns.current_group = field.group %}
+                    {% endif %}
+                    <label
+                        class="text-sm"
+                        data-field-wrapper
+                        data-field-name="{{ field.name }}"
+                        {% if field.conditional_visibility %}data-conditions='{{ field.conditional_visibility | tojson }}'{% endif %}
+                    >
+                        <div class="mb-1 flex flex-wrap items-center justify-between gap-2">
+                            <span class="block text-slate-300">{{ field.label }}{% if field.required %} *{% endif %}</span>
+                            {{ badge(field.clinical_role_label, role_tones.get(field.clinical_role, 'muted')) }}
+                        </div>
+                        {% if field.field_type == 'select' %}
+                            <select name="{{ field.name }}" class="pn-input w-full px-3 py-2">
+                                {% for option in field.display_options %}
+                                    <option value="{{ option.value }}" {% if option.value == field.default %}selected{% endif %}>{{ option.label }}</option>
+                                {% endfor %}
+                            </select>
+                        {% else %}
+                            <input
+                                type="{{ 'number' if field.field_type == 'number' else 'date' if field.field_type == 'date' else 'text' }}"
+                                name="{{ field.name }}"
+                                value="{{ field.default if field.default is not none and field.field_type != 'date' else '' }}"
+                                class="pn-input w-full px-3 py-2"
+                                {% if field.required %}required{% endif %}
+                            >
+                        {% endif %}
+                        <div class="mt-1 space-y-1">
+                            {% if field.unit %}
+                                <span class="block text-[11px] uppercase tracking-[0.2em] text-slate-500">Unidad: {{ field.unit }}</span>
+                            {% endif %}
+                            {% if field.help_text %}
+                                <span class="block text-xs text-slate-500">{{ field.help_text }}</span>
+                            {% endif %}
+                            {% if field.benchmark_note %}
+                                <span class="block rounded-2xl border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-xs text-cyan-200">{{ field.benchmark_note }}</span>
+                            {% endif %}
+                        </div>
+                    </label>
+                    {% if loop.last %}
+                            </div>
+                        </section>
+                    {% endif %}
+                {% endfor %}
+            </form>
+        {% endcall %}
+
+        <aside class="space-y-6">
+            {% call surface_card("Evidencia clínica", "Marco normativo", "Paneles guía, estudios de soporte y benchmarking usados por el asistente para este contexto clínico.") %}
+                <div class="space-y-4 text-sm">
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Red Nacional Integral del Cáncer (NCCN)</p>
+                        <p class="mt-1 text-slate-300">{{ evidence.nccn.version }} | {{ evidence.nccn_panels | join(', ') }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Asociación Europea de Urología (EAU)</p>
+                        <p class="mt-1 text-slate-300">{{ evidence.eau.version }} | {{ evidence.eau_sections | join(', ') }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Estudios pivotales</p>
+                        <p class="mt-1 text-slate-300">{{ evidence.pivotal_trials | join(', ') }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Fuentes estructuradas</p>
+                        <div class="mt-2 space-y-2">
+                            {% for citation in evidence.source_citations %}
+                                <div class="rounded-xl border border-slate-700/70 bg-slate-950/40 p-3">
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <p class="text-sm text-slate-200">{{ citation.guideline_or_trial }}</p>
+                                        {{ badge(citation.evidence_role or 'supportive', 'success' if citation.evidence_role == 'primary_guideline' else 'warning') }}
+                                    </div>
+                                    <p class="mt-1 text-xs text-slate-400">{{ citation.title }}</p>
+                                    {% if citation.followup_implications %}
+                                        <p class="mt-2 text-xs text-slate-500">{{ citation.followup_implications }}</p>
+                                    {% endif %}
+                                    {% if citation.evidence_role != 'primary_guideline' %}
+                                        <p class="mt-2 text-[11px] text-amber-200">Influye como soporte, seguridad o benchmarking; no reemplaza la recomendación primaria de guías.</p>
+                                    {% endif %}
+                                </div>
+                            {% else %}
+                                <p class="text-sm text-slate-400">Sin fuentes estructuradas adicionales.</p>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            {% endcall %}
+
+            <section id="resultCard" class="pn-surface hidden">
+                <div class="flex items-start justify-between gap-4">
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.25em] text-cyan-400">Resultado clínico</p>
+                        <p id="draftStatus" class="mt-2 text-sm text-slate-400"></p>
+                    </div>
+                    <div class="flex flex-wrap justify-end gap-2">
+                        <button id="createDraftButton" class="hidden pn-btn rounded-full bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-400">Preparar registro longitudinal</button>
+                        <a href="#evidenciaClinica" class="hidden pn-btn pn-btn-secondary" id="evidenceAnchor">Ver evidencia clínica</a>
+                        <button id="resetWizardButton" class="hidden pn-btn pn-btn-secondary">Iniciar una nueva evaluación</button>
+                        <a href="/clinical-hub" class="hidden pn-btn pn-btn-secondary" id="backToHubButton">Volver al centro clínico</a>
+                    </div>
+                </div>
+                <div id="resultBody" class="mt-4 space-y-4"></div>
+            </section>
+        </aside>
+    </div>
+
+    <section id="registrationPhase" class="mt-6 hidden">
+        {% call surface_card("Registro longitudinal integrado", "Centro clínico", "La captura longitudinal ya no sale del wizard. Los datos clínicos del módulo se importan, se citan y siguen alimentando la lógica clínica, el perfil y el seguimiento integral.") %}
+            <div class="grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(320px,1.1fr)]">
+                <div class="space-y-4">
+                    <div class="rounded-3xl border border-cyan-500/20 bg-cyan-500/10 p-5">
+                        <p class="text-xs uppercase tracking-[0.22em] text-cyan-300" id="registrationScopeLabel">Registro longitudinal</p>
+                        <p class="mt-2 text-sm text-slate-200" id="registrationScopeDescription"></p>
+                        <ul class="mt-4 space-y-2 text-sm text-slate-300" id="registrationScopeBullets"></ul>
+                    </div>
+                    <div class="rounded-3xl border border-slate-800 bg-slate-950/50 p-5">
+                        <div class="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                                <p class="text-xs uppercase tracking-[0.22em] text-slate-500">Datos clínicos importados desde la evaluación</p>
+                                <p class="mt-1 text-sm text-slate-400">Se persisten sin volver a capturarlos y siguen modulando la clasificación, la seguridad y el benchmarking.</p>
+                            </div>
+                            <span class="rounded-full border border-slate-700 bg-slate-900 px-3 py-1 text-xs text-slate-300" id="importedFieldCount">0 variables importadas</span>
+                        </div>
+                        <div class="mt-4 grid gap-3 md:grid-cols-2" id="importedClinicalFields"></div>
+                    </div>
+                </div>
+
+                <div class="rounded-3xl border border-slate-800 bg-slate-950/50 p-5">
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.22em] text-slate-500">Captura longitudinal adicional</p>
+                            <p class="mt-1 text-sm text-slate-400">Solo se solicitan los datos que faltan para persistencia, seguimiento y refinamiento clínico compatible con el estado actual.</p>
+                        </div>
+                        <span class="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200" id="registrationAssessmentBadge">Borrador clínico listo</span>
+                    </div>
+
+                    <form id="registrationForm" class="mt-5 space-y-5">
+                        <input type="hidden" name="assessment_id" id="registrationAssessmentId">
+                        <input type="hidden" name="assessment_state" id="registrationAssessmentState">
+                        <div id="registrationFragments" class="space-y-5"></div>
+                        <div class="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+                            <p class="text-xs uppercase tracking-[0.22em] text-slate-500">Estado del registro</p>
+                            <p class="mt-2 text-sm text-slate-300" id="registrationStatus">Prepare primero el borrador clínico para habilitar este paso.</p>
+                        </div>
+                        <div class="flex flex-wrap justify-end gap-3">
+                            <button type="button" id="cancelRegistrationButton" class="pn-btn pn-btn-secondary">Ocultar registro</button>
+                            <button type="submit" id="registerPatientButton" class="pn-btn pn-btn-primary">Guardar y abrir expediente</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        {% endcall %}
+    </section>
+{% endblock %}
+
+{% block page_scripts %}
+    <script>
+        const humanizeClinicalText = window.clinicalPresentation?.humanize || ((value) => value);
+        let latestPayload = null;
+        let latestResult = null;
+        let latestDraft = null;
+        const button = document.getElementById('submitWizard');
+        const createDraftButton = document.getElementById('createDraftButton');
+        const resetWizardButton = document.getElementById('resetWizardButton');
+        const evidenceAnchor = document.getElementById('evidenceAnchor');
+        const backToHubButton = document.getElementById('backToHubButton');
+        const registrationPhase = document.getElementById('registrationPhase');
+        const registrationForm = document.getElementById('registrationForm');
+        const registrationFragments = document.getElementById('registrationFragments');
+        const registrationStatus = document.getElementById('registrationStatus');
+        const registrationAssessmentId = document.getElementById('registrationAssessmentId');
+        const registrationAssessmentState = document.getElementById('registrationAssessmentState');
+        const registrationScopeLabel = document.getElementById('registrationScopeLabel');
+        const registrationScopeDescription = document.getElementById('registrationScopeDescription');
+        const registrationScopeBullets = document.getElementById('registrationScopeBullets');
+        const importedClinicalFields = document.getElementById('importedClinicalFields');
+        const importedFieldCount = document.getElementById('importedFieldCount');
+        const registrationAssessmentBadge = document.getElementById('registrationAssessmentBadge');
+        const registerPatientButton = document.getElementById('registerPatientButton');
+        const cancelRegistrationButton = document.getElementById('cancelRegistrationButton');
+
+        const badgeColors = {
+            'preferred': 'border-emerald-400/40 bg-emerald-500/10 text-emerald-200',
+            'selected_candidate': 'border-amber-400/40 bg-amber-500/10 text-amber-200',
+            'guideline-consistent': 'border-cyan-400/40 bg-cyan-500/10 text-cyan-200',
+            'eligible': 'border-slate-600 bg-slate-800 text-slate-200',
+        };
+
+        function renderTextList(items, emptyMessage) {
+            if (!items || !items.length) {
+                return `<li>${emptyMessage}</li>`;
+            }
+            return items.map(item => `<li>${humanizeClinicalText(item)}</li>`).join('');
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function formatRegistrationValue(value) {
+            if (value === null || value === undefined || value === '') {
+                return 'No documentado';
+            }
+            return escapeHtml(value);
+        }
+
+        function renderTreatmentList(items, emptyMessage) {
+            if (!items || !items.length) {
+                return `<li>${emptyMessage}</li>`;
+            }
+            return items.map(item => {
+                if (typeof item === 'string') {
+                    return `<li>${humanizeClinicalText(item)}</li>`;
+                }
+                return `<li><span class="font-medium text-white">${humanizeClinicalText(item.name)}</span> <span class="text-slate-400">(${humanizeClinicalText(item.priority)})</span><br><span class="text-slate-400">${humanizeClinicalText(item.notes || '')}</span></li>`;
+            }).join('');
+        }
+
+        function renderCitationList(items, emptyMessage) {
+            if (!items || !items.length) {
+                return `<div class="rounded-2xl border border-slate-700 p-4 text-sm text-slate-300">${emptyMessage}</div>`;
+            }
+            return items.map(item => `
+                <div class="rounded-2xl border border-slate-700 p-4">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <p class="text-sm font-medium text-white">${item.guideline_or_trial || item.title || 'Fuente clínica'}</p>
+                        <span class="rounded-full border px-2 py-1 text-[11px] ${item.evidence_role === 'primary_guideline' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200' : 'border-amber-500/30 bg-amber-500/10 text-amber-200'}">${humanizeClinicalText(item.evidence_role || 'supportive')}</span>
+                    </div>
+                    <p class="mt-1 text-sm text-slate-300">${item.title || ''}</p>
+                    ${item.followup_implications ? `<p class="mt-2 text-sm text-slate-400">${humanizeClinicalText(item.followup_implications)}</p>` : ''}
+                    ${item.field_implications?.length ? `<p class="mt-2 text-xs text-slate-500">Impacta captura en: ${item.field_implications.map(humanizeClinicalText).join(', ')}</p>` : ''}
+                    ${item.private_index?.available ? `<p class="mt-2 text-xs text-emerald-300">Texto completo indexado localmente en el índice privado (${escapeHtml(item.private_index.indexed_at || 'listo')}).</p>` : ''}
+                    ${item.evidence_role && item.evidence_role !== 'primary_guideline' ? '<p class="mt-2 text-[11px] text-amber-200">Influye como soporte; no reemplaza la recomendación primaria de guías.</p>' : ''}
+                    ${(item.local_pdf_path || item.doi_or_url) ? `<p class="mt-2 text-xs text-slate-500">${item.local_pdf_path || item.doi_or_url}</p>` : ''}
+                </div>
+            `).join('');
+        }
+
+        function renderTransitionList(items, emptyMessage) {
+            if (!items || !items.length) {
+                return `<li>${emptyMessage}</li>`;
+            }
+            return items.map(item => `<li><span class="font-medium text-white">${humanizeClinicalText(item.label || item.target_state)}</span><br><span class="text-slate-400">${humanizeClinicalText(item.when || '')}</span><br><span class="text-slate-400">${humanizeClinicalText(item.rationale || '')}</span></li>`).join('');
+        }
+
+        function renderOverlayList(items, emptyMessage) {
+            if (!items || !items.length) {
+                return `<div class="rounded-2xl border border-slate-700 p-4 text-sm text-slate-300">${emptyMessage}</div>`;
+            }
+            return items.map(item => `
+                <div class="rounded-2xl border border-slate-700 p-4">
+                    <p class="text-sm font-medium text-white">${humanizeClinicalText(item.title || 'Soporte clínico')}</p>
+                    <p class="mt-1 text-xs uppercase tracking-[0.2em] text-cyan-300">${humanizeClinicalText(item.status || '')}</p>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300">${renderTextList(item.reasons || [], 'Sin razones estructuradas.')}</ul>
+                    <div class="mt-3 text-xs uppercase tracking-[0.2em] text-slate-500">Acciones</div>
+                    <ul class="mt-2 space-y-2 text-sm text-slate-300">${renderTextList(item.actions || [], 'Sin acciones estructuradas.')}</ul>
+                </div>
+            `).join('');
+        }
+
+        function renderBenchmarkFlags(items, emptyMessage) {
+            if (!items || !items.length) {
+                return `<div class="rounded-2xl border border-slate-700 p-4 text-sm text-slate-300">${emptyMessage}</div>`;
+            }
+            return items.map(item => {
+                const tone = item.status === 'complete'
+                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                    : item.status === 'incomplete'
+                        ? 'border-amber-500/30 bg-amber-500/10 text-amber-200'
+                        : 'border-rose-500/30 bg-rose-500/10 text-rose-200';
+                return `
+                    <div class="rounded-2xl border border-slate-700 p-4">
+                        <div class="flex flex-wrap items-center gap-2">
+                            <p class="text-sm font-medium text-white">${humanizeClinicalText(item.label || 'Indicador')}</p>
+                            <span class="rounded-full border px-2 py-1 text-[11px] ${tone}">${humanizeClinicalText(item.status || 'missing')}</span>
+                        </div>
+                        <p class="mt-2 text-sm text-slate-400">${humanizeClinicalText(item.rationale || '')}</p>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function updateConditionalFields() {
+            document.querySelectorAll('[data-conditions]').forEach((wrapper) => {
+                const conditions = JSON.parse(wrapper.dataset.conditions || '{}');
+                const visible = Object.entries(conditions).every(([fieldName, values]) => {
+                    const field = document.querySelector(`[name="${fieldName}"]`);
+                    return field && values.includes(field.value);
+                });
+                wrapper.classList.toggle('hidden', !visible);
+            });
+        }
+
+        function renderRegistrationField(field, providedValue) {
+            const value = providedValue ?? field.default ?? '';
+            const required = field.required ? 'required' : '';
+            const badgeTone = {
+                'required': 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
+                'decision_refiner': 'border-cyan-500/30 bg-cyan-500/10 text-cyan-200',
+                'monitoring': 'border-amber-500/30 bg-amber-500/10 text-amber-200',
+                'optional': 'border-slate-700 bg-slate-900 text-slate-300',
+            }[field.clinical_role] || 'border-slate-700 bg-slate-900 text-slate-300';
+
+            if (field.field_type === 'select') {
+                const searchMode = field.name === 'estado_residencia' ? 'on' : 'auto';
+                const options = (field.display_options || []).map((option) => {
+                    const selected = String(option.value) === String(value) ? 'selected' : '';
+                    return `<option value="${escapeHtml(option.value)}" ${selected}>${escapeHtml(option.label)}</option>`;
+                }).join('');
+                return `
+                    <label class="text-sm">
+                        <div class="mb-1 flex flex-wrap items-center justify-between gap-2">
+                            <span class="block text-slate-300">${escapeHtml(field.label)}${field.required ? ' *' : ''}</span>
+                            <span class="rounded-full border px-2.5 py-1 text-[11px] font-medium ${badgeTone}">${escapeHtml(field.clinical_role_label || '')}</span>
+                        </div>
+                        <select
+                            name="${escapeHtml(field.name)}"
+                            class="pn-input w-full px-3 py-2"
+                            data-pn-select-variant="default"
+                            data-pn-select-search="${searchMode}"
+                            ${required}
+                        >
+                            ${options}
+                        </select>
+                        <div class="mt-1 space-y-1">
+                            ${field.unit ? `<span class="block text-[11px] uppercase tracking-[0.2em] text-slate-500">Unidad: ${escapeHtml(field.unit)}</span>` : ''}
+                            ${field.help_text ? `<span class="block text-xs text-slate-500">${escapeHtml(field.help_text)}</span>` : ''}
+                            ${field.benchmark_note ? `<span class="block rounded-2xl border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-xs text-cyan-200">${escapeHtml(field.benchmark_note)}</span>` : ''}
+                        </div>
+                    </label>
+                `;
+            }
+
+            const inputType = field.field_type === 'number'
+                ? 'number'
+                : field.field_type === 'date'
+                    ? 'date'
+                    : 'text';
+            const inputValue = value === null || value === undefined ? '' : value;
+
+            return `
+                <label class="text-sm">
+                    <div class="mb-1 flex flex-wrap items-center justify-between gap-2">
+                        <span class="block text-slate-300">${escapeHtml(field.label)}${field.required ? ' *' : ''}</span>
+                        <span class="rounded-full border px-2.5 py-1 text-[11px] font-medium ${badgeTone}">${escapeHtml(field.clinical_role_label || '')}</span>
+                    </div>
+                    <input
+                        type="${inputType}"
+                        name="${escapeHtml(field.name)}"
+                        value="${escapeHtml(inputValue)}"
+                        class="pn-input w-full px-3 py-2"
+                        ${required}
+                    >
+                    <div class="mt-1 space-y-1">
+                        ${field.unit ? `<span class="block text-[11px] uppercase tracking-[0.2em] text-slate-500">Unidad: ${escapeHtml(field.unit)}</span>` : ''}
+                        ${field.help_text ? `<span class="block text-xs text-slate-500">${escapeHtml(field.help_text)}</span>` : ''}
+                        ${field.benchmark_note ? `<span class="block rounded-2xl border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-xs text-cyan-200">${escapeHtml(field.benchmark_note)}</span>` : ''}
+                    </div>
+                </label>
+            `;
+        }
+
+        function renderFragmentFields(fields, defaults) {
+            if (!fields || !fields.length) {
+                return '<p class="text-sm text-slate-400">Sin campos adicionales para este bloque.</p>';
+            }
+
+            let html = '';
+            let currentGroup = '';
+            fields.forEach((field, index) => {
+                if (field.group !== currentGroup) {
+                    if (index > 0) {
+                        html += '</div>';
+                    }
+                    currentGroup = field.group;
+                    html += `
+                        <div class="pt-1">
+                            <p class="text-xs uppercase tracking-[0.2em] text-slate-500">${escapeHtml(currentGroup || 'Datos longitudinales')}</p>
+                            <div class="mt-3 grid gap-4 md:grid-cols-2">
+                    `;
+                }
+                html += renderRegistrationField(field, defaults[field.name]);
+                if (index === fields.length - 1) {
+                    html += '</div></div>';
+                }
+            });
+            return html;
+        }
+
+        function renderRegistrationFragments(fragments, defaults) {
+            if (!fragments || !fragments.length) {
+                registrationFragments.innerHTML = '<p class="text-sm text-slate-400">Sin bloques de registro para este estado.</p>';
+                return;
+            }
+
+            registrationFragments.innerHTML = fragments.map((fragment) => `
+                <section class="rounded-3xl border border-slate-800 bg-slate-950/40 p-5">
+                    <div class="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.2em] text-slate-500">${escapeHtml(fragment.id)}</p>
+                            <h3 class="mt-1 text-base font-semibold text-white">${escapeHtml(fragment.title)}</h3>
+                        </div>
+                        <div class="flex flex-wrap gap-2">
+                            ${fragment.optional_research ? '<span class="rounded-full border border-slate-700 bg-slate-900 px-3 py-1 text-[11px] text-slate-300">Investigación opcional</span>' : ''}
+                            ${fragment.benchmark_only ? '<span class="rounded-full border border-cyan-500/20 bg-cyan-500/10 px-3 py-1 text-[11px] text-cyan-200">Benchmarking</span>' : ''}
+                        </div>
+                    </div>
+                    ${fragment.clinical_influence?.length ? `<ul class="mt-4 space-y-2 text-sm text-slate-300">${fragment.clinical_influence.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : ''}
+                    <div class="mt-4">${renderFragmentFields(fragment.fields || [], defaults)}</div>
+                </section>
+            `).join('');
+            window.clinicalSelects?.syncAll(registrationFragments);
+        }
+
+        function renderImportedClinicalFields(fields) {
+            if (!fields || !fields.length) {
+                importedClinicalFields.innerHTML = '<p class="text-sm text-slate-400">No se importaron variables clínicas para este borrador.</p>';
+                importedFieldCount.textContent = '0 variables importadas';
+                return;
+            }
+
+            importedFieldCount.textContent = `${fields.length} variables importadas`;
+            importedClinicalFields.innerHTML = fields.map((field) => `
+                <div class="rounded-2xl border border-slate-700/80 bg-slate-900/70 p-4">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <p class="text-sm font-medium text-white">${escapeHtml(field.label)}</p>
+                        <span class="rounded-full border border-slate-700 bg-slate-900 px-2.5 py-1 text-[11px] text-slate-300">${escapeHtml(field.clinical_role_label || '')}</span>
+                    </div>
+                    <p class="mt-2 text-sm text-cyan-100">${formatRegistrationValue(field.value_label)}</p>
+                    ${field.persist_targets?.length ? `<p class="mt-2 text-xs text-slate-500">Persistencia: ${field.persist_targets.map((item) => escapeHtml(item)).join(', ')}</p>` : ''}
+                </div>
+            `).join('');
+        }
+
+        function resetRegistrationPhase() {
+            latestDraft = null;
+            registrationPhase.classList.add('hidden');
+            registrationFragments.innerHTML = '';
+            importedClinicalFields.innerHTML = '';
+            registrationScopeLabel.textContent = 'Registro longitudinal';
+            registrationScopeDescription.textContent = '';
+            registrationScopeBullets.innerHTML = '';
+            registrationAssessmentId.value = '';
+            registrationAssessmentState.value = '';
+            registrationStatus.textContent = 'Prepare primero el borrador clínico para habilitar este paso.';
+            registrationAssessmentBadge.textContent = 'Borrador clínico listo';
+            registerPatientButton.disabled = false;
+            registerPatientButton.textContent = 'Guardar y abrir expediente';
+            createDraftButton.textContent = 'Preparar registro longitudinal';
+            createDraftButton.classList.remove('hidden');
+            importedFieldCount.textContent = '0 variables importadas';
+        }
+
+        function showRegistrationPhase(draftData) {
+            latestDraft = draftData;
+            registrationAssessmentId.value = draftData.assessment_id;
+            registrationAssessmentState.value = draftData.assessment?.state || latestResult?.state || '';
+            registrationScopeLabel.textContent = draftData.scope_label || 'Registro longitudinal';
+            registrationScopeDescription.textContent = draftData.scope_description || '';
+            registrationScopeBullets.innerHTML = (draftData.scope_bullets || []).map((item) => `<li>${escapeHtml(item)}</li>`).join('');
+            registrationAssessmentBadge.textContent = draftData.assessment?.state_label || draftData.scope_label || 'Borrador clínico listo';
+            renderImportedClinicalFields(draftData.imported_clinical_fields || []);
+            renderRegistrationFragments(draftData.registration_fragments || [], draftData.registration_defaults || {});
+            registrationStatus.textContent = 'Complete los datos longitudinales faltantes y guarde para abrir el expediente integrado del paciente.';
+            registrationPhase.classList.remove('hidden');
+            createDraftButton.classList.add('hidden');
+            registrationPhase.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        function resetWizard() {
+            latestPayload = null;
+            latestResult = null;
+            document.getElementById('wizardForm').reset();
+            document.getElementById('resultCard').classList.add('hidden');
+            document.getElementById('resultBody').innerHTML = '';
+            document.getElementById('draftStatus').textContent = '';
+            createDraftButton.classList.add('hidden');
+            resetWizardButton.classList.add('hidden');
+            evidenceAnchor.classList.add('hidden');
+            backToHubButton.classList.add('hidden');
+            resetRegistrationPhase();
+            updateConditionalFields();
+        }
+
+        resetWizardButton.addEventListener('click', resetWizard);
+        document.querySelectorAll('#wizardForm input, #wizardForm select').forEach((field) => {
+            field.addEventListener('change', updateConditionalFields);
+        });
+
+        button.addEventListener('click', async () => {
+            resetRegistrationPhase();
+            const payload = Object.fromEntries(new FormData(document.getElementById('wizardForm')).entries());
+            latestPayload = payload;
+            button.disabled = true;
+            button.textContent = 'Evaluando...';
+            const response = await fetch('/api/modules/{{ schema.module }}/evaluate', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload),
+            });
+            const data = await response.json();
+            button.disabled = false;
+            button.textContent = 'Evaluar módulo';
+            const card = document.getElementById('resultCard');
+            const body = document.getElementById('resultBody');
+            card.classList.remove('hidden');
+
+            if (!data.success) {
+                body.innerHTML = `<p class="text-sm text-rose-300">${data.error}</p>`;
+                return;
+            }
+
+            const result = data.result;
+            latestResult = result;
+            const primary = result.nccn_primary || {};
+            const eligible = renderTreatmentList(result.eligible_treatments || [], 'Sin tratamientos estructurados.');
+            const notRecommended = renderTextList(primary.tratamientos_no_priorizados || result.not_recommended || [], 'Sin advertencias adicionales.');
+            const durations = renderTextList(primary.condiciones_y_duracion || result.durations_and_conditions || [], 'Sin duraciones adicionales.');
+            const missing = renderTextList(primary.advertencias_y_datos_faltantes || result.missing_critical_inputs || [], 'Ninguno.');
+            const trials = (result.trial_matches || []).map(item => `<li>${humanizeClinicalText(item.trial)}: ${item.match ? 'aplica' : 'no aplica'}</li>`).join('');
+            const contraindications = renderTextList(result.contraindications || [], 'Sin contraindicaciones estructuradas.');
+            const fundamentals = renderTextList(primary.fundamentos_personalizados || [], 'Sin fundamentos adicionales.');
+            const alternatives = renderTextList(primary.alternativas_razonables || [], 'Sin alternativas estructuradas.');
+            const monitoringActions = renderTextList(result.monitoring_plan?.actions || [], 'Sin acciones estructuradas.');
+            const monitoringTriggers = renderTextList(result.monitoring_plan?.triggers || [], 'Sin disparadores estructurados.');
+            const transitions = renderTransitionList(result.state_transition_targets || [], 'Sin transiciones estructuradas.');
+            const survivorshipRisks = renderTextList(result.survivorship_risks || [], 'Sin riesgos estructurados.');
+            const palliativeFlags = renderTextList(result.palliative_flags || [], 'Sin banderas paliativas estructuradas.');
+            const overlays = renderOverlayList(result.care_overlays || [], 'Sin capas de soporte concurrente activas.');
+            const sources = renderCitationList(result.source_citations || [], 'Sin fuentes estructuradas adicionales.');
+            const evidenceGaps = renderTextList(result.evidence_gaps || [], 'Sin brechas críticas estructuradas.');
+            const evidence = (result.evidence_trace || []).map(item => `
+                <div class="rounded-2xl border border-slate-700 p-4">
+                    <p class="text-xs uppercase tracking-[0.2em] text-slate-500">${humanizeClinicalText(item.title)}</p>
+                    <p class="mt-2 text-sm text-slate-300">Red Nacional Integral del Cáncer (NCCN): ${(item.nccn_panels || []).map(humanizeClinicalText).join(', ')}</p>
+                    <p class="mt-1 text-sm text-slate-400">Asociación Europea de Urología (EAU): ${(item.eau_sections || []).map(humanizeClinicalText).join(', ')}</p>
+                </div>
+            `).join('');
+            const decisionChanging = renderTextList(result.decision_changing_inputs || [], 'No hay datos adicionales priorizados.');
+            const supportiveContext = renderTextList(result.supportive_evidence_context || [], 'Sin contexto supportive adicional.');
+            const benchmarkFlags = renderBenchmarkFlags(result.benchmarking_flags || [], 'Sin indicadores de benchmarking estructurados.');
+            const badgeClass = badgeColors[result.applicability_badge_key] || 'border-slate-700 bg-slate-800 text-slate-200';
+
+            body.innerHTML = `
+                <div class="rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-4">
+                    <p class="text-xs uppercase tracking-[0.2em] text-cyan-300">Recomendación principal según la Red Nacional Integral del Cáncer (NCCN)</p>
+                    <h3 class="mt-2 text-lg font-semibold text-white">${humanizeClinicalText(primary.titulo_clinico || result.nccn_primary.label)}</h3>
+                    <p class="mt-2 text-sm text-slate-300">${humanizeClinicalText(primary.resumen_del_caso || result.report_sections?.summary || '')}</p>
+                    <div class="mt-4 rounded-2xl border border-slate-700/70 bg-slate-950/40 p-4">
+                        <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Trayectoria recomendada</p>
+                        <p class="mt-2 text-sm text-slate-200">${humanizeClinicalText(primary.trayectoria_recomendada || result.nccn_primary.recommendation || '')}</p>
+                    </div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 p-4">
+                    <p class="text-xs uppercase tracking-[0.2em] text-slate-400">Comparación con la Asociación Europea de Urología (EAU) 2026</p>
+                    <p class="mt-2 text-sm text-slate-200">${humanizeClinicalText(result.eau_comparison.label)}</p>
+                    <p class="mt-1 text-sm text-slate-400">${humanizeClinicalText(result.eau_comparison.explicacion_breve || result.eau_comparison.comparison?.summary || '')}</p>
+                </div>
+                <div class="grid gap-4 md:grid-cols-2">
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Fundamentos personalizados</p>
+                        <ul class="mt-2 space-y-2 text-sm text-slate-300">${fundamentals}</ul>
+                    </div>
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Alternativas razonables</p>
+                        <ul class="mt-2 space-y-2 text-sm text-slate-300">${alternatives}</ul>
+                    </div>
+                </div>
+                <div>
+                    <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Tratamientos elegibles</p>
+                    <ul class="mt-2 space-y-2 text-sm text-slate-300">${eligible}</ul>
+                </div>
+                <div class="grid gap-4 md:grid-cols-2">
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.2em] text-slate-500">No recomendado</p>
+                        <ul class="mt-2 space-y-2 text-sm text-slate-300">${notRecommended}</ul>
+                    </div>
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Duraciones y condiciones</p>
+                        <ul class="mt-2 space-y-2 text-sm text-slate-300">${durations}</ul>
+                    </div>
+                </div>
+                <div class="grid gap-4 md:grid-cols-2">
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Advertencias y datos faltantes</p>
+                        <ul class="mt-2 space-y-2 text-sm text-slate-300">${missing}</ul>
+                    </div>
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Qué dato faltante cambiaría la conducta</p>
+                        <ul class="mt-2 space-y-2 text-sm text-slate-300">${decisionChanging}</ul>
+                    </div>
+                </div>
+                <div class="grid gap-4 md:grid-cols-2">
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Estudios pivotales</p>
+                        <ul class="mt-2 space-y-2 text-sm text-slate-300">${trials || '<li>Sin coincidencias estructuradas.</li>'}</ul>
+                    </div>
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Contraindicaciones</p>
+                        <ul class="mt-2 space-y-2 text-sm text-slate-300">${contraindications}</ul>
+                    </div>
+                </div>
+                <div class="rounded-2xl border p-4 ${badgeClass}">
+                    <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Nivel de aplicabilidad</p>
+                    <p class="mt-2 text-sm text-slate-200">${result.applicability_badge}</p>
+                </div>
+                <div class="grid gap-4 md:grid-cols-2">
+                    <div class="rounded-2xl border border-slate-700 p-4">
+                        <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Plan de monitoreo</p>
+                        <p class="mt-2 text-sm text-slate-200">${humanizeClinicalText(result.monitoring_plan?.cadence || 'Sin cadencia estructurada.')}</p>
+                        <div class="mt-3 text-xs uppercase tracking-[0.2em] text-slate-500">Acciones</div>
+                        <ul class="mt-2 space-y-2 text-sm text-slate-300">${monitoringActions}</ul>
+                        <div class="mt-3 text-xs uppercase tracking-[0.2em] text-slate-500">Disparadores</div>
+                        <ul class="mt-2 space-y-2 text-sm text-slate-300">${monitoringTriggers}</ul>
+                    </div>
+                    <div class="rounded-2xl border border-slate-700 p-4">
+                        <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Objetivos de transición entre estados</p>
+                        <ul class="mt-2 space-y-2 text-sm text-slate-300">${transitions}</ul>
+                    </div>
+                </div>
+                <div class="grid gap-4 md:grid-cols-2">
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Riesgos de supervivencia y toxicidad</p>
+                        <ul class="mt-2 space-y-2 text-sm text-slate-300">${survivorshipRisks}</ul>
+                    </div>
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Banderas paliativas</p>
+                        <ul class="mt-2 space-y-2 text-sm text-slate-300">${palliativeFlags}</ul>
+                    </div>
+                </div>
+                <div>
+                    <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Capas de soporte concurrente</p>
+                    <div class="mt-2 space-y-3">${overlays}</div>
+                </div>
+                <div>
+                    <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Por qué estas fuentes influyen solo como soporte</p>
+                    <ul class="mt-2 space-y-2 text-sm text-slate-300">${supportiveContext}</ul>
+                </div>
+                <div>
+                    <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Benchmarking operativo y completitud</p>
+                    <div class="mt-2 space-y-3">${benchmarkFlags}</div>
+                </div>
+                <div>
+                    <p class="text-xs uppercase tracking-[0.2em] text-slate-500" id="evidenciaClinica">Trazabilidad de evidencia</p>
+                    <div class="mt-2 space-y-3">${evidence || '<p class="text-sm text-slate-300">Sin evidencia estructurada.</p>'}</div>
+                </div>
+                <div>
+                    <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Fuentes estructuradas y referencias adjuntas</p>
+                    <div class="mt-2 space-y-3">${sources}</div>
+                </div>
+                <div>
+                    <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Brechas de evidencia operativa</p>
+                    <ul class="mt-2 space-y-2 text-sm text-slate-300">${evidenceGaps}</ul>
+                </div>
+            `;
+            document.getElementById('draftStatus').textContent = 'La evaluación clínica ya puede vincularse con el ingreso formal del paciente.';
+            createDraftButton.classList.remove('hidden');
+            resetWizardButton.classList.remove('hidden');
+            evidenceAnchor.classList.remove('hidden');
+            backToHubButton.classList.remove('hidden');
+            window.clinicalPresentation?.normalizeDocument();
+        });
+
+        createDraftButton.addEventListener('click', async () => {
+            if (!latestPayload || !latestResult) {
+                document.getElementById('draftStatus').textContent = 'Primero debe evaluar el caso clínico.';
+                return;
+            }
+            if (latestDraft?.assessment_id) {
+                showRegistrationPhase(latestDraft);
+                return;
+            }
+            createDraftButton.disabled = true;
+            createDraftButton.textContent = 'Preparando registro longitudinal...';
+            const response = await fetch('/api/clinical-assessments/draft', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    module_id: '{{ schema.module }}',
+                    payload: latestPayload,
+                }),
+            });
+            const data = await response.json();
+            createDraftButton.disabled = false;
+            createDraftButton.textContent = 'Preparar registro longitudinal';
+            if (!data.success) {
+                document.getElementById('draftStatus').textContent = data.error;
+                return;
+            }
+            document.getElementById('draftStatus').textContent = 'La evaluación clínica quedó guardada como borrador y el registro longitudinal ya está disponible en esta misma pantalla.';
+            showRegistrationPhase(data);
+        });
+
+        cancelRegistrationButton.addEventListener('click', () => {
+            registrationPhase.classList.add('hidden');
+            createDraftButton.classList.remove('hidden');
+            registrationStatus.textContent = 'El registro longitudinal quedó oculto. Puede reabrirlo sin perder el borrador clínico.';
+        });
+
+        registrationForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            if (!latestDraft?.assessment_id) {
+                registrationStatus.textContent = 'Primero debe preparar el borrador clínico.';
+                return;
+            }
+
+            const payload = Object.fromEntries(new FormData(registrationForm).entries());
+            payload.assessment_id = latestDraft.assessment_id;
+            payload.assessment_state = registrationAssessmentState.value || latestResult?.state || '';
+
+            registerPatientButton.disabled = true;
+            registerPatientButton.textContent = 'Guardando expediente...';
+            registrationStatus.textContent = 'Persistiendo identidad, baseline, longitudinal y vínculo con la evaluación clínica.';
+
+            const response = await fetch('/api/register_patient', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload),
+            });
+            const data = await response.json();
+            registerPatientButton.disabled = false;
+            registerPatientButton.textContent = 'Guardar y abrir expediente';
+
+            if (!data.success) {
+                registrationStatus.textContent = data.error || 'No se pudo registrar el paciente.';
+                return;
+            }
+
+            registrationStatus.textContent = 'Registro completo. Se abrirá el expediente longitudinal.';
+            const nextProfile = data.next_routes?.profile || (payload.nss ? `/patient_profile/${encodeURIComponent(payload.nss)}` : '/patients');
+            window.location.href = nextProfile;
+        });
+
+        updateConditionalFields();
+    </script>
+{% endblock %}

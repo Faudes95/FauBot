@@ -1,0 +1,37 @@
+from __future__ import annotations
+
+from prostanet.shared.contracts import FieldSpec, module_schema
+
+
+M1_CRPC_SCHEMA = module_schema(
+    "m1_crpc",
+    "M1 CRPC",
+    "Ruta de enfermedad resistente a la castración con metástasis, dirigida por biomarcadores, secuencia terapéutica y seguridad.",
+    fields=[
+        FieldSpec("hrr_status", "Estado HRR", "select", options=["Desconocido", "Positivo", "Negativo"], default="Desconocido", group="Biomarcadores", group_order=1, clinical_role="required", evidence_tags=["hrr"]),
+        FieldSpec("hrr_gene", "Gen HRR predominante", "select", options=["Desconocido", "BRCA2", "BRCA1", "ATM", "PALB2", "CDK12", "Otro"], default="Desconocido", group="Biomarcadores", group_order=1, clinical_role="decision_refiner", evidence_tags=["hrr"]),
+        FieldSpec("msi_status", "Estado MSI", "select", options=["desconocido", "inestable", "estable"], default="desconocido", group="Biomarcadores", group_order=1, clinical_role="decision_refiner", evidence_tags=["msi"]),
+        FieldSpec("tmb_high", "Carga mutacional tumoral alta", "select", options=["0", "1"], default="0", group="Biomarcadores", group_order=1, clinical_role="optional", evidence_tags=["tmb"]),
+        FieldSpec("biomarker_source", "Fuente del biomarcador", "select", options=["Desconocida", "Tejido primario", "Biopsia metastásica", "ctDNA"], default="Desconocida", group="Biomarcadores", group_order=1, clinical_role="required", evidence_tags=["hrr", "msi", "vision"]),
+        FieldSpec("molecular_report_date", "Fecha del informe molecular", "date", group="Biomarcadores", group_order=1, clinical_role="decision_refiner", evidence_tags=["molecular_traceability"]),
+        FieldSpec("metastasis_site", "Sitio metastásico", "select", options=["Bone", "Node", "Visceral"], default="Bone", group="Carga tumoral", group_order=2, clinical_role="required"),
+        FieldSpec("prior_therapy", "Terapias previas", "text", default="Abiraterona", group="Secuencia terapéutica", group_order=3, clinical_role="required", evidence_tags=["sequence"]),
+        FieldSpec("prior_docetaxel_cycles", "Ciclos previos de docetaxel", "number", default=0, group="Secuencia terapéutica", group_order=3, clinical_role="required", unit="ciclos"),
+        FieldSpec("castrate_testosterone_confirmed", "Testosterona en rango de castración confirmada", "select", options=["0", "1"], default="1", group="Secuencia terapéutica", group_order=3, clinical_role="required", evidence_tags=["castration_confirmation"]),
+        FieldSpec("mcrpc_line_context", "Contexto de línea en mCRPC", "select", options=["first_line_mcrpc", "post_arpi_pre_taxane", "post_taxane", "later_line"], default="first_line_mcrpc", group="Secuencia terapéutica", group_order=3, clinical_role="required", evidence_tags=["sequence"]),
+        FieldSpec("docetaxel_fit", "Apto para docetaxel", "select", options=["0", "1"], default="1", group="Secuencia terapéutica", group_order=3, clinical_role="decision_refiner", evidence_tags=["sequence"]),
+        FieldSpec("chemotherapy_delay_candidate", "Candidato a diferir o evitar docetaxel", "select", options=["0", "1"], default="0", group="Secuencia terapéutica", group_order=3, clinical_role="decision_refiner", evidence_tags=["sequence"]),
+        FieldSpec("pain_symptoms", "Síntomas óseos / dolor", "select", options=["Asintomatico", "Leve", "Sintomatico"], default="Asintomatico", group="Secuencia terapéutica", group_order=3, clinical_role="decision_refiner", evidence_tags=["symptoms"]),
+        FieldSpec("ecog_performance_status", "ECOG", "number", default=1, group="Fitness y seguridad", group_order=4, clinical_role="required", unit="0-4"),
+        FieldSpec("frailty_status", "Fragilidad clínica", "select", options=["Fit", "Vulnerable", "Frail"], default="Fit", group="Fitness y seguridad", group_order=4, clinical_role="decision_refiner", evidence_tags=["frailty"]),
+        FieldSpec("rare_histology_variant", "Variante histológica agresiva poco común", "select", options=["0", "1"], default="0", group="Fitness y seguridad", group_order=4, clinical_role="optional", evidence_tags=["variant_histology"]),
+        FieldSpec("neuroendocrine_features", "Rasgos neuroendocrinos emergentes", "select", options=["0", "1"], default="0", group="Fitness y seguridad", group_order=4, clinical_role="optional", evidence_tags=["variant_histology"]),
+        FieldSpec("cv_risk_documented", "Riesgo cardiovascular documentado", "select", options=["0", "1"], default="0", group="Fitness y seguridad", group_order=4, clinical_role="monitoring", evidence_tags=["cardio_oncology"]),
+        FieldSpec("drug_interaction_reviewed", "Interacciones farmacológicas revisadas", "select", options=["0", "1"], default="0", group="Fitness y seguridad", group_order=4, clinical_role="monitoring", evidence_tags=["drug_interactions"]),
+        FieldSpec("current_medications", "Medicaciones concomitantes", "text", default="", group="Fitness y seguridad", group_order=4, clinical_role="optional", evidence_tags=["drug_interactions"]),
+        FieldSpec("hepatic_risk_factors", "Factores de riesgo hepático", "select", options=["0", "1"], default="0", group="Fitness y seguridad", group_order=4, clinical_role="monitoring", evidence_tags=["hepatotoxicity"]),
+        FieldSpec("psma_positive", "PSMA positivo", "select", options=["0", "1"], default="0", group="Imagen funcional", group_order=5, clinical_role="required", evidence_tags=["vision"]),
+        FieldSpec("psma_negative_dominant_lesions", "Lesiones dominantes PSMA-negativas", "select", options=["0", "1"], default="0", group="Imagen funcional", group_order=5, clinical_role="decision_refiner", evidence_tags=["vision"]),
+        FieldSpec("baseline_qol", "Calidad de vida basal", "number", default=65, group="Resultados reportados por el paciente", group_order=6, clinical_role="monitoring", unit="0-100", evidence_tags=["qol"]),
+    ],
+)

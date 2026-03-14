@@ -1,0 +1,1276 @@
+{% extends "layouts/base_clinical.html" %}
+
+{% block head_extra %}
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@2.2.1/dist/chartjs-plugin-annotation.min.js"></script>
+    <style>
+        .timeline-dot { position: relative; }
+        .timeline-dot::before {
+            content: ''; position: absolute; left: -24px; top: 6px;
+            width: 12px; height: 12px; border-radius: 50%; border: 2px solid;
+        }
+        .dot-blue::before { border-color: #3b82f6; background: #1e3a5f; }
+        .dot-green::before { border-color: #10b981; background: #064e3b; }
+        .dot-red::before { border-color: #ef4444; background: #7f1d1d; }
+        .dot-yellow::before { border-color: #f59e0b; background: #78350f; }
+        .dot-purple::before { border-color: #8b5cf6; background: #4c1d95; }
+        .alert-pulse { animation: pulse-alert 2s infinite; }
+        @keyframes pulse-alert {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+    </style>
+{% endblock %}
+
+{% block content %}
+    {% set current_state_key = latest_assessment.state if latest_assessment else patient.prior_history.current_state %}
+    {% set diagnostic_states = ['diagnostic_workup', 'post_negative_biopsy_followup'] %}
+    {% set diagnostic_state = current_state_key in diagnostic_states %}
+    {% set benchmarking_flags = latest_assessment.display_result.benchmarking_flags if latest_assessment and latest_assessment.display_result.benchmarking_flags else [] %}
+    <div class="space-y-6">
+
+        <!-- ═══════════════════════════════════════════════════════════════════ -->
+        <!-- 1. HEADER — Identidad + Alertas Activas                          -->
+        <!-- ═══════════════════════════════════════════════════════════════════ -->
+        <header class="pn-surface">
+            <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                <div>
+                    <div class="flex items-center gap-3 mb-1">
+                        <h1 class="text-3xl font-bold text-white">{{ patient.identity.full_name }}</h1>
+                        <span class="px-2 py-1 bg-slate-700 rounded text-xs text-slate-400 font-mono">{{ patient.identity.nss }}</span>
+                    </div>
+                    <div class="flex flex-wrap gap-4 text-sm text-slate-400 mt-1">
+                        <span>Edad: <b class="text-slate-200">{{ patient.identity.age }} años</b></span>
+                        <span>Fecha de diagnóstico: <b class="text-slate-200">{{ patient.identity.diagnosis_date }}</b></span>
+                        <span>Antígeno prostático específico basal: <b class="text-blue-400">{{ patient.baseline.baseline_psa }} ng/mL</b></span>
+                        {% if patient.demographics.seguridad_social %}
+                        <span>Seguridad social: <b class="text-slate-200">{{ patient.demographics.seguridad_social }}</b></span>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="flex gap-3 items-center">
+                    <!-- Export Button -->
+                    <button onclick="exportCSV()" class="pn-btn pn-btn-secondary px-3 py-2 text-xs flex items-center gap-1">
+                        📊 Exportar archivo CSV
+                    </button>
+                    <button onclick="exportData()" class="pn-btn pn-btn-secondary px-3 py-2 text-xs flex items-center gap-1">
+                        📥 Exportar archivo JSON
+                    </button>
+                    <!-- Status -->
+                    <div class="text-right">
+                        <div class="text-xs text-slate-500 uppercase tracking-wider mb-1">Estado actual</div>
+                        <div class="text-lg font-bold text-green-400 flex items-center justify-end gap-2">
+                            <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                            Activo
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Alertas Activas -->
+            {% if patient.alerts %}
+            <div class="mt-4 space-y-2">
+                {% for alert in patient.alerts %}
+                <div data-alert="{{ alert.id }}" class="flex items-center gap-3 px-4 py-2 rounded-lg border
+                    {{ 'bg-red-900/20 border-red-500/30' if alert.severity == 'critical' else 'bg-yellow-900/20 border-yellow-500/30' if alert.severity == 'warning' else 'bg-blue-900/20 border-blue-500/30' }}">
+                    <span class="{{ 'text-red-400 alert-pulse' if alert.severity == 'critical' else 'text-yellow-400' if alert.severity == 'warning' else 'text-blue-400' }} text-lg">
+                        {{ '🚨' if alert.severity == 'critical' else '⚠️' if alert.severity == 'warning' else 'ℹ️' }}
+                    </span>
+                    <div class="flex-1">
+                        <span class="font-medium text-white text-sm">{{ alert.title }}</span>
+                        <span class="text-xs text-slate-400 ml-2">{{ alert.description }}</span>
+                    </div>
+                    <span class="text-xs text-slate-500">{{ alert.alert_date }}</span>
+                    <button onclick="acknowledgeAlert({{ alert.id }}, this)" class="pn-btn pn-btn-secondary px-2 py-1 text-xs whitespace-nowrap">Vista</button>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </header>
+
+        {% if latest_assessment %}
+        <section class="pn-surface border border-emerald-700/40 bg-emerald-950/10">
+            <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+                <div>
+                    <h2 class="text-lg font-bold text-white flex items-center gap-2">
+                        📄 Última evaluación clínica modular
+                    </h2>
+                    <p class="mt-2 text-sm text-slate-300">{{ latest_assessment.module_label }}</p>
+                    <p class="mt-2 text-sm text-slate-400">{{ latest_assessment.display_result.nccn_primary.resumen_del_caso or latest_assessment.display_result.report_sections.summary }}</p>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4 min-w-[280px]">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Recomendación principal</div>
+                    <div class="mt-2 text-sm text-white">{{ latest_assessment.display_result.nccn_primary.titulo_clinico or latest_assessment.display_result.nccn_primary.label }}</div>
+                    <div class="mt-1 text-sm text-slate-300">{{ latest_assessment.display_result.nccn_primary.trayectoria_recomendada or latest_assessment.display_result.nccn_primary.recommendation }}</div>
+                </div>
+            </div>
+            <div class="mt-4 grid gap-4 lg:grid-cols-2">
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Fundamentos personalizados</div>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in latest_assessment.display_result.nccn_primary.fundamentos_personalizados or [] %}
+                        <li>{{ item }}</li>
+                        {% else %}
+                        <li>Sin fundamentos personalizados estructurados.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Comparación con la Asociación Europea de Urología (EAU) 2026</div>
+                    <p class="mt-3 text-sm text-slate-300">{{ latest_assessment.display_result.eau_comparison.explicacion_breve or latest_assessment.display_result.eau_comparison.comparison.summary }}</p>
+                    <div class="mt-4 text-xs uppercase tracking-wider text-slate-500">Mensaje para toma de decisiones compartida</div>
+                    <p class="mt-2 text-sm text-slate-300">{{ latest_assessment.display_result.nccn_primary.mensaje_para_toma_de_decisiones_compartida }}</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div class="pn-surface">
+                <h2 class="text-lg font-bold text-white mb-4">Plan de monitoreo longitudinal</h2>
+                {% set monitoring = latest_assessment.display_result.monitoring_plan or {} %}
+                <div class="space-y-3 text-sm text-slate-300">
+                    <div>
+                        <div class="text-xs uppercase tracking-wider text-slate-500">Cadencia</div>
+                        <p class="mt-1">{{ monitoring.cadence or 'Sin cadencia estructurada.' }}</p>
+                    </div>
+                    <div>
+                        <div class="text-xs uppercase tracking-wider text-slate-500">Acciones</div>
+                        <ul class="mt-2 space-y-2 list-disc pl-5">
+                            {% for item in monitoring.actions or [] %}
+                            <li>{{ item }}</li>
+                            {% else %}
+                            <li>Sin acciones estructuradas.</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    <div>
+                        <div class="text-xs uppercase tracking-wider text-slate-500">Disparadores de transición</div>
+                        <ul class="mt-2 space-y-2 list-disc pl-5">
+                            {% for item in monitoring.triggers or [] %}
+                            <li>{{ item }}</li>
+                            {% else %}
+                            <li>Sin disparadores estructurados.</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="pn-surface">
+                <h2 class="text-lg font-bold text-white mb-4">Capas de soporte y cuidado concurrente</h2>
+                <div class="space-y-3">
+                    {% for overlay in care_overlays %}
+                    <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                        <div class="flex items-center justify-between gap-3">
+                            <div class="text-sm font-medium text-white">{{ overlay.title }}</div>
+                            <span class="text-xs uppercase tracking-wider text-cyan-300">{{ overlay.status }}</span>
+                        </div>
+                        <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                            {% for reason in overlay.reasons or [] %}
+                            <li>{{ reason }}</li>
+                            {% endfor %}
+                        </ul>
+                        <div class="mt-3 text-xs uppercase tracking-wider text-slate-500">Acciones sugeridas</div>
+                        <ul class="mt-2 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                            {% for action in overlay.actions or [] %}
+                            <li>{{ action }}</li>
+                            {% else %}
+                            <li>Sin acciones estructuradas.</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    {% else %}
+                    <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4 text-sm text-slate-300">
+                        Sin capas de soporte concurrente activas en la última evaluación modular.
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </section>
+
+        <section class="pn-surface">
+            <h2 class="text-lg font-bold text-white mb-4">Línea de estados clínicos persistidos</h2>
+            <div class="space-y-4">
+                {% for event in state_timeline %}
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
+                        <div>
+                            <div class="text-sm font-semibold text-white">{{ event.state_label }}</div>
+                            <div class="mt-1 text-sm text-slate-300">{{ event.transition_reason or 'Sin motivo de transición estructurado.' }}</div>
+                        </div>
+                        <div class="text-xs uppercase tracking-wider text-slate-500">
+                            {{ event.created_at }}
+                        </div>
+                    </div>
+                    {% if event.monitoring_plan and event.monitoring_plan.cadence %}
+                    <div class="mt-3 text-sm text-slate-400">
+                        Monitoreo asociado: {{ event.monitoring_plan.cadence }}
+                    </div>
+                    {% endif %}
+                </div>
+                {% else %}
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4 text-sm text-slate-300">
+                    Sin eventos longitudinales persistidos para este paciente.
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+
+        {% if benchmarking_flags %}
+        <section class="pn-surface">
+            <h2 class="text-lg font-bold text-white mb-4">Benchmarking operativo del estado actual</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {% for flag in benchmarking_flags %}
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="flex items-center justify-between gap-3">
+                        <div class="text-sm font-medium text-white">{{ flag.label }}</div>
+                        <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] {{ 'bg-emerald-500/10 text-emerald-200 border border-emerald-500/20' if flag.status == 'complete' else 'bg-amber-500/10 text-amber-200 border border-amber-500/20' if flag.status == 'incomplete' else 'bg-rose-500/10 text-rose-200 border border-rose-500/20' }}">
+                            {{ flag.status }}
+                        </span>
+                    </div>
+                    <p class="mt-2 text-sm text-slate-400">{{ flag.rationale }}</p>
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+        {% endif %}
+        {% endif %}
+
+        <!-- ═══════════════════════════════════════════════════════════════════ -->
+        <!-- 2. PSA CONTROL TOWER (Inspirado en Mayo Clinic)                   -->
+        <!-- ═══════════════════════════════════════════════════════════════════ -->
+        {% if not diagnostic_state %}
+        <section class="pn-surface">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-lg font-bold text-white flex items-center gap-2">
+                    📊 Torre de control del antígeno prostático específico
+                    <span class="text-xs bg-blue-900/30 text-blue-400 px-2 py-0.5 rounded">Referencia visual inspirada en la Clínica Mayo</span>
+                </h2>
+                <div class="flex gap-2">
+                    <button onclick="openVisitModal()" class="pn-btn pn-btn-primary px-3 py-1.5 text-xs">
+                        + Registrar Visita
+                    </button>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-4">
+                <!-- PSA Cards -->
+                <div class="bg-slate-900/50 rounded-lg p-4 border border-slate-700/50">
+                    <div class="text-xs text-slate-500 uppercase">Antígeno prostático específico actual</div>
+                    <div class="text-2xl font-bold text-blue-400" id="currentPSA">
+                        {% if patient.follow_ups %}{{ patient.follow_ups[-1].psa_current }}{% else %}{{ patient.baseline.baseline_psa }}{% endif %}
+                    </div>
+                    <div class="text-xs text-slate-500">ng/mL</div>
+                </div>
+                <div class="bg-slate-900/50 rounded-lg p-4 border border-slate-700/50">
+                    <div class="text-xs text-slate-500 uppercase">Nadir del antígeno prostático específico</div>
+                    <div class="text-2xl font-bold text-green-400" id="nadirPSA">--</div>
+                    <div class="text-xs text-slate-500">ng/mL</div>
+                </div>
+                <div class="bg-slate-900/50 rounded-lg p-4 border border-slate-700/50">
+                    <div class="text-xs text-slate-500 uppercase">Velocidad del antígeno prostático específico</div>
+                    <div class="text-2xl font-bold text-yellow-400" id="psaVelocity">--</div>
+                    <div class="text-xs text-slate-500">ng/mL/año</div>
+                </div>
+                <div class="bg-slate-900/50 rounded-lg p-4 border border-slate-700/50">
+                    <div class="text-xs text-slate-500 uppercase">Tiempo de duplicación del antígeno prostático específico</div>
+                    <div class="text-2xl font-bold" id="psaDT">--</div>
+                    <div class="text-xs text-slate-500">meses</div>
+                </div>
+            </div>
+
+            <!-- PSA Chart with zones -->
+            <div class="h-72 w-full relative">
+                <canvas id="psaControlChart"></canvas>
+            </div>
+        </section>
+        {% endif %}
+
+        <!-- ═══════════════════════════════════════════════════════════════════ -->
+        <!-- 3. TIMELINE DE ESCENARIOS CLÍNICOS (Patient Journey)              -->
+        <!-- ═══════════════════════════════════════════════════════════════════ -->
+        {% if not diagnostic_state %}
+        <section class="pn-surface">
+            <h2 class="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                🗺️ Trayectoria clínica del paciente
+            </h2>
+
+            <!-- Timeline horizontal -->
+            <div class="relative">
+                <div class="absolute top-6 left-0 right-0 h-0.5 bg-slate-700"></div>
+                <div class="flex justify-between items-start relative z-10">
+                    <!-- Diagnóstico -->
+                    <div class="flex flex-col items-center max-w-[140px]">
+                        <div class="w-12 h-12 bg-blue-600 rounded-full flex items-center justify-center text-white text-lg shadow-lg shadow-blue-900/30">🔬</div>
+                        <div class="mt-2 text-center">
+                            <div class="text-xs font-bold text-blue-400">Diagnóstico</div>
+                            <div class="text-[10px] text-slate-500">{{ patient.identity.diagnosis_date }}</div>
+                        </div>
+                    </div>
+
+                    {% if patient.active_surveillance and patient.active_surveillance.enrollment_date %}
+                    <div class="flex flex-col items-center max-w-[140px]">
+                        <div class="w-12 h-12 bg-green-600 rounded-full flex items-center justify-center text-white text-lg shadow-lg shadow-green-900/30">👁️</div>
+                        <div class="mt-2 text-center">
+                            <div class="text-xs font-bold text-green-400">Vigilancia activa</div>
+                            <div class="text-[10px] text-slate-500">{{ patient.active_surveillance.enrollment_date }}</div>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    {% if patient.surgery and patient.surgery.surgery_date %}
+                    <div class="flex flex-col items-center max-w-[140px]">
+                        <div class="w-12 h-12 bg-purple-600 rounded-full flex items-center justify-center text-white text-lg shadow-lg shadow-purple-900/30">🔪</div>
+                        <div class="mt-2 text-center">
+                            <div class="text-xs font-bold text-purple-400">Cirugía</div>
+                            <div class="text-[10px] text-slate-500">{{ patient.surgery.surgery_date }}</div>
+                            <div class="text-[10px] text-slate-400">{{ patient.surgery.surgery_type }}</div>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    {% for rt in patient.radiation %}
+                    <div class="flex flex-col items-center max-w-[140px]">
+                        <div class="w-12 h-12 bg-yellow-600 rounded-full flex items-center justify-center text-white text-lg shadow-lg shadow-yellow-900/30">☢️</div>
+                        <div class="mt-2 text-center">
+                            <div class="text-xs font-bold text-yellow-400">Radioterapia {{ rt.rt_context }}</div>
+                            <div class="text-[10px] text-slate-500">{{ rt.rt_date }}</div>
+                        </div>
+                    </div>
+                    {% endfor %}
+
+                    {% if patient.bcr and patient.bcr.bcr_detected %}
+                    <div class="flex flex-col items-center max-w-[140px]">
+                        <div class="w-12 h-12 bg-red-600 rounded-full flex items-center justify-center text-white text-lg shadow-lg shadow-red-900/30">📈</div>
+                        <div class="mt-2 text-center">
+                            <div class="text-xs font-bold text-red-400">Recurrencia bioquímica</div>
+                            <div class="text-[10px] text-slate-500">{{ patient.bcr.bcr_date }}</div>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    {% for tx in patient.treatments %}
+                    <div class="flex flex-col items-center max-w-[140px]">
+                        <div class="w-12 h-12 bg-amber-600 rounded-full flex items-center justify-center text-white text-lg shadow-lg shadow-amber-900/30">💊</div>
+                        <div class="mt-2 text-center">
+                            <div class="text-xs font-bold text-amber-400">Línea {{ tx.line_of_therapy }}</div>
+                            <div class="text-[10px] text-slate-500">{{ tx.start_date }}</div>
+                            <div class="text-[10px] text-slate-400">{{ tx.drug_scheme }}</div>
+                        </div>
+                    </div>
+                    {% endfor %}
+
+                    <!-- Current -->
+                    <div class="flex flex-col items-center max-w-[140px]">
+                        <div class="w-12 h-12 bg-slate-600 rounded-full flex items-center justify-center text-white text-lg border-2 border-slate-400">📍</div>
+                        <div class="mt-2 text-center">
+                            <div class="text-xs font-bold text-slate-300">Hoy</div>
+                            <div class="text-[10px] text-slate-500">{{ patient.follow_ups|length }} visitas</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        {% endif %}
+
+        <!-- ═══════════════════════════════════════════════════════════════════ -->
+        <!-- 4. MOTOR DE DECISIÓN + BIOMARCADORES (2 columnas)                 -->
+        <!-- ═══════════════════════════════════════════════════════════════════ -->
+        {% if not latest_assessment %}
+        <section class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Recommendations Card -->
+            <div class="pn-surface lg:col-span-2">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-lg font-bold text-white flex items-center gap-2">
+                        🧬 Motor de Decisión Clínica
+                    </h2>
+                    <span class="text-xs bg-purple-900/30 text-purple-400 px-2 py-1 rounded border border-purple-500/20">
+                        {{ {
+                            'mHSPC': 'Enfermedad metastásica sensible a la castración',
+                            'mCRPC': 'Enfermedad resistente a la castración con metástasis',
+                            'nmCRPC': 'Enfermedad resistente a la castración sin metástasis'
+                        }.get(recommendations.scenario, recommendations.scenario) }}
+                    </span>
+                </div>
+
+                {% if recommendations.scenario == 'mHSPC' %}
+                <div class="bg-slate-900/50 rounded-lg p-4 mb-4 border border-slate-700/50">
+                    <div class="grid grid-cols-2 gap-4 text-sm">
+                        <div>Volumen de enfermedad según el estudio CHAARTED: <b class="{{ 'text-red-400' if recommendations.volume_chaarted == 'High' else 'text-green-400' }}">{{ 'Alto volumen' if recommendations.volume_chaarted == 'High' else 'Bajo volumen' }}</b></div>
+                        <div>Clasificación de riesgo según el estudio LATITUDE: <b class="{{ 'text-red-400' if recommendations.risk_latitude == 'High' else 'text-green-400' }}">{{ 'Alto riesgo' if recommendations.risk_latitude == 'High' else 'Riesgo no alto' }}</b></div>
+                    </div>
+                </div>
+                {% endif %}
+
+                <div class="space-y-3 max-h-80 overflow-y-auto">
+                    {% for rec in recommendations.recommendations %}
+                    <div class="p-3 bg-slate-700/30 rounded border border-slate-600/30 hover:border-blue-500/30 transition-colors">
+                        <div class="flex justify-between items-start mb-1">
+                            <span class="font-medium text-blue-100">{{ rec.combination }}</span>
+                            <span class="text-xs px-2 py-0.5 rounded {{ 'bg-green-900/50 text-green-400' if 'High' in rec.priority else 'bg-orange-900/50 text-orange-400' }}">
+                                {{ rec.priority }}
+                            </span>
+                        </div>
+                        <div class="text-xs text-slate-400 italic">"{{ rec.evidence }}"</div>
+                    </div>
+                    {% else %}
+                    <div class="text-center text-slate-500 py-4">Sin recomendaciones específicas.</div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <!-- Biomarkers & Genomics Card -->
+            <div class="pn-surface">
+                <h3 class="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4">Biomarcadores y perfil molecular</h3>
+                <div class="space-y-3">
+                    <div>
+                        <div class="flex justify-between text-sm mb-1">
+                            <span>Reparación por recombinación homóloga con genes BRCA y ATM</span>
+                            <span class="font-medium {{ 'text-red-400' if patient.genomics.hrr_overall == 'Positivo' else 'text-green-400' if patient.genomics.hrr_overall == 'Negativo' else 'text-slate-400' }}">
+                                {{ patient.genomics.hrr_overall or patient.baseline.hrr_status or 'Desconocido' }}
+                            </span>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="flex justify-between text-sm mb-1">
+                            <span>Inestabilidad microsatelital</span>
+                            <span class="font-medium {{ 'text-red-400' if patient.genomics.msi_status == 'MSI-H' else 'text-green-400' }}">
+                                {{ 'Inestabilidad microsatelital alta' if (patient.genomics.msi_status or patient.baseline.msi_status) == 'MSI-H' else patient.genomics.msi_status or patient.baseline.msi_status or 'Estable a nivel microsatelital' }}
+                            </span>
+                        </div>
+                    </div>
+                    {% if patient.genomics.decipher_score %}
+                    <div class="pt-3 border-t border-slate-700">
+                        <div class="flex justify-between text-sm mb-1">
+                            <span>Decipher</span>
+                            <span class="font-medium text-blue-400">{{ patient.genomics.decipher_score }} ({{ patient.genomics.decipher_risk }})</span>
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% if patient.genomics.ar_v7_status %}
+                    <div>
+                        <div class="flex justify-between text-sm mb-1">
+                            <span>AR-V7</span>
+                            <span class="font-medium {{ 'text-red-400' if patient.genomics.ar_v7_status == 'Positivo' else 'text-green-400' }}">{{ patient.genomics.ar_v7_status }}</span>
+                        </div>
+                    </div>
+                    {% endif %}
+                    <div class="pt-3 border-t border-slate-700">
+                        <div class="flex justify-between text-sm mb-1">
+                            <span>Función hepática</span>
+                            <span class="font-medium {{ 'text-red-400' if patient.baseline.child_pugh_score == 'C' else 'text-green-400' }}">
+                                Child-Pugh {{ patient.baseline.child_pugh_score or 'A' }}
+                            </span>
+                        </div>
+                        <div class="flex justify-between text-sm mb-1">
+                            <span>Estado funcional del Grupo Cooperativo Oncológico del Este</span>
+                            <span class="font-medium text-white">{{ patient.baseline.ecog_score or 0 }}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        {% endif %}
+
+        <!-- ═══════════════════════════════════════════════════════════════════ -->
+        <!-- 5. WATERFALL CHART (Respuesta PSA a tratamientos)                 -->
+        <!-- ═══════════════════════════════════════════════════════════════════ -->
+        {% if patient.treatments|length > 0 and not diagnostic_state %}
+        <section class="pn-surface">
+            <h2 class="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                📉 Respuesta del antígeno prostático específico por línea de tratamiento en gráfico de cascada
+            </h2>
+            <div class="h-64 w-full">
+                <canvas id="waterfallChart"></canvas>
+            </div>
+        </section>
+        {% endif %}
+
+        <!-- ═══════════════════════════════════════════════════════════════════ -->
+        <!-- 6. PROs LONGITUDINALES                                            -->
+        <!-- ═══════════════════════════════════════════════════════════════════ -->
+        <section class="pn-surface">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-lg font-bold text-white flex items-center gap-2">
+                    📋 Resultados reportados por el paciente
+                </h2>
+                <button onclick="openProModal()" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium text-white transition-colors">
+                    + Registrar resultados reportados por el paciente
+                </button>
+            </div>
+        {% if patient.pros|length > 0 %}
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div class="h-56"><canvas id="prosUrinaryChart"></canvas></div>
+                <div class="h-56"><canvas id="prosQolChart"></canvas></div>
+            </div>
+        {% else %}
+            <div class="text-center py-6 text-slate-500">
+                <p class="text-sm">Sin evaluaciones de resultados reportados por el paciente registradas. Use el botón para agregar.</p>
+            </div>
+        {% endif %}
+        </section>
+
+        <!-- ═══════════════════════════════════════════════════════════════════ -->
+        <!-- 7. BIOPSIAS & PATOLOGÍA                                           -->
+        <!-- ═══════════════════════════════════════════════════════════════════ -->
+        {% if patient.biopsies|length > 0 %}
+        <section class="pn-surface">
+                <h2 class="text-lg font-bold text-white mb-4">🔬 Historial de biopsias</h2>
+            <p class="pn-scroll-hint mb-3 md:hidden">Desliza lateralmente para ver todas las columnas de la tabla.</p>
+            <div class="pn-scroll-x">
+                <table class="min-w-[860px] w-full text-sm text-left text-slate-400">
+                    <thead class="text-xs text-slate-200 uppercase bg-slate-900/50">
+                        <tr>
+                            <th class="px-3 py-2">Fecha</th>
+                            <th class="px-3 py-2">Tipo</th>
+                            <th class="px-3 py-2">Gleason</th>
+                            <th class="px-3 py-2">Grupo de grado</th>
+                            <th class="px-3 py-2">Cilindros positivos</th>
+                            <th class="px-3 py-2">Máximo porcentaje</th>
+                            <th class="px-3 py-2">Cribiforme</th>
+                            <th class="px-3 py-2">Carcinoma intraductal</th>
+                            <th class="px-3 py-2">Reclasificación al alza</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-700">
+                        {% for bx in patient.biopsies %}
+                        <tr class="hover:bg-slate-700/30">
+                            <td class="px-3 py-2">{{ bx.biopsy_date }}</td>
+                            <td class="px-3 py-2"><span class="px-1.5 py-0.5 bg-slate-700 rounded text-xs">{{ bx.biopsy_type }}</span></td>
+                            <td class="px-3 py-2 font-bold text-white">{{ bx.gleason_primary }}+{{ bx.gleason_secondary }}</td>
+                            <td class="px-3 py-2"><span class="px-2 py-0.5 rounded text-xs font-bold
+                                {{ 'bg-green-900/50 text-green-400' if bx.isup_grade <= 1 else 'bg-yellow-900/50 text-yellow-400' if bx.isup_grade <= 2 else 'bg-orange-900/50 text-orange-400' if bx.isup_grade <= 3 else 'bg-red-900/50 text-red-400' }}">
+                                GG{{ bx.isup_grade }}</span></td>
+                            <td class="px-3 py-2">{{ bx.positive_cores }}/{{ bx.total_cores }}</td>
+                            <td class="px-3 py-2">{{ bx.max_core_involvement_pct }}%</td>
+                            <td class="px-3 py-2">{{ '✅' if bx.patron_cribiforme else '—' }}</td>
+                            <td class="px-3 py-2">{{ '✅' if bx.carcinoma_intraductal else '—' }}</td>
+                            <td class="px-3 py-2">{{ '⬆️' if bx.upgrade_from_previous else '—' }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+        {% endif %}
+
+        <!-- ═══════════════════════════════════════════════════════════════════ -->
+        <!-- 8. ESTUDIOS PIVOTALES APLICABLES                                  -->
+        <!-- ═══════════════════════════════════════════════════════════════════ -->
+        <section class="pn-surface">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-lg font-bold text-white flex items-center gap-2">
+                    📚 Confrontación con Estudios Pivotales
+                </h2>
+                <button onclick="runPivotalMatch(event)" class="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 rounded text-xs font-medium text-white transition-colors">
+                    Evaluar Estudios Pivotales
+                </button>
+            </div>
+        {% if patient.pivotal_matches is defined and patient.pivotal_matches|length > 0 %}
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {% for match in patient.pivotal_matches %}
+                <div class="p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
+                    <div class="flex justify-between items-start mb-1">
+                        <span class="font-bold text-white text-sm">{{ match.study_name }}</span>
+                        <span class="text-xs px-2 py-0.5 rounded {{ 'bg-green-900/50 text-green-400' if match.eligible else 'bg-slate-700 text-slate-400' }}">
+                            {{ 'Elegible' if match.eligible else 'No elegible' }}
+                        </span>
+                    </div>
+                    <div class="text-xs text-slate-400">{{ match.expected_outcome }}</div>
+                </div>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="text-center py-6 text-slate-500">
+                <p class="text-sm">No se ha evaluado aún. Presione "Evaluar Estudios Pivotales" para confrontar el perfil del paciente contra ~27 estudios pivotales.</p>
+            </div>
+        {% endif %}
+        </section>
+
+        <!-- ═══════════════════════════════════════════════════════════════════ -->
+        <!-- 9. TABLA DE SEGUIMIENTO (Expandida)                               -->
+        <!-- ═══════════════════════════════════════════════════════════════════ -->
+        <section class="pn-surface overflow-hidden">
+            <div class="p-4 border-b border-slate-700 flex justify-between items-center">
+                <h3 class="font-bold text-white text-sm">📋 Historial de visitas de seguimiento</h3>
+                <span class="text-xs text-slate-500">{{ patient.follow_ups|length }} visitas registradas</span>
+            </div>
+            <p class="pn-scroll-hint px-4 pt-3 md:hidden">Desliza lateralmente para ver laboratorio, toxicidad, tratamiento y estado.</p>
+            <div class="pn-scroll-x px-1 sm:px-0">
+                <table class="min-w-[980px] w-full text-left text-sm text-slate-400">
+                    <thead class="bg-slate-900/50 text-slate-200 uppercase text-xs font-bold">
+                        <tr>
+                            <th class="px-4 py-3">Fecha</th>
+                            <th class="px-4 py-3">Antígeno prostático específico</th>
+                            <th class="px-4 py-3">Testosterona</th>
+                            <th class="px-4 py-3">ECOG</th>
+                            <th class="px-4 py-3 text-blue-400">Fosfatasa alcalina / lactato deshidrogenasa</th>
+                            <th class="px-4 py-3 text-red-400">Dolor y evento esquelético relacionado</th>
+                            <th class="px-4 py-3">Toxicidad</th>
+                            <th class="px-4 py-3">Tratamiento</th>
+                            <th class="px-4 py-3">Estado</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-700">
+                        {% for visit in patient.follow_ups %}
+                        <tr class="hover:bg-slate-800/50 transition">
+                            <td class="px-4 py-3 text-slate-300">{{ visit.visit_date }}</td>
+                            <td class="px-4 py-3 font-bold text-blue-400">{{ visit.psa_current }}</td>
+                            <td class="px-4 py-3">{{ visit.testosterone_current or '-' }}</td>
+                            <td class="px-4 py-3">
+                                {% if visit.ecog_current is not none %}
+                                <span class="px-1.5 py-0.5 rounded text-xs {{ 'bg-green-900/50 text-green-400' if visit.ecog_current <= 1 else 'bg-yellow-900/50 text-yellow-400' if visit.ecog_current <= 2 else 'bg-red-900/50 text-red-400' }}">
+                                    {{ visit.ecog_current }}
+                                </span>
+                                {% else %}-{% endif %}
+                            </td>
+                            <td class="px-4 py-3">
+                                <div class="flex flex-col text-xs">
+                                    <span>Fosfatasa alcalina: {{ visit.alp_current or '-' }}</span>
+                                    <span class="text-slate-500">Lactato deshidrogenasa: {{ visit.ldh_current or '-' }}</span>
+                                </div>
+                            </td>
+                            <td class="px-4 py-3">
+                                <div class="flex flex-col text-xs">
+                                    <span>Escala visual analógica: {{ visit.pain_score or '-' }}/10</span>
+                                    {% if visit.skeletal_events and 'true' in visit.skeletal_events|string|lower %}
+                                    <span class="text-red-500 font-bold">⚠ Evento esquelético relacionado</span>
+                                    {% endif %}
+                                </div>
+                            </td>
+                            <td class="px-4 py-3 text-xs max-w-[120px] truncate">{{ visit.toxicity_events or '-' }}</td>
+                            <td class="px-4 py-3 text-slate-300 text-xs">{{ visit.current_treatment or '-' }}</td>
+                            <td class="px-4 py-3">
+                                <span class="px-2 py-1 rounded-full bg-slate-700 text-xs text-slate-300 border border-slate-600">
+                                    {{ visit.disease_status or 'Seguimiento' }}
+                                </span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- ═══════════════════════════════════════════════════════════════════ -->
+        <!-- 10. DEMOGRÁFICOS MÉXICO (si existen)                               -->
+        <!-- ═══════════════════════════════════════════════════════════════════ -->
+        {% if patient.demographics and patient.demographics.seguridad_social %}
+        <section class="pn-surface">
+            <h2 class="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                🇲🇽 Perfil Demográfico
+            </h2>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                {% if patient.demographics.estado_residencia %}
+                <div class="bg-slate-900/50 rounded-lg p-3 border border-slate-700/50">
+                    <div class="text-xs text-slate-500 uppercase">Estado</div>
+                    <div class="text-white font-medium">{{ patient.demographics.estado_residencia }}</div>
+                </div>
+                {% endif %}
+                {% if patient.demographics.seguridad_social %}
+                <div class="bg-slate-900/50 rounded-lg p-3 border border-slate-700/50">
+                    <div class="text-xs text-slate-500 uppercase">Seguridad Social</div>
+                    <div class="text-white font-medium">{{ patient.demographics.seguridad_social }}</div>
+                </div>
+                {% endif %}
+                {% if patient.demographics.escolaridad %}
+                <div class="bg-slate-900/50 rounded-lg p-3 border border-slate-700/50">
+                    <div class="text-xs text-slate-500 uppercase">Escolaridad</div>
+                    <div class="text-white font-medium">{{ patient.demographics.escolaridad }}</div>
+                </div>
+                {% endif %}
+                {% if patient.demographics.tabaquismo %}
+                <div class="bg-slate-900/50 rounded-lg p-3 border border-slate-700/50">
+                    <div class="text-xs text-slate-500 uppercase">Tabaquismo</div>
+                    <div class="text-white font-medium">{{ patient.demographics.tabaquismo }}</div>
+                </div>
+                {% endif %}
+                {% if patient.demographics.diabetes_mellitus %}
+                <div class="bg-slate-900/50 rounded-lg p-3 border border-red-500/20">
+                    <div class="text-xs text-slate-500 uppercase">Diabetes mellitus tipo 2</div>
+                    <div class="text-red-400 font-medium">Sí</div>
+                </div>
+                {% endif %}
+                {% if patient.demographics.hipertension %}
+                <div class="bg-slate-900/50 rounded-lg p-3 border border-red-500/20">
+                    <div class="text-xs text-slate-500 uppercase">Hipertensión arterial</div>
+                    <div class="text-red-400 font-medium">Sí</div>
+                </div>
+                {% endif %}
+                {% if patient.demographics.ipss_score %}
+                <div class="bg-slate-900/50 rounded-lg p-3 border border-slate-700/50">
+                    <div class="text-xs text-slate-500 uppercase">Puntaje internacional de síntomas prostáticos</div>
+                    <div class="font-medium {{ 'text-green-400' if patient.demographics.ipss_score <= 7 else 'text-yellow-400' if patient.demographics.ipss_score <= 19 else 'text-red-400' }}">
+                        {{ patient.demographics.ipss_score }}/35
+                    </div>
+                </div>
+                {% endif %}
+                {% if patient.demographics.iief5_score %}
+                <div class="bg-slate-900/50 rounded-lg p-3 border border-slate-700/50">
+                    <div class="text-xs text-slate-500 uppercase">Índice internacional de función eréctil de 5 preguntas</div>
+                    <div class="font-medium {{ 'text-green-400' if patient.demographics.iief5_score >= 22 else 'text-yellow-400' if patient.demographics.iief5_score >= 12 else 'text-red-400' }}">
+                        {{ patient.demographics.iief5_score }}/25
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </section>
+        {% endif %}
+
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════ -->
+    <!-- ADD VISIT MODAL                                                       -->
+    <!-- ═══════════════════════════════════════════════════════════════════════ -->
+    <div id="addVisitModal" class="fixed inset-0 bg-black/80 hidden items-center justify-center z-50 backdrop-blur-sm">
+        <div class="pn-modal-shell max-w-lg w-full mx-4 p-6 max-h-[90vh] overflow-y-auto">
+            <h2 class="text-xl font-bold text-white mb-4">Registrar Visita de Seguimiento</h2>
+            <form id="visitForm" class="space-y-4">
+                <input type="hidden" name="patient_id" value="{{ patient.identity.id }}">
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Antígeno prostático específico actual (PSA) (ng/mL)</label>
+                        <input type="number" step="0.01" name="psa" required
+                            class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Testosterona (ng/dL)</label>
+                        <input type="number" step="0.1" name="testosterone"
+                            class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4 pt-2 border-t border-slate-700">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Fosfatasa alcalina (ALP)</label>
+                        <input type="number" step="1" name="alp" placeholder="U/L"
+                            class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Lactato deshidrogenasa (LDH)</label>
+                        <input type="number" step="1" name="ldh" placeholder="U/L"
+                            class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Hemoglobina (g/dL)</label>
+                        <input type="number" step="0.1" name="hemoglobin" placeholder="g/dL"
+                            class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Albúmina (g/dL)</label>
+                        <input type="number" step="0.1" name="albumin" placeholder="g/dL"
+                            class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4 pt-2 border-t border-slate-700">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Escala de dolor (0-10)</label>
+                        <input type="number" min="0" max="10" name="pain"
+                            class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">ECOG Actual</label>
+                        <select name="ecog" class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
+                            <option value="">--</option>
+                            <option value="0">0 - Asintomático</option>
+                            <option value="1">1 - Sintomático leve</option>
+                            <option value="2">2 - En cama &lt;50%</option>
+                            <option value="3">3 - En cama &gt;50%</option>
+                            <option value="4">4 - En cama 100%</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Tratamiento actual</label>
+                    <input type="text" name="treatment" placeholder="por ejemplo, abiraterona + terapia de privación androgénica"
+                        class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Toxicidad según los Criterios Comunes de Terminología para Eventos Adversos</label>
+                        <div class="space-y-1">
+                            <label class="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" name="tox_fatigue" class="rounded bg-slate-700 border-slate-600"> Fatiga</label>
+                            <label class="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" name="tox_nausea" class="rounded bg-slate-700 border-slate-600"> Náusea</label>
+                            <label class="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" name="tox_rash" class="rounded bg-slate-700 border-slate-600"> Rash</label>
+                            <label class="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" name="tox_hta" class="rounded bg-slate-700 border-slate-600"> Hipertensión</label>
+                            <label class="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" name="tox_neuropathy" class="rounded bg-slate-700 border-slate-600"> Neuropatía</label>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Eventos esqueléticos relacionados</label>
+                        <div class="space-y-1">
+                            <label class="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" name="sre_fracture" class="rounded bg-slate-700 border-slate-600"> Fractura</label>
+                            <label class="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" name="sre_cord" class="rounded bg-slate-700 border-slate-600"> Compresión</label>
+                            <label class="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" name="sre_rad" class="rounded bg-slate-700 border-slate-600"> Radioterapia</label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex justify-end gap-3 mt-6">
+                    <button type="button" onclick="closeVisitModal()" class="pn-btn pn-btn-secondary px-4 py-2">Cancelar</button>
+                    <button type="submit" class="pn-btn pn-btn-primary px-4 py-2">Guardar Visita</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════ -->
+    <!-- PRO ASSESSMENT MODAL                                                   -->
+    <!-- ═══════════════════════════════════════════════════════════════════════ -->
+    <div id="proModal" class="fixed inset-0 bg-black/80 hidden items-center justify-center z-50 backdrop-blur-sm">
+        <div class="pn-modal-shell max-w-lg w-full mx-4 p-6 max-h-[90vh] overflow-y-auto">
+            <h2 class="text-xl font-bold text-white mb-4">Evaluación de resultados reportados por el paciente</h2>
+            <form id="proForm" class="space-y-4">
+                <input type="hidden" name="patient_id" value="{{ patient.identity.id }}">
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Puntaje internacional de síntomas prostáticos total (0-35)</label>
+                        <input type="number" min="0" max="35" name="ipss_total"
+                            class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Calidad de vida del puntaje internacional de síntomas prostáticos (0-6)</label>
+                        <input type="number" min="0" max="6" name="ipss_qol"
+                            class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4 pt-2 border-t border-slate-700">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Índice internacional de función eréctil de 5 preguntas (5-25)</label>
+                        <input type="number" min="5" max="25" name="iief5_score"
+                            class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Pads/día</label>
+                        <input type="number" min="0" name="pad_usage"
+                            class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4 pt-2 border-t border-slate-700">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Dolor Peor BPI (0-10)</label>
+                        <input type="number" min="0" max="10" name="bpi_worst_pain"
+                            class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Dolor Promedio BPI (0-10)</label>
+                        <input type="number" min="0" max="10" name="bpi_average_pain"
+                            class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4 pt-2 border-t border-slate-700">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Cuestionario EQ-5D con escala visual analógica (0-100)</label>
+                        <input type="number" min="0" max="100" name="eq5d_vas"
+                            class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Cuestionario FACT-P total</label>
+                        <input type="number" step="0.1" name="fact_p_total"
+                            class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-medium text-slate-400 mb-1">Notas del Clínico</label>
+                    <textarea name="clinician_notes" rows="2" placeholder="Observaciones..."
+                        class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2"></textarea>
+                </div>
+
+                <div class="flex justify-end gap-3 mt-4">
+                    <button type="button" onclick="closeProModal()" class="pn-btn pn-btn-secondary px-4 py-2">Cancelar</button>
+                    <button type="submit" class="pn-btn pn-btn-primary px-4 py-2">Guardar resultados reportados por el paciente</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════ -->
+    <!-- JAVASCRIPT — Charts, Modals, Data                                     -->
+    <!-- ═══════════════════════════════════════════════════════════════════════ -->
+{% endblock %}
+
+{% block page_scripts %}
+    <script>
+        const humanizeClinicalText = window.clinicalPresentation?.humanize || ((value) => value);
+        // ── Datos del paciente ────────────────────────────────────────────────
+        const dates = ['{{ patient.identity.diagnosis_date }}'];
+        const psaValues = [{{ patient.baseline.baseline_psa or 0 }}];
+        const testoValues = [{{ patient.baseline.testosterone_baseline or 0 }}];
+
+        {% for visit in patient.follow_ups %}
+        dates.push('{{ visit.visit_date }}');
+        psaValues.push({{ visit.psa_current or 0 }});
+        testoValues.push({{ visit.testosterone_current or 0 }});
+        {% endfor %}
+
+        // ── PSA Metrics ───────────────────────────────────────────────────────
+        const nadirPSAEl = document.getElementById('nadirPSA');
+        const psaVelocityEl = document.getElementById('psaVelocity');
+        const psaDTEl = document.getElementById('psaDT');
+        if (nadirPSAEl && psaValues.length > 0) {
+            const nadir = Math.min(...psaValues.filter(v => v > 0));
+            nadirPSAEl.textContent = nadir < 999 ? nadir.toFixed(2) : '--';
+
+            if (psaValues.length >= 2) {
+                const last = psaValues[psaValues.length - 1];
+                const prev = psaValues[psaValues.length - 2];
+                const vel = (last - prev);
+                if (psaVelocityEl) {
+                    psaVelocityEl.textContent = vel.toFixed(2);
+                    psaVelocityEl.className += vel > 0 ? ' text-red-400' : ' text-green-400';
+                }
+
+                if (psaDTEl && last > prev && prev > 0) {
+                    const dt = Math.log(2) / Math.log(last / prev) * 12;
+                    psaDTEl.textContent = dt.toFixed(1);
+                    psaDTEl.className += dt < 10 ? ' text-red-400' : dt < 24 ? ' text-yellow-400' : ' text-green-400';
+                }
+            }
+        }
+
+        // ── PSA Control Tower Chart ───────────────────────────────────────────
+        const psaCanvas = document.getElementById('psaControlChart');
+        if (psaCanvas) {
+        const ctxPSA = psaCanvas.getContext('2d');
+        new Chart(ctxPSA, {
+            type: 'line',
+            data: {
+                labels: dates,
+                datasets: [
+                    {
+                        label: humanizeClinicalText('PSA (ng/mL)'),
+                        data: psaValues,
+                        borderColor: '#3b82f6',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        borderWidth: 3,
+                        tension: 0.3,
+                        pointBackgroundColor: '#1d4ed8',
+                        pointRadius: 5,
+                        fill: true,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'Testosterona (ng/dL)',
+                        data: testoValues,
+                        borderColor: '#10b981',
+                        borderDash: [5, 5],
+                        borderWidth: 2,
+                        tension: 0.3,
+                        pointRadius: 0,
+                        yAxisID: 'y1'
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { labels: { color: '#94a3b8' } },
+                    annotation: {
+                        annotations: {
+                            bcrLine: {
+                                type: 'line',
+                                yMin: 0.2, yMax: 0.2,
+                                borderColor: 'rgba(239, 68, 68, 0.5)',
+                                borderWidth: 1,
+                                borderDash: [5, 5],
+                                label: {
+                                    display: true,
+                                    content: humanizeClinicalText('BCR (0.2)'),
+                                    position: 'end',
+                                    color: '#ef4444',
+                                    font: { size: 10 }
+                                }
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
+                    y: {
+                        type: 'linear', display: true, position: 'left',
+                        grid: { color: '#334155' },
+                        ticks: { color: '#94a3b8' },
+                        title: { display: true, text: humanizeClinicalText('PSA (ng/mL)'), color: '#60a5fa' }
+                    },
+                    y1: {
+                        type: 'linear', display: true, position: 'right',
+                        grid: { drawOnChartArea: false },
+                        ticks: { color: '#94a3b8' },
+                        title: { display: true, text: 'Testosterona', color: '#34d399' }
+                    }
+                }
+            }
+        });
+        }
+
+        // ── Waterfall Chart ───────────────────────────────────────────────────
+        {% if patient.treatments|length > 0 and not diagnostic_state %}
+        const waterfallCtx = document.getElementById('waterfallChart')?.getContext('2d');
+        if (waterfallCtx) {
+            const txLabels = [];
+            const txChanges = [];
+            const txColors = [];
+            const baselinePSA = {{ patient.baseline.baseline_psa or 10 }};
+
+            {% for tx in patient.treatments %}
+            txLabels.push(humanizeClinicalText('{{ tx.drug_scheme }}'));
+            const nadir = {{ tx.nadir_psa or 0 }};
+            const change = nadir > 0 ? ((nadir - baselinePSA) / baselinePSA * 100) : -50;
+            txChanges.push(change.toFixed(1));
+            txColors.push(change < -50 ? '#10b981' : change < 0 ? '#3b82f6' : '#ef4444');
+            {% endfor %}
+
+            new Chart(waterfallCtx, {
+                type: 'bar',
+                data: {
+                    labels: txLabels,
+                    datasets: [{
+                        label: humanizeClinicalText('% Cambio PSA vs Basal'),
+                        data: txChanges,
+                        backgroundColor: txColors,
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    indexAxis: 'x',
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        y: {
+                            grid: { color: '#334155' }, ticks: { color: '#94a3b8', callback: v => v + '%' },
+                            title: { display: true, text: humanizeClinicalText('% Cambio PSA'), color: '#94a3b8' }
+                        },
+                        x: { grid: { display: false }, ticks: { color: '#94a3b8', maxRotation: 45 } }
+                    }
+                }
+            });
+        }
+        {% endif %}
+
+        // ── PROs Charts ───────────────────────────────────────────────────────
+        {% if patient.pros|length > 0 %}
+        const proDates = [];
+        const ipssData = [];
+        const iief5Data = [];
+        const painData = [];
+        const eq5dData = [];
+
+        {% for pro in patient.pros %}
+        proDates.push('{{ pro.assessment_date }}');
+        ipssData.push({{ pro.ipss_total or 0 }});
+        iief5Data.push({{ pro.iief5_score or 0 }});
+        painData.push({{ pro.bpi_worst_pain or 0 }});
+        eq5dData.push({{ pro.eq5d_vas or 0 }});
+        {% endfor %}
+
+        // Urinary/Sexual
+        const uCtx = document.getElementById('prosUrinaryChart')?.getContext('2d');
+        if (uCtx) {
+            new Chart(uCtx, {
+                type: 'line',
+                data: {
+                    labels: proDates,
+                    datasets: [
+                        { label: humanizeClinicalText('IPSS (0-35)'), data: ipssData, borderColor: '#f59e0b', tension: 0.3, pointRadius: 4 },
+                        { label: humanizeClinicalText('IIEF-5 (5-25)'), data: iief5Data, borderColor: '#8b5cf6', tension: 0.3, pointRadius: 4 }
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { labels: { color: '#94a3b8' } }, title: { display: true, text: 'Función urinaria y sexual', color: '#e2e8f0' } },
+                    scales: {
+                        x: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
+                        y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } }
+                    }
+                }
+            });
+        }
+
+        // QoL/Pain
+        const qCtx = document.getElementById('prosQolChart')?.getContext('2d');
+        if (qCtx) {
+            new Chart(qCtx, {
+                type: 'line',
+                data: {
+                    labels: proDates,
+                    datasets: [
+                        { label: 'Dolor Peor (0-10)', data: painData, borderColor: '#ef4444', tension: 0.3, pointRadius: 4 },
+                        { label: humanizeClinicalText('EQ-5D VAS (0-100)'), data: eq5dData, borderColor: '#10b981', tension: 0.3, pointRadius: 4 }
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { labels: { color: '#94a3b8' } }, title: { display: true, text: 'Dolor y calidad de vida', color: '#e2e8f0' } },
+                    scales: {
+                        x: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
+                        y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } }
+                    }
+                }
+            });
+        }
+        {% endif %}
+
+        // ── Modal Logic ───────────────────────────────────────────────────────
+        function openVisitModal() {
+            document.getElementById('addVisitModal').classList.remove('hidden');
+            document.getElementById('addVisitModal').classList.add('flex');
+        }
+        function closeVisitModal() {
+            document.getElementById('addVisitModal').classList.add('hidden');
+            document.getElementById('addVisitModal').classList.remove('flex');
+        }
+
+        document.getElementById('visitForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const fd = new FormData(e.target);
+            const data = {
+                patient_id: fd.get('patient_id'),
+                psa: parseFloat(fd.get('psa')),
+                testosterone: parseFloat(fd.get('testosterone') || 0),
+                alp: parseFloat(fd.get('alp') || 0),
+                ldh: parseFloat(fd.get('ldh') || 0),
+                hemoglobin: parseFloat(fd.get('hemoglobin') || 0),
+                albumin: parseFloat(fd.get('albumin') || 0),
+                pain: parseInt(fd.get('pain') || 0),
+                ecog: parseInt(fd.get('ecog') || 0),
+                treatment: fd.get('treatment'),
+                toxicity: {
+                    fatigue: fd.get('tox_fatigue') === 'on',
+                    nausea: fd.get('tox_nausea') === 'on',
+                    rash: fd.get('tox_rash') === 'on',
+                    hta: fd.get('tox_hta') === 'on',
+                    neuropathy: fd.get('tox_neuropathy') === 'on',
+                },
+                skeletal: {
+                    fracture: fd.get('sre_fracture') === 'on',
+                    cord: fd.get('sre_cord') === 'on',
+                    radiation: fd.get('sre_rad') === 'on',
+                },
+                status: 'Seguimiento'
+            };
+
+            try {
+                const resp = await fetch('/api/add_followup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                const result = await resp.json();
+                if (result.success) { location.reload(); }
+                else { alert('Error: ' + result.error); }
+            } catch (err) { alert('Error de conexión'); }
+        });
+
+        // ── Alert Acknowledge ────────────────────────────────────────────────
+        async function acknowledgeAlert(alertId, btn) {
+            try {
+                const resp = await fetch(`/api/alerts/acknowledge/${alertId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user: 'clinico' })
+                });
+                const result = await resp.json();
+                if (result.success) {
+                    btn.closest('[data-alert]').style.opacity = '0.3';
+                    btn.textContent = 'Visto';
+                    btn.disabled = true;
+                }
+            } catch (e) { console.error('Error:', e); }
+        }
+
+        // ── Check Alerts (auto on load) ─────────────────────────────────────
+        (async function() {
+            try {
+                await fetch('/api/alerts/{{ patient.identity.id }}/check', { method: 'POST' });
+            } catch(e) {}
+        })();
+
+        // ── Run Pivotal Match ───────────────────────────────────────────────
+        // Identificador del paciente: NSS si existe, sino ID numérico
+        const _patientKey = '{{ patient.identity.nss }}'.trim() || '{{ patient.identity.id }}';
+
+        async function runPivotalMatch(evt) {
+            const btn = evt ? evt.target : document.querySelector('[onclick*="runPivotalMatch"]');
+            if (btn) { btn.textContent = 'Evaluando...'; btn.disabled = true; }
+            try {
+                const resp = await fetch('/api/pivotal_match/' + encodeURIComponent(_patientKey));
+                const data = await resp.json();
+                if (data.success) {
+                    alert(`Evaluación completada: ${data.eligible_count} de ${data.total_studies_evaluated} estudios elegibles. Recarga la página para ver resultados.`);
+                    location.reload();
+                } else {
+                    alert('Error: ' + (data.error || 'Error desconocido'));
+                }
+            } catch (e) { alert('Error de conexión: ' + e.message); }
+            if (btn) { btn.textContent = 'Evaluar Estudios Pivotales'; btn.disabled = false; }
+        }
+
+        // ── PRO Modal ────────────────────────────────────────────────────────
+        function openProModal() {
+            document.getElementById('proModal').classList.remove('hidden');
+            document.getElementById('proModal').classList.add('flex');
+        }
+        function closeProModal() {
+            document.getElementById('proModal').classList.add('hidden');
+            document.getElementById('proModal').classList.remove('flex');
+        }
+
+        document.getElementById('proForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const fd = new FormData(e.target);
+            const data = {
+                ipss_total: parseInt(fd.get('ipss_total') || 0),
+                ipss_qol: parseInt(fd.get('ipss_qol') || 0),
+                pad_usage: parseInt(fd.get('pad_usage') || 0),
+                iief5_score: parseInt(fd.get('iief5_score') || 0),
+                bpi_worst_pain: parseInt(fd.get('bpi_worst_pain') || 0),
+                bpi_average_pain: parseInt(fd.get('bpi_average_pain') || 0),
+                eq5d_vas: parseInt(fd.get('eq5d_vas') || 0),
+                fact_p_total: parseFloat(fd.get('fact_p_total') || 0),
+                clinician_notes: fd.get('clinician_notes') || ''
+            };
+            try {
+                const resp = await fetch('/api/pros/{{ patient.identity.id }}', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                const result = await resp.json();
+                if (result.success) { location.reload(); }
+                else { alert('Error: ' + result.error); }
+            } catch (err) { alert('Error de conexión'); }
+        });
+
+        // ── Export ────────────────────────────────────────────────────────────
+        async function exportData() {
+            try {
+                const resp = await fetch('/api/export/' + encodeURIComponent(_patientKey));
+                const data = await resp.json();
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'prostanet_' + _patientKey + '.json';
+                a.click();
+            } catch (e) { alert('Error exportando datos'); }
+        }
+
+        // ── Export CSV ──────────────────────────────────────────────────────
+        async function exportCSV() {
+            try {
+                window.open('/api/export/' + encodeURIComponent(_patientKey) + '/csv', '_blank');
+            } catch (e) { alert('Error exportando CSV'); }
+        }
+
+        window.clinicalPresentation?.normalizeDocument();
+    </script>
+{% endblock %}

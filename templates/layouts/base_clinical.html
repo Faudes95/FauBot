@@ -1,0 +1,43 @@
+{% from "components/clinical_ui.html" import top_nav, page_header %}
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ page_chrome.title }} | ProstaNet</title>
+    <link rel="icon" href="data:,">
+    <script src="https://cdn.tailwindcss.com"></script>
+    {% if page_chrome.requires_charts %}
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    {% endif %}
+    <script src="{{ url_for('static', filename='clinical_text.js') }}"></script>
+    <script src="{{ url_for('static', filename='clinical_selects.js') }}"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='ui_theme.css') }}">
+    {% block head_extra %}{% endblock %}
+</head>
+<body class="min-h-screen bg-slate-950 text-slate-100 antialiased">
+    <div class="flex min-h-screen flex-col">
+        {{ top_nav(page_chrome) }}
+        <main class="flex-1">
+            <div class="mx-auto w-full {{ page_chrome.content_width_class }} px-4 py-6 sm:px-6 lg:px-8">
+                {% if page_chrome.show_page_header %}
+                    {{ page_header(page_chrome) }}
+                {% endif %}
+                {% block content %}{% endblock %}
+            </div>
+        </main>
+        {% block footer %}
+        <footer class="border-t border-slate-800 py-4 text-center text-xs text-slate-600">
+            {{ page_chrome.footer_text }}
+        </footer>
+        {% endblock %}
+    </div>
+    <script>
+        window.addEventListener('DOMContentLoaded', () => {
+            window.clinicalPresentation?.normalizeDocument();
+            window.clinicalSelects?.enhance(document);
+        });
+    </script>
+    {% block page_scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,174 @@
+{% macro badge(text, tone='neutral', class_name='') -%}
+    {% set tone_map = {
+        'neutral': 'border-slate-700 bg-slate-800 text-slate-300',
+        'info': 'border-cyan-500/30 bg-cyan-500/10 text-cyan-200',
+        'success': 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
+        'warning': 'border-amber-500/30 bg-amber-500/10 text-amber-200',
+        'danger': 'border-rose-500/30 bg-rose-500/10 text-rose-200',
+        'muted': 'border-slate-800 bg-slate-900/80 text-slate-400',
+    } %}
+    <span class="inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium {{ tone_map.get(tone, tone_map['neutral']) }} {{ class_name }}">{{ text }}</span>
+{%- endmacro %}
+
+{% macro top_nav(page_chrome) -%}
+<header class="sticky top-0 z-50 border-b border-slate-800 bg-slate-950/90 backdrop-blur">
+    <div class="mx-auto flex h-16 {{ page_chrome.content_width_class }} items-center justify-between px-4 sm:px-6 lg:px-8">
+        <div class="flex items-center gap-3">
+            <div class="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-500 to-sky-400 text-slate-950 shadow-lg shadow-cyan-950/30">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01">
+                    </path>
+                </svg>
+            </div>
+            <div>
+                <p class="text-[11px] uppercase tracking-[0.24em] text-slate-500">{{ page_chrome.kicker }}</p>
+                <p class="text-sm font-semibold text-white">ProstaNet</p>
+            </div>
+        </div>
+        <div class="flex items-center gap-2 sm:gap-4">
+            <nav class="hidden items-center gap-1 rounded-full border border-slate-800 bg-slate-900/70 p-1 md:flex">
+                {% for item in page_chrome.nav_items %}
+                    <a href="{{ item.href }}"
+                        class="rounded-full px-3 py-2 text-sm font-medium transition-colors {{ 'bg-cyan-500 text-slate-950' if item.active else 'text-slate-400 hover:bg-slate-800 hover:text-white' }}">
+                        {{ item.label }}
+                    </a>
+                {% endfor %}
+            </nav>
+            {% if page_chrome.primary_action and page_chrome.primary_action.href %}
+                <a href="{{ page_chrome.primary_action.href }}"
+                    class="hidden rounded-full px-4 py-2 text-sm font-semibold shadow-lg shadow-cyan-950/30 transition-colors md:inline-flex {{ page_chrome.accent_profile.primary_bg_class }} {{ page_chrome.accent_profile.primary_hover_class }} text-slate-950">
+                    {% if page_chrome.primary_action.icon %}<span class="mr-2">{{ page_chrome.primary_action.icon }}</span>{% endif %}
+                    {{ page_chrome.primary_action.label }}
+                </a>
+            {% endif %}
+        </div>
+    </div>
+    <div class="border-t border-slate-800/80 md:hidden">
+        <div class="mx-auto {{ page_chrome.content_width_class }} px-4 py-3 sm:px-6 lg:px-8">
+            <nav class="grid grid-cols-3 gap-2">
+                {% for item in page_chrome.nav_items %}
+                    <a href="{{ item.href }}"
+                        class="inline-flex items-center justify-center rounded-2xl px-3 py-2 text-xs font-semibold transition-colors {{ 'bg-cyan-500 text-slate-950' if item.active else 'border border-slate-700 bg-slate-900/80 text-slate-300 hover:border-slate-600 hover:text-white' }}">
+                        {{ item.label }}
+                    </a>
+                {% endfor %}
+            </nav>
+            {% if page_chrome.primary_action and page_chrome.primary_action.href %}
+                <a href="{{ page_chrome.primary_action.href }}"
+                    class="mt-3 inline-flex w-full items-center justify-center rounded-2xl px-4 py-3 text-sm font-semibold shadow-lg shadow-cyan-950/30 transition-colors {{ page_chrome.accent_profile.primary_bg_class }} {{ page_chrome.accent_profile.primary_hover_class }} text-slate-950">
+                    {% if page_chrome.primary_action.icon %}<span class="mr-2">{{ page_chrome.primary_action.icon }}</span>{% endif %}
+                    {{ page_chrome.primary_action.label }}
+                </a>
+            {% endif %}
+        </div>
+    </div>
+</header>
+{%- endmacro %}
+
+{% macro page_header(page_chrome) -%}
+<section class="mb-6 rounded-3xl border border-slate-800 bg-slate-900/80 p-6 shadow-2xl shadow-slate-950/40">
+    <div class="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+        <div class="max-w-3xl">
+            <p class="text-[11px] uppercase tracking-[0.28em] text-slate-500">{{ page_chrome.kicker }}</p>
+            <h1 class="mt-3 text-3xl font-semibold tracking-tight text-white sm:text-4xl">{{ page_chrome.title }}</h1>
+            {% if page_chrome.subtitle %}
+                <p class="mt-3 max-w-3xl text-sm leading-7 text-slate-400 sm:text-base">{{ page_chrome.subtitle }}</p>
+            {% endif %}
+        </div>
+        {% if page_chrome.header_actions %}
+            <div class="flex flex-wrap gap-3">
+                {% for action in page_chrome.header_actions %}
+                    {% if action.href %}
+                        <a href="{{ action.href }}" class="pn-btn {{ 'pn-btn-primary' if action.variant == 'primary' else 'pn-btn-secondary' }}">
+                            {% if action.icon %}<span class="mr-2">{{ action.icon }}</span>{% endif %}
+                            {{ action.label }}
+                        </a>
+                    {% else %}
+                        <button type="button" class="pn-btn {{ 'pn-btn-primary' if action.variant == 'primary' else 'pn-btn-secondary' }}">
+                            {% if action.icon %}<span class="mr-2">{{ action.icon }}</span>{% endif %}
+                            {{ action.label }}
+                        </button>
+                    {% endif %}
+                {% endfor %}
+            </div>
+        {% endif %}
+    </div>
+</section>
+{%- endmacro %}
+
+{% macro hero_header(title, subtitle='', kicker='', class_name='') -%}
+<section class="rounded-3xl border border-slate-800 bg-slate-900/80 p-6 shadow-2xl shadow-slate-950/40 {{ class_name }}">
+    {% if kicker %}<p class="text-[11px] uppercase tracking-[0.28em] text-slate-500">{{ kicker }}</p>{% endif %}
+    <h2 class="mt-2 text-2xl font-semibold tracking-tight text-white">{{ title }}</h2>
+    {% if subtitle %}<p class="mt-3 text-sm leading-7 text-slate-400">{{ subtitle }}</p>{% endif %}
+    {{ caller() if caller is defined }}
+</section>
+{%- endmacro %}
+
+{% macro section_header(title, kicker='', subtitle='') -%}
+<div class="mb-4">
+    {% if kicker %}<p class="text-[11px] uppercase tracking-[0.24em] text-slate-500">{{ kicker }}</p>{% endif %}
+    <h3 class="mt-1 text-xl font-semibold text-white">{{ title }}</h3>
+    {% if subtitle %}<p class="mt-2 text-sm text-slate-400">{{ subtitle }}</p>{% endif %}
+</div>
+{%- endmacro %}
+
+{% macro surface_card(title=None, kicker=None, subtitle=None, class_name='') -%}
+<section class="pn-surface {{ class_name }}">
+    {% if title or kicker or subtitle %}
+        <div class="mb-5">
+            {% if kicker %}<p class="text-[11px] uppercase tracking-[0.24em] text-slate-500">{{ kicker }}</p>{% endif %}
+            {% if title %}<h3 class="mt-1 text-lg font-semibold text-white">{{ title }}</h3>{% endif %}
+            {% if subtitle %}<p class="mt-2 text-sm text-slate-400">{{ subtitle }}</p>{% endif %}
+        </div>
+    {% endif %}
+    {{ caller() }}
+</section>
+{%- endmacro %}
+
+{% macro metric_card(title, value='—', subtext='', tone='cyan', value_id='', subtext_id='', class_name='') -%}
+    {% set tone_map = {
+        'cyan': 'pn-metric-cyan',
+        'emerald': 'pn-metric-emerald',
+        'amber': 'pn-metric-amber',
+        'rose': 'pn-metric-rose',
+        'violet': 'pn-metric-violet',
+        'sky': 'pn-metric-sky',
+    } %}
+    <div class="pn-metric-card {{ tone_map.get(tone, 'pn-metric-cyan') }} {{ class_name }}">
+        <p class="pn-metric-label">{{ title }}</p>
+        <p class="pn-metric-value" {% if value_id %}id="{{ value_id }}"{% endif %}>{{ value }}</p>
+        <p class="pn-metric-subtext" {% if subtext_id %}id="{{ subtext_id }}"{% endif %}>{{ subtext }}</p>
+    </div>
+{%- endmacro %}
+
+{% macro action_toolbar(class_name='') -%}
+<section class="pn-toolbar {{ class_name }}">
+    {{ caller() }}
+</section>
+{%- endmacro %}
+
+{% macro table_shell(title=None, subtitle=None, class_name='') -%}
+<section class="pn-surface overflow-hidden {{ class_name }}">
+    {% if title or subtitle %}
+        <div class="border-b border-slate-800 px-5 py-4">
+            {% if title %}<h3 class="text-sm font-semibold uppercase tracking-[0.2em] text-slate-300">{{ title }}</h3>{% endif %}
+            {% if subtitle %}<p class="mt-2 text-sm text-slate-500">{{ subtitle }}</p>{% endif %}
+        </div>
+    {% endif %}
+    {{ caller() }}
+</section>
+{%- endmacro %}
+
+{% macro empty_state(title, message, action_href=None, action_label=None, class_name='') -%}
+<div class="pn-empty {{ class_name }}">
+    <h3 class="text-lg font-semibold text-slate-200">{{ title }}</h3>
+    <p class="mt-2 text-sm text-slate-500">{{ message }}</p>
+    {% if action_href and action_label %}
+        <a href="{{ action_href }}" class="mt-5 inline-flex rounded-full bg-cyan-500 px-5 py-2.5 text-sm font-semibold text-slate-950 transition-colors hover:bg-cyan-400">
+            {{ action_label }}
+        </a>
+    {% endif %}
+</div>
+{%- endmacro %}
