@@ -12,6 +12,7 @@ MODULE_TITLE_MAP = {
     "localized_initial": "Diagnóstico inicial localizado o regional con ganglios regionales positivos y sin metástasis a distancia",
     "post_prostatectomy": "Seguimiento después de prostatectomía radical",
     "recurrence_bcr": "Recurrencia bioquímica y segunda recurrencia bioquímica sin metástasis",
+    "adt_progression_verification": "Progresión bajo ADT / verificación de castración",
     "mcspc_oligo_metachronous": "Enfermedad metastásica sensible a la castración oligometastásica metacrónica",
     "mcspc_low_volume_sync_oligo": "Enfermedad metastásica sensible a la castración de bajo volumen u oligometastásica sincrónica",
     "mcspc_high_volume": "Enfermedad metastásica sensible a la castración de alto volumen",
@@ -45,12 +46,70 @@ OPTION_LABELS = {
         "High": "Alto volumen",
     },
     "castration_resistant": {"0": "No", "1": "Sí"},
+    "systemic_progression_context": {
+        "none": "No aplica / sin contexto de progresión bajo ADT",
+        "progression_on_adt_verify_castration": "Progresión bajo ADT: verificar castración",
+        "confirmed_crpc": "CRPC ya confirmado",
+    },
+    "current_adt_context": {
+        "none": "Sin ADT activa",
+        "medical_adt_continuous": "ADT médica continua",
+        "orchiectomy": "Orquiectomía",
+        "intermittent_adt": "ADT intermitente",
+    },
+    "castrate_testosterone_status": {
+        "confirmed_castrate": "Castración confirmada",
+        "not_castrate": "No castrado",
+        "unknown": "Desconocido",
+    },
+    "progression_pattern": {
+        "biochemical_only": "Solo bioquímica",
+        "radiographic": "Radiográfica",
+        "clinical": "Clínica",
+        "mixed": "Mixta",
+    },
+    "conventional_imaging_status": {
+        "not_restaged": "Sin reestadificación convencional reciente",
+        "M0": "Imagen convencional M0",
+        "M1": "Imagen convencional M1",
+    },
+    "prior_local_therapy_context": {
+        "none": "Sin tratamiento local previo relevante",
+        "prostatectomy": "Prostatectomía previa",
+        "radiotherapy": "Radioterapia previa",
+        "both": "Prostatectomía y radioterapia previas",
+    },
     "prior_prostatectomy": {"0": "No", "1": "Sí"},
     "prior_radiation": {"0": "No", "1": "Sí"},
     "bcr2": {"0": "No", "1": "Sí"},
     "metachronous_metastasis": {"0": "No", "1": "Sí"},
     "cribriform_pattern": {"0": "No", "1": "Sí"},
     "intraductal_carcinoma": {"0": "No", "1": "Sí"},
+    "prior_mpmri_pirads_score": {
+        "2": "PI-RADS 2 o menor",
+        "3": "PI-RADS 3",
+        "4": "PI-RADS 4",
+        "5": "PI-RADS 5",
+        "desconocido": "Desconocido",
+    },
+    "prior_mpmri_targeted_biopsy_status": {
+        "si": "Sí",
+        "no": "No",
+        "desconocido": "Desconocido",
+    },
+    "adverse_histology_variant_type": {
+        "none": "Sin variante adversa adicional",
+        "ductal_predominant": "Predominio ductal",
+        "sarcomatoid": "Sarcomatoide",
+        "signet_ring": "Células en anillo de sello",
+        "adenosquamous_or_squamous": "Adenoescamoso o escamoso",
+        "basal_cell": "Células basales",
+        "mucinous_colloid": "Mucinoso / coloide",
+        "small_cell_neuroendocrine": "Neuroendocrino de célula pequeña",
+        "mixed_multiple": "Mixta / múltiple",
+        "other_aggressive": "Otra agresiva",
+        "other_aggressive_unspecified": "Otra agresiva no especificada",
+    },
     "nodal_status": {
         "N0": "Sin ganglios regionales comprometidos (N0)",
         "N1": "Con ganglios regionales comprometidos (N1)",
@@ -107,6 +166,26 @@ CLINICAL_ROLE_LABELS = {
     "optional": "Opcional",
 }
 
+EVENT_KIND_LABELS = {
+    "recommendation_generated": "Recomendación generada",
+    "management_selected": "Conducta seleccionada",
+    "procedure_ordered": "Procedimiento solicitado",
+    "procedure_performed": "Procedimiento realizado",
+    "pathology_confirmed": "Patología confirmada",
+    "molecular_result_verified": "Biomarcador verificado",
+    "followup_visit_recorded": "Seguimiento registrado",
+}
+
+MANAGEMENT_INTENT_STATUS_LABELS = {
+    "candidate": "Pendiente de confirmación",
+    "discussed": "Discutido",
+    "chosen": "Planificado",
+    "delivered": "En curso",
+    "completed": "Completado",
+    "progressed": "Progresado",
+    "escalated": "Escalado",
+}
+
 TEXT_REPLACEMENTS = [
     ("Clinical Hub", "Centro clínico por estadio"),
     ("Legacy calculator", "Ruta antigua retirada"),
@@ -118,6 +197,18 @@ TEXT_REPLACEMENTS = [
     ("Pivotal trials", "Estudios pivotales"),
     ("Core questions", "Preguntas clínicas centrales"),
     ("Evidence trace", "Trazabilidad de evidencia"),
+    ("local_computation", "cálculo local"),
+    ("external_calculator", "calculadora externa"),
+    ("external_result", "resultado externo"),
+    ("calculado", "calculado"),
+    ("listo_para_calculadora", "listo para calculadora"),
+    ("faltan_datos", "faltan datos"),
+    ("pendiente_de_resultado", "pendiente de resultado"),
+    ("no_documentado", "no documentado"),
+    ("contextual", "contextual"),
+    ("alta", "alta"),
+    ("vigilada", "vigilada"),
+    ("escalar", "escalar"),
     ("No prior local therapy or advanced-state markers were detected.", "No se detectaron tratamientos locales previos ni marcadores de enfermedad avanzada."),
     ("Prior prostatectomy without recurrent-state override.", "Se detectó prostatectomía radical previa sin criterios que desplacen el caso a recurrencia."),
     ("Recurrence or BCR2 markers detected after local therapy.", "Se detectaron marcadores de recurrencia o de segunda recurrencia bioquímica después de tratamiento local."),
@@ -181,9 +272,14 @@ TEXT_REPLACEMENTS = [
     ("Clinical summary", "Resumen clínico"),
     ("M0 CRPC risk-adapted intensification pathway.", "Ruta de intensificación adaptada al riesgo en enfermedad resistente a la castración sin metástasis."),
     ("M1 CRPC sequencing and precision-oncology pathway.", "Ruta de secuenciación terapéutica y oncología de precisión en enfermedad resistente a la castración con metástasis."),
+    ("ADT progression verification pathway.", "Ruta de progresión bajo terapia de privación androgénica con verificación de castración."),
     ("Low-volume metastatic hormone-sensitive pathway.", "Ruta de enfermedad metastásica sensible a la castración de bajo volumen."),
     ("High-volume metastatic hormone-sensitive pathway.", "Ruta de enfermedad metastásica sensible a la castración de alto volumen."),
     ("Metachronous oligometastatic hormone-sensitive pathway.", "Ruta de enfermedad oligometastásica metacrónica sensible a la castración."),
+    ("suppression_failure_or_inadequate_castration", "Fracaso de supresión androgénica o castración inadecuada"),
+    ("biochemical_progression_on_adt_pending_verification", "Progresión bioquímica bajo terapia de privación androgénica pendiente de verificación"),
+    ("confirmed_nmcrpc_candidate", "Candidato confirmado a enfermedad resistente a la castración sin metástasis"),
+    ("confirmed_mcrpc_candidate", "Candidato confirmado a enfermedad resistente a la castración con metástasis"),
     ("Post-RP status:", "Estado posterior a prostatectomía radical:"),
     ("Recurrence pathway:", "Ruta de recurrencia:"),
     ("RT ", "Radioterapia "),
@@ -540,6 +636,12 @@ def humanize_result(result: dict) -> dict:
     translated = _humanize_value(deepcopy(normalized))
     if normalized.get("source_citations"):
         translated["source_citations"] = humanize_sources(normalized.get("source_citations", []))
+    if normalized.get("validated_algorithms"):
+        translated["validated_algorithms"] = _humanize_value(deepcopy(normalized.get("validated_algorithms", [])))
+        for original, item in zip(normalized.get("validated_algorithms", []), translated["validated_algorithms"]):
+            item["name"] = original.get("name", "")
+            item["source_label"] = original.get("source_label", "")
+            item["source_url"] = original.get("source_url", "")
     translated["state"] = result.get("state")
     translated["state_label"] = MODULE_TITLE_MAP.get(result.get("state"), translate_text(result.get("state", "")))
     translated["applicability_badge_key"] = result.get("applicability_badge")
@@ -579,6 +681,11 @@ def humanize_state_timeline(entries: list[dict]) -> list[dict]:
     translated = _humanize_value(deepcopy(entries))
     for original, item in zip(entries, translated):
         item["state_label"] = MODULE_TITLE_MAP.get(original.get("state"), translate_text(original.get("state", "")))
+        item["event_kind_label"] = EVENT_KIND_LABELS.get(original.get("event_kind"), translate_text(original.get("event_kind", "")))
+        item["management_intent_status_label"] = MANAGEMENT_INTENT_STATUS_LABELS.get(
+            original.get("management_intent_status"),
+            translate_text(original.get("management_intent_status", "")),
+        )
     return translated
 
 

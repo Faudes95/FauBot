@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from clinical_scores import briganti_lni, capra_score
+from clinical_scores import briganti_lni, capra_score, kattan_organ_confined, partin_tables
 
 from prostanet.domains.evidence_registry.service import EvidenceRegistryService
 from prostanet.domains.guideline_comparison.service import GuidelineComparisonService
@@ -28,11 +28,19 @@ class LocalizedInitialService:
         comparison = self.comparison.compare(nccn, eau)
         capra = capra_score(payload)
         briganti = briganti_lni(payload)
+        partin = partin_tables(payload)
+        msk = kattan_organ_confined(payload)
         as_position = active_surveillance_position(payload, nccn["risk_group"])
         urinary_qol = float(payload.get("baseline_urinary_qol", 0) or 0)
         sexual_qol = float(payload.get("baseline_sexual_qol", 0) or 0)
         bowel_qol = float(payload.get("baseline_bowel_qol", 0) or 0)
         genomic_result = str(payload.get("genomic_classifier_result", "No aplica"))
+        prior_pirads = str(payload.get("prior_mpmri_pirads_score", "desconocido") or "desconocido")
+        adverse_variant_type = self._adverse_variant_type(payload)
+        predict_ready = all(
+            payload.get(field) not in (None, "")
+            for field in ("age", "psa", "clinical_tstage", "isup_grade", "life_expectancy_years")
+        )
 
         eligible_treatments = self._eligible_treatments(
             nccn["risk_group"],
@@ -42,10 +50,11 @@ class LocalizedInitialService:
             sexual_qol,
             bowel_qol,
             genomic_result,
+            adverse_variant_type,
         )
-        not_recommended = self._not_recommended(nccn["risk_group"], as_position, genomic_result)
+        not_recommended = self._not_recommended(nccn["risk_group"], as_position, genomic_result, adverse_variant_type, prior_pirads, payload)
         durations = self._durations(nccn["risk_group"])
-        applicability = as_position["status"] if as_position["eligible"] else "guideline-consistent"
+        applicability = as_position["status"] if as_position["eligible"] else ("not_recommended" if as_position.get("requires_escalation") else "guideline-consistent")
 
         psa = float(payload.get("psa", 0) or 0)
         clinical_tstage = str(payload.get("clinical_tstage", "T1c")).upper()
@@ -69,6 +78,11 @@ class LocalizedInitialService:
             "nomograms": {
                 "capra": capra,
                 "briganti": briganti,
+                "partin": partin,
+                "mskcc_preop": msk,
+                "predict_prostate_ready": predict_ready,
+                "prior_mpmri_pirads_score": prior_pirads,
+                "adverse_histology_variant_type": adverse_variant_type,
             },
         }
 
@@ -103,6 +117,8 @@ class LocalizedInitialService:
             applicability_badge=applicability,
             report_sections=report_sections,
         )
+        if as_position.get("requires_escalation"):
+            result["state_classification_override"] = "unsupported_or_escalate"
         return enrich_evaluation_result(
             result,
             clinical_title="Ruta priorizada de manejo inicial localizado",
@@ -114,6 +130,21 @@ class LocalizedInitialService:
                 f"Esperanza de vida estimada: {life_expectancy:g} años.",
                 f"Puntaje pronóstico CAPRA: {capra.get('score', 'no disponible') if isinstance(capra, dict) else capra}.",
                 f"Riesgo ganglionar según Briganti: {briganti.get('risk_pct', 'no disponible') if isinstance(briganti, dict) else briganti}.",
+                f"Tablas de Partin: probabilidad de organo-confinamiento {partin.get('oc_prob', 'no disponible')}% y riesgo ganglionar {partin.get('lni_prob', 'no disponible')}%.",
+                f"Nomograma preoperatorio MSKCC: organo-confinamiento {msk.get('probabilidad_organo_confinado', msk.get('probabilidad_raw', 'no disponible'))}%.",
+                (
+                    f"PI-RADS previo documentado: {prior_pirads}."
+                    if prior_pirads != "desconocido"
+                    else "Falta documentar el PI-RADS de la resonancia magnética previa, lo que reduce la solidez de la decisión en vigilancia activa."
+                ),
+                (
+                    f"Variante histológica adversa documentada: {adverse_variant_type}."
+                    if adverse_variant_type not in {"none", ""}
+                    else "No se documenta una variante histológica adversa adicional más allá de patrón cribiforme o carcinoma intraductal."
+                ),
+                "PREDICT Prostate debe correrse cuando las entradas estan completas para cuantificar beneficio absoluto y reforzar la decision compartida."
+                if predict_ready
+                else "PREDICT Prostate aun no puede correrse con total trazabilidad porque faltan entradas estructuradas de counseling.",
                 "Los PROs basales y la señal genómica modulan la conversación entre vigilancia activa, cirugía y radioterapia cuando el caso es limítrofe.",
             ],
             alternatives=[
@@ -146,8 +177,22 @@ class LocalizedInitialService:
         sexual_qol: float,
         bowel_qol: float,
         genomic_result: str,
+        adverse_variant_type: str,
     ) -> list[dict]:
         treatments: list[dict] = []
+        if as_position.get("requires_escalation"):
+            return [
+                {
+                    "name": "Revisión por uropatología y tumor board",
+                    "priority": "preferente",
+                    "notes": "La variante histológica adversa obliga a revisión experta y definición individualizada de estadificación y tratamiento definitivo.",
+                },
+                {
+                    "name": "Terapia local definitiva tras revisión experta",
+                    "priority": "eligible",
+                    "notes": "La vigilancia activa no debe plantearse como conducta principal cuando existe una variante histológica adversa de muy alto riesgo.",
+                },
+            ]
         if as_position["eligible"]:
             treatments.append({"name": "Active surveillance", "priority": as_position["status"], "notes": as_position["summary"]})
         if nccn_group == "LOW":
@@ -188,10 +233,22 @@ class LocalizedInitialService:
                 if item["name"] == "Active surveillance":
                     item["priority"] = "not_preferred"
                     item["notes"] = "A high genomic classifier signal lowers confidence in surveillance despite otherwise favorable clinicopathologic features."
+        if adverse_variant_type == "ductal_predominant":
+            for item in treatments:
+                if item["name"] == "Active surveillance":
+                    item["priority"] = "not_preferred"
+                    item["notes"] = "Ductal-predominant histology should move the discussion away from routine active surveillance."
         return treatments
 
     @staticmethod
-    def _not_recommended(nccn_group: str, as_position: dict, genomic_result: str) -> list[str]:
+    def _not_recommended(
+        nccn_group: str,
+        as_position: dict,
+        genomic_result: str,
+        adverse_variant_type: str,
+        prior_pirads: str,
+        payload: dict,
+    ) -> list[str]:
         items = []
         if nccn_group in {"UNFAVORABLE INTERMEDIATE", "HIGH", "VERY HIGH", "REGIONAL N1M0"}:
             items.append("Active surveillance should not be presented as a standard management strategy.")
@@ -199,6 +256,10 @@ class LocalizedInitialService:
             items.append("Avoid presenting favorable-intermediate AS as equivalent to low-risk surveillance.")
         if genomic_result == "Alto":
             items.append("Avoid downplaying a high genomic classifier result when choosing between surveillance and definitive local therapy.")
+        if adverse_variant_type not in {"", "none"}:
+            items.append("No presentar vigilancia activa como equivalente a terapia definitiva cuando existe una variante histológica adversa específica.")
+        if prior_pirads in {"4", "5"} and str(payload.get("prior_mpmri_targeted_biopsy_status", "desconocido")) != "si":
+            items.append("No sostener vigilancia activa con PI-RADS 4 o 5 sin biopsia dirigida documentada.")
         return items
 
     @staticmethod
@@ -210,3 +271,12 @@ class LocalizedInitialService:
             "REGIONAL N1M0": ["Long-course ADT is usually required with definitive RT.", "Escalate systemic therapy in eligible patients."],
         }
         return mapping.get(nccn_group, [])
+
+    @staticmethod
+    def _adverse_variant_type(payload: dict) -> str:
+        explicit = str(payload.get("adverse_histology_variant_type", "none") or "none").strip()
+        if explicit and explicit != "none":
+            return explicit
+        if str(payload.get("rare_histology_variant", "0")) == "1":
+            return "other_aggressive_unspecified"
+        return "none"

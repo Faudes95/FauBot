@@ -164,7 +164,17 @@ def support_bundle_for_module(module_id: str, payload: dict[str, Any], result: d
             benchmark_flag("Cinética de PSA documentada", "complete" if not _missing(payload.get("psa_velocity_ng_ml_year")) else "missing", "Refina el umbral para reactivar el estudio diagnóstico."),
         ]
     elif module_id == "localized_initial":
-        as_selected = any("Vigilancia activa" in str(item.get("name", "")) for item in result.get("eligible_treatments", []) if isinstance(item, dict))
+        as_selected = any(
+            any(label in str(item.get("name", "")) for label in {"Vigilancia activa", "Active surveillance"})
+            for item in result.get("eligible_treatments", [])
+            if isinstance(item, dict)
+        )
+        prior_mpmri = _is_true(payload.get("prior_mpmri"))
+        prior_pirads = str(payload.get("prior_mpmri_pirads_score", "desconocido") or "desconocido")
+        targeted_status = str(payload.get("prior_mpmri_targeted_biopsy_status", "desconocido") or "desconocido")
+        adverse_variant_type = str(payload.get("adverse_histology_variant_type", "none") or "none")
+        if adverse_variant_type == "none" and _is_true(payload.get("rare_histology_variant")):
+            adverse_variant_type = "other_aggressive_unspecified"
         monitoring = monitoring_plan(
             "Plan de seguimiento inicial",
             "Antígeno prostático específico cada 6 meses y tacto rectal anual en vigilancia activa; seguimiento según terapia definitiva si se elige tratamiento local.",
@@ -188,6 +198,7 @@ def support_bundle_for_module(module_id: str, payload: dict[str, Any], result: d
         ]
         decision_changing_inputs = [
             "Capturar porcentaje de patrón 4 e histología adversa para afinar elegibilidad de vigilancia activa.",
+            "Documentar PI-RADS de la resonancia magnética previa y si ya existió biopsia dirigida antes de sostener vigilancia activa.",
             "Documentar resultados reportados por el paciente basales antes de elegir cirugía, radioterapia o vigilancia activa.",
             "No sostener vigilancia activa expandida sin resonancia magnética previa y biopsia confirmatoria planificada.",
         ]
@@ -198,7 +209,10 @@ def support_bundle_for_module(module_id: str, payload: dict[str, Any], result: d
             benchmark_flag("PROs basales", "complete" if not _missing(payload.get("baseline_urinary_qol")) else "missing", "Mejora comparabilidad funcional entre estrategias locales."),
             benchmark_flag("Biopsia confirmatoria planificada", "complete" if _is_true(payload.get("confirmatory_biopsy_planned")) else "missing", "Benchmark importante para vigilancia activa robusta."),
             benchmark_flag("Clasificador genómico documentado", "complete" if str(payload.get("genomic_classifier", "No realizado")) != "No realizado" else "missing", "Refinador opcional en decisiones limítrofes."),
-            benchmark_flag("MRI previa documentada", "complete" if _is_true(payload.get("prior_mpmri")) else "missing", "Necesaria para una vigilancia activa más robusta en 2026."),
+            benchmark_flag("MRI previa documentada", "complete" if prior_mpmri else "missing", "Necesaria para una vigilancia activa más robusta en 2026."),
+            benchmark_flag("PI-RADS previo documentado", "complete" if prior_mpmri and prior_pirads != "desconocido" else "missing" if prior_mpmri else "not_applicable", "Aclara si la vigilancia activa puede sostenerse con seguridad."),
+            benchmark_flag("Biopsia dirigida previa documentada", "complete" if targeted_status == "si" else "incomplete" if prior_mpmri and prior_pirads in {"4", "5"} else "not_applicable", "Especialmente relevante cuando la resonancia magnética previa reporta PI-RADS 4 o 5."),
+            benchmark_flag("Variante histológica especificada", "complete" if adverse_variant_type not in {"", "none"} else "not_applicable", "Evita dejar en binario una histología que cambia la conducta clínica."),
         ]
         if as_selected:
             overlays.append(
@@ -211,6 +225,16 @@ def support_bundle_for_module(module_id: str, payload: dict[str, Any], result: d
                         "Aplicar EPIC-26 o FACT-P al ingreso y en revisiones seriadas.",
                         "Reforzar educación sobre disparadores de salida de vigilancia activa.",
                     ],
+                )
+            )
+        if adverse_variant_type in {"small_cell_neuroendocrine", "sarcomatoid", "signet_ring", "mixed_multiple", "other_aggressive", "other_aggressive_unspecified"}:
+            overlays.append(
+                care_overlay(
+                    "tumor_board",
+                    "Revisión experta de histología adversa",
+                    "pendiente",
+                    ["La variante histológica documentada exige revisión de uropatología y discusión multidisciplinaria."],
+                    ["Confirmar subtipo histológico, revalorar extensión local y definir si el caso debe salir del carril localizado estándar."],
                 )
             )
     elif module_id == "post_prostatectomy":
@@ -277,6 +301,38 @@ def support_bundle_for_module(module_id: str, payload: dict[str, Any], result: d
             benchmark_flag("Imagen documentada", "complete" if not _missing(payload.get("imaging_modality")) else "missing", "Aclara rescate local frente a transición sistémica."),
             benchmark_flag("Salvage local documentado", "complete" if not _missing(payload.get("salvage_local_feasible")) else "missing", "EMBARK solo debe abrirse si no queda rescate curativo razonable."),
             benchmark_flag("PSMA-PET alineado a decisión", "complete" if _is_true(payload.get("psma_pet_done")) or not _missing(payload.get("psma_pet_result")) else "incomplete", "La imagen avanzada debe justificarse por cambio de conducta, no por rutina."),
+        ]
+    elif module_id == "adt_progression_verification":
+        monitoring = monitoring_plan(
+            "Plan de verificación bajo ADT",
+            "Testosterona, antígeno prostático específico y reestadificación convencional en el corto plazo antes de mover el caso a una ruta CRPC definitiva.",
+            [
+                "Revisar adherencia, fecha de la última aplicación de ADT, mecanismo de castración y contexto real de progresión.",
+                "No etiquetar CRPC si la testosterona aún no está documentada en rango de castración.",
+            ],
+            [
+                "Redirigir a M0 CRPC si se confirma castración adecuada e imagen convencional M0.",
+                "Redirigir a M1 CRPC si se confirma castración adecuada e imagen convencional M1.",
+            ],
+            ["NCCN 5.2026 CRPC", "EAU 2026 castration-resistant disease"],
+        )
+        transitions = [
+            state_transition("m0_crpc", "Enfermedad resistente a la castración sin metástasis", "Si se confirma castración e imagen convencional M0", "Abre la ruta M0 CRPC con decisión adaptada al riesgo."),
+            state_transition("m1_crpc", "Enfermedad resistente a la castración con metástasis", "Si se confirma castración e imagen convencional M1", "Abre la secuenciación avanzada guiada por biomarcadores."),
+        ]
+        decision_changing_inputs = [
+            "Confirmar testosterona en rango de castración antes de asignar CRPC.",
+            "Definir si la imagen convencional es M0 o M1 antes de abrir la ruta resistente correcta.",
+            "Documentar fecha de la última ADT y patrón real de progresión antes de intensificar.",
+        ]
+        supportive_evidence_context = [
+            "Las guías primarias exigen progresión con testosterona en rango de castración antes de catalogar CRPC.",
+            "Las referencias regulatorias de nmCRPC solo deben aplicarse después de completar esta verificación.",
+        ]
+        benchmarking_flags = [
+            benchmark_flag("Castración documentada", "complete" if str(payload.get("castrate_testosterone_status", "unknown")) == "confirmed_castrate" else "missing", "No debe abrirse CRPC sin esta verificación."),
+            benchmark_flag("Imagen convencional documentada", "complete" if str(payload.get("conventional_imaging_status", "not_restaged")) in {"M0", "M1"} else "missing", "Separa M0 CRPC de M1 CRPC."),
+            benchmark_flag("Fecha de ADT documentada", "complete" if not _missing(payload.get("last_adt_date")) else "missing", "Ayuda a detectar fracaso real de supresión androgénica."),
         ]
     elif module_id in {"mcspc_oligo_metachronous", "mcspc_low_volume_sync_oligo", "mcspc_high_volume"}:
         monitoring = monitoring_plan(

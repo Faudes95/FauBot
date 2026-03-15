@@ -162,6 +162,16 @@ class M1CrpcService:
         if nccn["psma_positive"] and psma_negative_dominant_lesions:
             not_recommended.append("No priorizar lutecio-177 PSMA-617 si existen lesiones dominantes PSMA-negativas no resueltas.")
 
+        preferred_seen = False
+        for item in treatments:
+            if item.get("priority") != "preferred":
+                continue
+            if not preferred_seen:
+                preferred_seen = True
+                continue
+            item["priority"] = "eligible"
+            item["notes"] = f"{item.get('notes', '').strip()} Alternativa válida, pero queda por debajo de la prioridad terapéutica principal en este escenario.".strip()
+
         result = evaluation_result(
             state=self.module_id,
             nccn_primary={"guideline": "NCCN", "version": "5.2026", "label": nccn["label"], "recommendation": nccn["recommendation"]},

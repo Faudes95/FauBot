@@ -6,6 +6,10 @@
         <section class="grid gap-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
             {% call surface_card("Selección rápida del módulo clínico", "Clasificación clínica", "Use este clasificador para no mezclar enfermedad localizada, seguimiento posoperatorio, recurrencia bioquímica y enfermedad avanzada en una sola salida.") %}
                 <form id="stateForm" class="grid gap-4 md:grid-cols-2">
+                    <div class="md:col-span-2">
+                        <p class="text-xs uppercase tracking-[0.2em] text-cyan-300">1. Confirmación diagnóstica</p>
+                        <p class="mt-1 text-sm text-slate-400">Primero defina si ya existe cáncer de próstata confirmado o si el caso sigue en triage diagnóstico.</p>
+                    </div>
                     <label class="text-sm">
                         <span class="mb-1 block text-slate-300">Diagnóstico confirmado de cáncer de próstata</span>
                         <select name="known_cancer_diagnosis" class="pn-input w-full px-3 py-2">
@@ -20,8 +24,40 @@
                             <option value="1">Sí</option>
                         </select>
                     </label>
-                    <label class="text-sm">
-                        <span class="mb-1 block text-slate-300">Sitio de metástasis</span>
+
+                    <div id="localRecurrenceStageHeader" class="hidden md:col-span-2">
+                        <p class="text-xs uppercase tracking-[0.2em] text-cyan-300">2. Tratamiento local previo y recurrencia</p>
+                        <p class="mt-1 text-sm text-slate-400">Este bloque solo aplica cuando ya hubo cáncer de próstata confirmado y tratamiento local previo por ese cáncer.</p>
+                    </div>
+                    <div id="priorProstatectomyWrapper" class="hidden text-sm">
+                        <span class="mb-1 block text-slate-300">Prostatectomía radical previa por cáncer de próstata</span>
+                        <select name="prior_prostatectomy" class="pn-input w-full px-3 py-2">
+                            <option value="0">No</option>
+                            <option value="1">Sí</option>
+                        </select>
+                    </div>
+                    <div id="priorRadiationWrapper" class="hidden text-sm">
+                        <span class="mb-1 block text-slate-300">Radioterapia previa por cáncer de próstata</span>
+                        <select name="prior_radiation" class="pn-input w-full px-3 py-2">
+                            <option value="0">No</option>
+                            <option value="1">Sí</option>
+                        </select>
+                    </div>
+                    <div id="bcr2Wrapper" class="hidden text-sm md:col-span-2">
+                        <span class="mb-1 block text-slate-300">Segunda recurrencia bioquímica tras tratamiento local</span>
+                        <select name="bcr2" class="pn-input w-full px-3 py-2">
+                            <option value="0">No</option>
+                            <option value="1">Sí</option>
+                        </select>
+                        <p class="mt-2 text-xs text-slate-500">Solo aplica si ya hubo cáncer confirmado, terapia local previa y una primera recurrencia bioquímica documentada.</p>
+                    </div>
+
+                    <div id="metastaticStageHeader" class="hidden md:col-span-2">
+                        <p class="text-xs uppercase tracking-[0.2em] text-cyan-300">3. Enfermedad metastásica conocida</p>
+                        <p class="mt-1 text-sm text-slate-400">Use este bloque solo si el paciente ya tiene cáncer confirmado y una estadificación que demuestre enfermedad metastásica a distancia.</p>
+                    </div>
+                    <div id="metastasisSiteWrapper" class="hidden text-sm">
+                        <span class="mb-1 block text-slate-300">Sitio de metástasis conocida</span>
                         <select name="metastasis_site" class="pn-input w-full px-3 py-2">
                             <option value="M0">Sin metástasis a distancia (M0)</option>
                             <option value="Bone">Metástasis ósea</option>
@@ -29,60 +65,89 @@
                             <option value="Visceral">Metástasis visceral</option>
                             <option value="Oligometastatic">Enfermedad oligometastásica</option>
                         </select>
-                    </label>
-                    <label class="text-sm">
+                    </div>
+                    <div id="metastasisCountWrapper" class="hidden text-sm">
                         <span class="mb-1 block text-slate-300">Número de metástasis</span>
                         <input type="number" name="metastasis_count" value="0" class="pn-input w-full px-3 py-2">
-                    </label>
-                    <label class="text-sm">
-                        <span class="mb-1 block text-slate-300">Enfermedad resistente a la castración</span>
-                        <select name="castration_resistant" class="pn-input w-full px-3 py-2">
-                            <option value="0">No</option>
-                            <option value="1">Sí</option>
-                        </select>
-                    </label>
-                    <label class="text-sm">
-                        <span class="mb-1 block text-slate-300">Prostatectomía radical previa</span>
-                        <select name="prior_prostatectomy" class="pn-input w-full px-3 py-2">
-                            <option value="0">No</option>
-                            <option value="1">Sí</option>
-                        </select>
-                    </label>
-                    <label class="text-sm">
-                        <span class="mb-1 block text-slate-300">Radioterapia previa</span>
-                        <select name="prior_radiation" class="pn-input w-full px-3 py-2">
-                            <option value="0">No</option>
-                            <option value="1">Sí</option>
-                        </select>
-                    </label>
-                    <label class="text-sm">
-                        <span class="mb-1 block text-slate-300">Segunda recurrencia bioquímica</span>
-                        <select name="bcr2" class="pn-input w-full px-3 py-2">
-                            <option value="0">No</option>
-                            <option value="1">Sí</option>
-                        </select>
-                    </label>
-                    <label class="text-sm">
+                    </div>
+                    <div id="metachronousWrapper" class="hidden text-sm">
                         <span class="mb-1 block text-slate-300">Metástasis metacrónicas</span>
                         <select name="metachronous_metastasis" class="pn-input w-full px-3 py-2">
                             <option value="0">No</option>
                             <option value="1">Sí</option>
                         </select>
-                    </label>
-                    <label class="text-sm">
+                    </div>
+                    <div id="volumeDiseaseWrapper" class="hidden text-sm">
                         <span class="mb-1 block text-slate-300">Volumen de enfermedad</span>
                         <select name="volume_disease" class="pn-input w-full px-3 py-2">
                             <option value="Low">Bajo volumen</option>
                             <option value="High">Alto volumen</option>
                         </select>
-                    </label>
+                    </div>
+
+                    <div id="systemicStageHeader" class="hidden md:col-span-2">
+                        <p class="text-xs uppercase tracking-[0.2em] text-cyan-300">4. Progresión bajo ADT / CRPC</p>
+                        <p class="mt-1 text-sm text-slate-400">BCR/BCR2 y CRPC solo existen si ya hubo cáncer confirmado; CRPC además requiere progresión y castración adecuada documentada.</p>
+                    </div>
+                    <div id="systemicContextWrapper" class="hidden text-sm md:col-span-2">
+                        <span class="mb-1 block text-slate-300">Contexto de progresión sistémica</span>
+                        <select name="systemic_progression_context" class="pn-input w-full px-3 py-2">
+                            <option value="none">No aplica / sin contexto de progresión bajo ADT</option>
+                            <option value="progression_on_adt_verify_castration">Progresión bajo ADT: verificar castración</option>
+                            <option value="confirmed_crpc">CRPC ya confirmado</option>
+                        </select>
+                        <p class="mt-2 text-xs text-slate-500">Este contexto solo aplica cuando ya existe cáncer de próstata confirmado y una duda real de progresión bajo ADT o CRPC.</p>
+                    </div>
+                    <div id="adtVerificationFields" class="hidden md:col-span-2">
+                        <div class="rounded-2xl border border-cyan-500/20 bg-cyan-500/5 p-4">
+                            <p class="text-xs uppercase tracking-[0.2em] text-cyan-300">Verificación bajo ADT</p>
+                            <p class="mt-2 text-sm text-slate-300">No etiquetar enfermedad resistente a la castración sin testosterona en rango de castración confirmada y reestadificación convencional suficiente.</p>
+                            <div class="mt-4 grid gap-4 md:grid-cols-2">
+                                <label class="text-sm">
+                                    <span class="mb-1 block text-slate-300">Contexto actual de ADT</span>
+                                    <select name="current_adt_context" class="pn-input w-full px-3 py-2">
+                                        <option value="none">Sin ADT activa</option>
+                                        <option value="medical_adt_continuous">ADT médica continua</option>
+                                        <option value="orchiectomy">Orquiectomía</option>
+                                        <option value="intermittent_adt">ADT intermitente</option>
+                                    </select>
+                                </label>
+                                <label class="text-sm">
+                                    <span class="mb-1 block text-slate-300">Estado de testosterona en rango de castración</span>
+                                    <select name="castrate_testosterone_status" class="pn-input w-full px-3 py-2">
+                                        <option value="unknown">Desconocido</option>
+                                        <option value="confirmed_castrate">Castración confirmada</option>
+                                        <option value="not_castrate">No castrado</option>
+                                    </select>
+                                </label>
+                                <label class="text-sm">
+                                    <span class="mb-1 block text-slate-300">Patrón de progresión</span>
+                                    <select name="progression_pattern" class="pn-input w-full px-3 py-2">
+                                        <option value="biochemical_only">Solo bioquímica</option>
+                                        <option value="radiographic">Radiográfica</option>
+                                        <option value="clinical">Clínica</option>
+                                        <option value="mixed">Mixta</option>
+                                    </select>
+                                </label>
+                                <label class="text-sm">
+                                    <span class="mb-1 block text-slate-300">Estado de imagen convencional</span>
+                                    <select name="conventional_imaging_status" class="pn-input w-full px-3 py-2">
+                                        <option value="not_restaged">Sin reestadificación convencional reciente</option>
+                                        <option value="M0">Imagen convencional M0</option>
+                                        <option value="M1">Imagen convencional M1</option>
+                                    </select>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
                 </form>
                 <div class="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-sm text-slate-300">
                     <p class="font-medium text-white">Qué corrige este clasificador</p>
                     <ul class="mt-2 space-y-1 text-slate-400">
                         <li>Separa estudio diagnóstico de cáncer confirmado.</li>
                         <li>Diferencia biopsia benigna previa frente a sospecha inicial.</li>
-                        <li>Usa tratamiento local previo y patrón de metástasis de novo vs metacrónico para no mezclar rutas.</li>
+                        <li>Solo expone recurrencia bioquímica, metástasis y CRPC cuando el contexto clínico realmente lo permite.</li>
+                        <li>Mantiene separados sospecha diagnóstica, recurrencia tras tratamiento local, progresión bajo ADT y CRPC confirmado.</li>
                     </ul>
                 </div>
                 <div class="mt-5 flex flex-wrap items-center gap-3">
@@ -141,9 +206,142 @@
     <script>
         const humanizeClinicalText = window.clinicalPresentation?.humanize || ((value) => value);
         const classifyButton = document.getElementById('classifyButton');
+        const stateForm = document.getElementById('stateForm');
+        const knownDiagnosisField = stateForm.querySelector('[name="known_cancer_diagnosis"]');
+        const progressionContextField = stateForm.querySelector('[name="systemic_progression_context"]');
+        const metastasisSiteField = stateForm.querySelector('[name="metastasis_site"]');
+        const priorProstatectomyField = stateForm.querySelector('[name="prior_prostatectomy"]');
+        const priorRadiationField = stateForm.querySelector('[name="prior_radiation"]');
+        const wrapperIds = {
+            localRecurrenceStageHeader: document.getElementById('localRecurrenceStageHeader'),
+            priorProstatectomyWrapper: document.getElementById('priorProstatectomyWrapper'),
+            priorRadiationWrapper: document.getElementById('priorRadiationWrapper'),
+            bcr2Wrapper: document.getElementById('bcr2Wrapper'),
+            metastaticStageHeader: document.getElementById('metastaticStageHeader'),
+            metastasisSiteWrapper: document.getElementById('metastasisSiteWrapper'),
+            metastasisCountWrapper: document.getElementById('metastasisCountWrapper'),
+            metachronousWrapper: document.getElementById('metachronousWrapper'),
+            volumeDiseaseWrapper: document.getElementById('volumeDiseaseWrapper'),
+            systemicStageHeader: document.getElementById('systemicStageHeader'),
+            systemicContextWrapper: document.getElementById('systemicContextWrapper'),
+        };
+        const systemicContextWrapper = document.getElementById('systemicContextWrapper');
+        const adtVerificationFields = document.getElementById('adtVerificationFields');
+        const resetAudit = [];
+
+        function field(name) {
+            return stateForm.querySelector(`[name="${name}"]`);
+        }
+
+        function syncStateForm() {
+            window.clinicalSelects?.syncAll(stateForm);
+        }
+
+        function recordReset(reason, fields) {
+            resetAudit.push({ reason, fields, ts: Date.now() });
+            stateForm.dataset.resetAudit = JSON.stringify(resetAudit.slice(-10));
+        }
+
+        function resetFields(reason, values) {
+            Object.entries(values).forEach(([name, value]) => {
+                const target = field(name);
+                if (!target) {
+                    return;
+                }
+                target.value = String(value);
+            });
+            recordReset(reason, Object.keys(values));
+        }
+
+        function resetSystemicContext() {
+            resetFields('systemic_not_applicable', {
+                systemic_progression_context: 'none',
+                current_adt_context: 'none',
+                castrate_testosterone_status: 'unknown',
+                progression_pattern: 'biochemical_only',
+                conventional_imaging_status: 'not_restaged',
+            });
+        }
+
+        function resetMetastaticContext() {
+            resetFields('metastatic_not_applicable', {
+                metastasis_site: 'M0',
+                metastasis_count: '0',
+                volume_disease: 'Low',
+                metachronous_metastasis: '0',
+            });
+        }
+
+        function resetLocalRecurrenceContext() {
+            resetFields('local_recurrence_not_applicable', {
+                prior_prostatectomy: '0',
+                prior_radiation: '0',
+                bcr2: '0',
+            });
+        }
+
+        function toggleElement(element, shouldShow) {
+            if (!element) {
+                return;
+            }
+            element.classList.toggle('hidden', !shouldShow);
+        }
+
+        function updateClassifierStages() {
+            const diagnosisConfirmed = knownDiagnosisField.value === '1';
+            if (!diagnosisConfirmed) {
+                resetLocalRecurrenceContext();
+                resetMetastaticContext();
+                resetSystemicContext();
+            }
+            const hasPriorLocalTherapy = diagnosisConfirmed && (priorProstatectomyField.value === '1' || priorRadiationField.value === '1');
+            if (!hasPriorLocalTherapy) {
+                resetFields('bcr2_not_applicable', { bcr2: '0' });
+            }
+            const metastaticKnown = diagnosisConfirmed && metastasisSiteField.value !== 'M0';
+            if (!metastaticKnown) {
+                resetFields('metastatic_detail_not_applicable', {
+                    metastasis_count: '0',
+                    volume_disease: 'Low',
+                    metachronous_metastasis: '0',
+                });
+            }
+            const needsVerificationContext = diagnosisConfirmed && progressionContextField.value !== 'none';
+            if (!needsVerificationContext) {
+                resetFields('adt_verification_not_applicable', {
+                    current_adt_context: 'none',
+                    castrate_testosterone_status: 'unknown',
+                    progression_pattern: 'biochemical_only',
+                    conventional_imaging_status: 'not_restaged',
+                });
+            }
+
+            toggleElement(wrapperIds.localRecurrenceStageHeader, diagnosisConfirmed);
+            toggleElement(wrapperIds.priorProstatectomyWrapper, diagnosisConfirmed);
+            toggleElement(wrapperIds.priorRadiationWrapper, diagnosisConfirmed);
+            toggleElement(wrapperIds.bcr2Wrapper, hasPriorLocalTherapy);
+            toggleElement(wrapperIds.metastaticStageHeader, diagnosisConfirmed);
+            toggleElement(wrapperIds.metastasisSiteWrapper, diagnosisConfirmed);
+            toggleElement(wrapperIds.metastasisCountWrapper, metastaticKnown);
+            toggleElement(wrapperIds.metachronousWrapper, metastaticKnown);
+            toggleElement(wrapperIds.volumeDiseaseWrapper, metastaticKnown);
+            toggleElement(wrapperIds.systemicStageHeader, diagnosisConfirmed);
+            toggleElement(systemicContextWrapper, diagnosisConfirmed);
+            toggleElement(adtVerificationFields, needsVerificationContext);
+            syncStateForm();
+        }
+
+        [
+            knownDiagnosisField,
+            progressionContextField,
+            metastasisSiteField,
+            priorProstatectomyField,
+            priorRadiationField,
+        ].forEach((control) => control.addEventListener('change', updateClassifierStages));
+        updateClassifierStages();
+
         classifyButton.addEventListener('click', async () => {
-            const form = document.getElementById('stateForm');
-            const payload = Object.fromEntries(new FormData(form).entries());
+            const payload = Object.fromEntries(new FormData(stateForm).entries());
             document.getElementById('classifierStatus').textContent = 'Clasificando...';
             const response = await fetch('/api/state-classifier', {
                 method: 'POST',

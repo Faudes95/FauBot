@@ -60,6 +60,10 @@ class PostProstatectomyService:
         report_sections = {
             "summary": f"Post-RP status: {nccn['label']}. CAPRA-S belongs only to this module.",
             "capra_s": capra_s,
+            "validated_algorithms": {
+                "capra_s_score": capra_s.get("score") if isinstance(capra_s, dict) else None,
+                "decipher_risk": decipher_risk,
+            },
         }
 
         result = evaluation_result(

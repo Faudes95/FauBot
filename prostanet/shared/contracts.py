@@ -45,6 +45,48 @@ class RegistrationFragment:
 
 
 @dataclass(frozen=True)
+class DiagnosticPlanEvent:
+    plan_type: str
+    status: str = "planificado"
+    summary: str = ""
+    next_action: str = ""
+    management_intent_status: str = "candidate"
+    trigger_conditions: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class MriFact:
+    fact_date: str = ""
+    quality: str = ""
+    decision_usable: bool = False
+    pirads_score: int | None = None
+    lesion_location: str = ""
+    lesion_size_mm: float | None = None
+    prostate_volume_ml: float | None = None
+    findings: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class BiopsyTriggerEvent:
+    trigger_reason: str
+    priority: str = "pendiente"
+    planned_type: str = ""
+    planned_route: str = ""
+    status: str = "pendiente_de_confirmacion"
+    management_intent_status: str = "candidate"
+    activation_conditions: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class EvidenceCitation:
     citation_id: str
     title: str
@@ -157,6 +199,8 @@ def evaluation_result(
     decision_changing_inputs: list[str] | None = None,
     supportive_evidence_context: list[str] | None = None,
     benchmarking_flags: list[dict[str, Any]] | None = None,
+    validated_algorithms: list[dict[str, Any]] | None = None,
+    decision_quality: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "state": state,
@@ -174,4 +218,6 @@ def evaluation_result(
         "decision_changing_inputs": decision_changing_inputs or [],
         "supportive_evidence_context": supportive_evidence_context or [],
         "benchmarking_flags": benchmarking_flags or [],
+        "validated_algorithms": validated_algorithms or [],
+        "decision_quality": decision_quality or {},
     }

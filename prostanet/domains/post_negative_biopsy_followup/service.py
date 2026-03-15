@@ -27,6 +27,10 @@ class PostNegativeBiopsyFollowupService:
         psa = float(payload.get("psa", 0) or 0)
         psad = float(payload.get("psad", 0) or 0)
         years_since_biopsy = float(payload.get("years_since_negative_biopsy", 0) or 0)
+        erspc_ready = all(
+            payload.get(field) not in (None, "")
+            for field in ("psa", "dre_suspicious", "prior_biopsy_count")
+        )
 
         treatments = []
         if nccn["reopen_diagnostic_workup"]:
@@ -88,7 +92,10 @@ class PostNegativeBiopsyFollowupService:
                 "summary": (
                     f"Seguimiento tras biopsia benigna con antígeno prostático específico de {psa:g} ng/mL, "
                     f"densidad del antígeno prostático específico de {psad:g} y {years_since_biopsy:g} años desde la biopsia negativa."
-                )
+                ),
+                "validated_algorithms": {
+                    "erspc_ready": erspc_ready,
+                },
             },
         )
         return enrich_evaluation_result(
@@ -104,6 +111,11 @@ class PostNegativeBiopsyFollowupService:
                 *nccn["reasons"],
                 "Una biopsia benigna inicial no elimina la necesidad de seguimiento, pero tampoco justifica una repetición automática de procedimientos invasivos.",
                 f"Número de biopsias previas documentadas: {nccn['prior_biopsy_count']}.",
+                (
+                    "Las entradas permiten correr ERSPC Risk Calculator en contexto de rebiopsia para reforzar la decision de reapertura."
+                    if erspc_ready
+                    else "Aun faltan entradas para un ERSPC de rebiopsia totalmente trazable."
+                ),
             ],
             alternatives=[
                 "Repetir resonancia magnética multiparamétrica antes de una nueva biopsia cuando la señal clínica sea incierta.",

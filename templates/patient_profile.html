@@ -26,6 +26,8 @@
     {% set diagnostic_states = ['diagnostic_workup', 'post_negative_biopsy_followup'] %}
     {% set diagnostic_state = current_state_key in diagnostic_states %}
     {% set benchmarking_flags = latest_assessment.display_result.benchmarking_flags if latest_assessment and latest_assessment.display_result.benchmarking_flags else [] %}
+    {% set decision_quality = latest_assessment.display_result.decision_quality if latest_assessment and latest_assessment.display_result.decision_quality else {} %}
+    {% set validated_algorithms = latest_assessment.display_result.validated_algorithms if latest_assessment and latest_assessment.display_result.validated_algorithms else [] %}
     <div class="space-y-6">
 
         <!-- ═══════════════════════════════════════════════════════════════════ -->
@@ -121,7 +123,55 @@
                     <p class="mt-2 text-sm text-slate-300">{{ latest_assessment.display_result.nccn_primary.mensaje_para_toma_de_decisiones_compartida }}</p>
                 </div>
             </div>
+            {% if decision_quality %}
+            <div class="mt-4 grid gap-4 lg:grid-cols-3">
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Calidad de decision</div>
+                    <div class="mt-2 text-lg font-semibold text-white">{{ decision_quality.confidence_category or 'No documentada' }}</div>
+                    <p class="mt-2 text-sm text-slate-300">Familia recomendada: {{ decision_quality.recommendation_family or latest_assessment.display_result.recommendation_family or 'No documentada' }}</p>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4 lg:col-span-2">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Por que no confiar mas</div>
+                    <ul class="mt-2 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in decision_quality.why_not_more_confident or latest_assessment.display_result.why_not_more_confident or [] %}
+                        <li>{{ item }}</li>
+                        {% else %}
+                        <li>Sin limitaciones estructuradas adicionales.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+            {% endif %}
         </section>
+
+        {% if validated_algorithms %}
+        <section class="pn-surface">
+            <h2 class="text-lg font-bold text-white mb-4">Algoritmos validados y refinadores conectados</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {% for algorithm in validated_algorithms %}
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="flex items-center justify-between gap-3">
+                        <div class="text-sm font-medium text-white">{{ algorithm.name }}</div>
+                        <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] bg-cyan-500/10 text-cyan-200 border border-cyan-500/20">
+                            {{ algorithm.status }}
+                        </span>
+                    </div>
+                    <p class="mt-2 text-sm text-slate-300">{{ algorithm.summary }}</p>
+                    <p class="mt-2 text-xs text-slate-500 uppercase tracking-wider">Utilidad clinica</p>
+                    <p class="mt-1 text-sm text-slate-400">{{ algorithm.clinical_use }}</p>
+                    {% if algorithm.evidence_note %}
+                    <p class="mt-2 text-xs text-amber-200">{{ algorithm.evidence_note }}</p>
+                    {% endif %}
+                    {% if algorithm.source_url %}
+                    <a href="{{ algorithm.source_url }}" target="_blank" rel="noopener noreferrer" class="mt-3 inline-flex text-xs text-cyan-300 hover:text-cyan-200">
+                        {{ algorithm.source_label }}
+                    </a>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+        {% endif %}
 
         <section class="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div class="pn-surface">
@@ -195,6 +245,19 @@
                         <div>
                             <div class="text-sm font-semibold text-white">{{ event.state_label }}</div>
                             <div class="mt-1 text-sm text-slate-300">{{ event.transition_reason or 'Sin motivo de transición estructurado.' }}</div>
+                            <div class="mt-3 flex flex-wrap gap-2">
+                                <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border border-cyan-500/20 bg-cyan-500/10 text-cyan-200">
+                                    {{ event.event_kind_label or 'Recomendación generada' }}
+                                </span>
+                                <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border
+                                    {{ 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200' if event.management_intent_status == 'completed' else
+                                       'border-teal-500/30 bg-teal-500/10 text-teal-200' if event.management_intent_status == 'delivered' else
+                                       'border-amber-500/30 bg-amber-500/10 text-amber-200' if event.management_intent_status in ['candidate', 'discussed', 'chosen'] else
+                                       'border-rose-500/30 bg-rose-500/10 text-rose-200' if event.management_intent_status == 'escalated' else
+                                       'border-slate-600 bg-slate-800/70 text-slate-300' }}">
+                                    {{ event.management_intent_status_label or 'Pendiente de confirmación' }}
+                                </span>
+                            </div>
                         </div>
                         <div class="text-xs uppercase tracking-wider text-slate-500">
                             {{ event.created_at }}
@@ -508,6 +571,111 @@
         {% endif %}
         </section>
 
+        {% if patient.diagnostic_plans|length > 0 or patient.mri_facts|length > 0 or patient.biopsy_triggers|length > 0 %}
+        <section class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            {% if patient.diagnostic_plans|length > 0 %}
+            {% set latest_plan = patient.diagnostic_plans[0] %}
+            <div class="pn-surface">
+                <h2 class="text-lg font-bold text-white mb-4">🧭 Plan diagnóstico actual</h2>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4 space-y-3">
+                    <div class="flex items-center justify-between gap-3">
+                        <span class="text-sm font-medium text-white">{{ latest_plan.plan_type or 'Ruta diagnóstica' }}</span>
+                        <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border border-amber-500/30 bg-amber-500/10 text-amber-200">
+                            {{ latest_plan.plan_status or 'Planificado' }}
+                        </span>
+                    </div>
+                    <p class="text-sm text-slate-300">{{ latest_plan.plan_summary or 'Sin resumen estructurado.' }}</p>
+                    <div>
+                        <div class="text-xs uppercase tracking-wider text-slate-500">Siguiente acción</div>
+                        <p class="mt-1 text-sm text-slate-200">{{ latest_plan.next_action or latest_plan.recommended_pathway or 'Pendiente de confirmar.' }}</p>
+                    </div>
+                    <div>
+                        <div class="text-xs uppercase tracking-wider text-slate-500">Condiciones de activación</div>
+                        <ul class="mt-2 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                            {% for item in latest_plan.trigger_conditions or [] %}
+                            <li>{{ item }}</li>
+                            {% else %}
+                            <li>Sin condiciones estructuradas.</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+            {% if patient.mri_facts|length > 0 %}
+            {% set latest_mri_fact = patient.mri_facts[0] %}
+            <div class="pn-surface">
+                <h2 class="text-lg font-bold text-white mb-4">🧲 Hechos de resonancia magnética multiparamétrica</h2>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4 space-y-3">
+                    <div class="flex items-center justify-between gap-3">
+                        <span class="text-sm font-medium text-white">{{ latest_mri_fact.fact_date or 'Sin fecha' }}</span>
+                        <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border {{ 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200' if latest_mri_fact.decision_usable else 'border-amber-500/30 bg-amber-500/10 text-amber-200' }}">
+                            {{ 'Confirmado para decidir' if latest_mri_fact.decision_usable else 'Pendiente de confirmación' }}
+                        </span>
+                    </div>
+                    <div class="grid grid-cols-2 gap-3 text-sm">
+                        <div>
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Calidad</div>
+                            <div class="mt-1 text-slate-200">{{ latest_mri_fact.mpmri_quality or 'No documentada' }}</div>
+                        </div>
+                        <div>
+                            <div class="text-xs uppercase tracking-wider text-slate-500">PI-RADS</div>
+                            <div class="mt-1 text-slate-200">{{ latest_mri_fact.pirads_score or 'No disponible' }}</div>
+                        </div>
+                        <div>
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Lesión índice</div>
+                            <div class="mt-1 text-slate-200">{{ latest_mri_fact.lesion_location or 'No especificada' }}</div>
+                        </div>
+                        <div>
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Tamaño</div>
+                            <div class="mt-1 text-slate-200">{{ latest_mri_fact.lesion_size_mm or '—' }} mm</div>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="text-xs uppercase tracking-wider text-slate-500">Volumen prostático</div>
+                        <div class="mt-1 text-sm text-slate-200">{{ latest_mri_fact.prostate_volume_ml or '—' }} mL</div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+            {% if patient.biopsy_triggers|length > 0 %}
+            {% set latest_biopsy_trigger = patient.biopsy_triggers[0] %}
+            <div class="pn-surface">
+                <h2 class="text-lg font-bold text-white mb-4">🎯 Trigger de biopsia</h2>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4 space-y-3">
+                    <div class="flex items-center justify-between gap-3">
+                        <span class="text-sm font-medium text-white">{{ latest_biopsy_trigger.priority or 'vigilada' }}</span>
+                        <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border border-amber-500/30 bg-amber-500/10 text-amber-200">
+                            {{ latest_biopsy_trigger.trigger_status or 'Pendiente de confirmación' }}
+                        </span>
+                    </div>
+                    <p class="text-sm text-slate-300">{{ latest_biopsy_trigger.trigger_reason or 'Sin motivo estructurado.' }}</p>
+                    <div class="grid grid-cols-2 gap-3 text-sm">
+                        <div>
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Tipo previsto</div>
+                            <div class="mt-1 text-slate-200">{{ latest_biopsy_trigger.planned_biopsy_type or 'Pendiente' }}</div>
+                        </div>
+                        <div>
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Vía prevista</div>
+                            <div class="mt-1 text-slate-200">{{ latest_biopsy_trigger.planned_biopsy_route or 'No definida' }}</div>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="text-xs uppercase tracking-wider text-slate-500">Condiciones que lo activan</div>
+                        <ul class="mt-2 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                            {% for item in latest_biopsy_trigger.activation_conditions or [] %}
+                            <li>{{ item }}</li>
+                            {% else %}
+                            <li>Sin condiciones estructuradas.</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </section>
+        {% endif %}
+
         <!-- ═══════════════════════════════════════════════════════════════════ -->
         <!-- 7. BIOPSIAS & PATOLOGÍA                                           -->
         <!-- ═══════════════════════════════════════════════════════════════════ -->
@@ -535,10 +703,23 @@
                         <tr class="hover:bg-slate-700/30">
                             <td class="px-3 py-2">{{ bx.biopsy_date }}</td>
                             <td class="px-3 py-2"><span class="px-1.5 py-0.5 bg-slate-700 rounded text-xs">{{ bx.biopsy_type }}</span></td>
-                            <td class="px-3 py-2 font-bold text-white">{{ bx.gleason_primary }}+{{ bx.gleason_secondary }}</td>
-                            <td class="px-3 py-2"><span class="px-2 py-0.5 rounded text-xs font-bold
-                                {{ 'bg-green-900/50 text-green-400' if bx.isup_grade <= 1 else 'bg-yellow-900/50 text-yellow-400' if bx.isup_grade <= 2 else 'bg-orange-900/50 text-orange-400' if bx.isup_grade <= 3 else 'bg-red-900/50 text-red-400' }}">
-                                GG{{ bx.isup_grade }}</span></td>
+                            <td class="px-3 py-2 font-bold text-white">
+                                {% if bx.gleason_primary is not none and bx.gleason_secondary is not none %}
+                                {{ bx.gleason_primary }}+{{ bx.gleason_secondary }}
+                                {% else %}
+                                <span class="text-slate-400 font-normal">Sin confirmación histológica</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-3 py-2">
+                                {% if bx.isup_grade is not none %}
+                                <span class="px-2 py-0.5 rounded text-xs font-bold
+                                    {{ 'bg-green-900/50 text-green-400' if bx.isup_grade <= 1 else 'bg-yellow-900/50 text-yellow-400' if bx.isup_grade <= 2 else 'bg-orange-900/50 text-orange-400' if bx.isup_grade <= 3 else 'bg-red-900/50 text-red-400' }}">
+                                    GG{{ bx.isup_grade }}
+                                </span>
+                                {% else %}
+                                <span class="text-slate-400">No documentado</span>
+                                {% endif %}
+                            </td>
                             <td class="px-3 py-2">{{ bx.positive_cores }}/{{ bx.total_cores }}</td>
                             <td class="px-3 py-2">{{ bx.max_core_involvement_pct }}%</td>
                             <td class="px-3 py-2">{{ '✅' if bx.patron_cribiforme else '—' }}</td>

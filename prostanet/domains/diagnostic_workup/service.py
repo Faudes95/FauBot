@@ -28,6 +28,10 @@ class DiagnosticWorkupService:
         psad = float(payload.get("psad", 0) or 0)
         pirads = int(float(payload.get("pirads_score", 0) or 0))
         dre_suspicious = str(payload.get("dre_suspicious", "0"))
+        erspc_ready = all(
+            payload.get(field) not in (None, "")
+            for field in ("age", "psa", "dre_suspicious")
+        )
 
         treatments = []
         if nccn["biopsy_indicated"]:
@@ -107,6 +111,9 @@ class DiagnosticWorkupService:
             report_sections={
                 "summary": case_summary,
                 "diagnostic_risk_pct": nccn["significant_risk_pct"],
+                "validated_algorithms": {
+                    "erspc_ready": erspc_ready,
+                },
             },
         )
         return enrich_evaluation_result(
@@ -118,6 +125,11 @@ class DiagnosticWorkupService:
                 *nccn["reasons"],
                 f"Riesgo estimado de cáncer clínicamente significativo: {nccn['significant_risk_pct']}%.",
                 "El pathway MRI + PSAD y la velocidad de PSA ya modifican la intensidad diagnóstica cuando el caso es limítrofe.",
+                (
+                    "Las entradas estan listas para correr ERSPC Risk Calculator como refinador libre de deteccion temprana."
+                    if erspc_ready
+                    else "ERSPC Risk Calculator sigue incompleto porque faltan entradas basales clave."
+                ),
                 "La confirmación histológica sigue siendo el punto de entrada obligatorio antes de una ruta terapéutica formal.",
             ],
             alternatives=[

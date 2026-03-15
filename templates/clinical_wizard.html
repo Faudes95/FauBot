@@ -336,6 +336,25 @@
             }).join('');
         }
 
+        function renderAlgorithmCards(items, emptyMessage) {
+            if (!items || !items.length) {
+                return `<div class="rounded-2xl border border-slate-700 p-4 text-sm text-slate-300">${emptyMessage}</div>`;
+            }
+            return items.map(item => `
+                <div class="rounded-2xl border border-slate-700 p-4">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <p class="text-sm font-medium text-white">${humanizeClinicalText(item.name || 'Algoritmo')}</p>
+                        <span class="rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2 py-1 text-[11px] text-cyan-200">${humanizeClinicalText(item.status || 'documentado')}</span>
+                    </div>
+                    <p class="mt-2 text-sm text-slate-300">${humanizeClinicalText(item.summary || '')}</p>
+                    <p class="mt-3 text-xs uppercase tracking-[0.2em] text-slate-500">Uso clinico</p>
+                    <p class="mt-1 text-sm text-slate-400">${humanizeClinicalText(item.clinical_use || '')}</p>
+                    ${item.evidence_note ? `<p class="mt-2 text-xs text-amber-200">${humanizeClinicalText(item.evidence_note)}</p>` : ''}
+                    ${item.source_url ? `<a href="${escapeHtml(item.source_url)}" target="_blank" rel="noopener noreferrer" class="mt-3 inline-flex text-xs text-cyan-300 hover:text-cyan-200">${escapeHtml(item.source_label || item.source_url)}</a>` : ''}
+                </div>
+            `).join('');
+        }
+
         function updateConditionalFields() {
             document.querySelectorAll('[data-conditions]').forEach((wrapper) => {
                 const conditions = JSON.parse(wrapper.dataset.conditions || '{}');
@@ -595,6 +614,9 @@
             const decisionChanging = renderTextList(result.decision_changing_inputs || [], 'No hay datos adicionales priorizados.');
             const supportiveContext = renderTextList(result.supportive_evidence_context || [], 'Sin contexto supportive adicional.');
             const benchmarkFlags = renderBenchmarkFlags(result.benchmarking_flags || [], 'Sin indicadores de benchmarking estructurados.');
+            const algorithmCards = renderAlgorithmCards(result.validated_algorithms || [], 'Sin algoritmos estructurados para este escenario.');
+            const decisionQuality = result.decision_quality || {};
+            const whyNotMoreConfident = renderTextList(result.why_not_more_confident || decisionQuality.why_not_more_confident || [], 'Sin limitaciones estructuradas adicionales.');
             const badgeClass = badgeColors[result.applicability_badge_key] || 'border-slate-700 bg-slate-800 text-slate-200';
 
             body.innerHTML = `
@@ -662,6 +684,21 @@
                 </div>
                 <div class="grid gap-4 md:grid-cols-2">
                     <div class="rounded-2xl border border-slate-700 p-4">
+                        <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Calidad de decision</p>
+                        <p class="mt-2 text-sm text-slate-200">Estado: ${humanizeClinicalText(decisionQuality.state_classification || result.state_label || result.state || '')}</p>
+                        <p class="mt-1 text-sm text-slate-300">Familia recomendada: ${humanizeClinicalText(decisionQuality.recommendation_family || result.recommendation_family || '')}</p>
+                        <p class="mt-1 text-sm text-slate-300">Confianza operativa: ${humanizeClinicalText(decisionQuality.confidence_category || 'No documentada')}</p>
+                        <p class="mt-1 text-sm ${decisionQuality.requires_human_review ? 'text-amber-300' : 'text-emerald-300'}">
+                            ${decisionQuality.requires_human_review ? 'Se recomienda revision humana o tumor board.' : 'Sin escalamiento humano obligatorio con los datos actuales.'}
+                        </p>
+                    </div>
+                    <div class="rounded-2xl border border-slate-700 p-4">
+                        <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Por que no confiar mas</p>
+                        <ul class="mt-2 space-y-2 text-sm text-slate-300">${whyNotMoreConfident}</ul>
+                    </div>
+                </div>
+                <div class="grid gap-4 md:grid-cols-2">
+                    <div class="rounded-2xl border border-slate-700 p-4">
                         <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Plan de monitoreo</p>
                         <p class="mt-2 text-sm text-slate-200">${humanizeClinicalText(result.monitoring_plan?.cadence || 'Sin cadencia estructurada.')}</p>
                         <div class="mt-3 text-xs uppercase tracking-[0.2em] text-slate-500">Acciones</div>
@@ -687,6 +724,10 @@
                 <div>
                     <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Capas de soporte concurrente</p>
                     <div class="mt-2 space-y-3">${overlays}</div>
+                </div>
+                <div>
+                    <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Algoritmos validados y refinadores conectados</p>
+                    <div class="mt-2 grid gap-3 md:grid-cols-2">${algorithmCards}</div>
                 </div>
                 <div>
                     <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Por qué estas fuentes influyen solo como soporte</p>

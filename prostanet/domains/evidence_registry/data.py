@@ -93,6 +93,7 @@ NCCN_PRIMARY = citation(
         "localized_initial",
         "post_prostatectomy",
         "recurrence_bcr",
+        "adt_progression_verification",
         "mcspc_oligo_metachronous",
         "mcspc_low_volume_sync_oligo",
         "mcspc_high_volume",
@@ -121,6 +122,7 @@ EAU_PRIMARY = citation(
         "localized_initial",
         "post_prostatectomy",
         "recurrence_bcr",
+        "adt_progression_verification",
         "mcspc_oligo_metachronous",
         "mcspc_low_volume_sync_oligo",
         "mcspc_high_volume",
@@ -533,6 +535,106 @@ CANARY_PASS = citation(
     ui_surfaces=["wizard.sidebar", "dashboard"],
 )
 
+ERSPC_RISK_CALCULATOR = citation(
+    "erspc_risk_calculator",
+    "European Randomized Study of Screening for Prostate Cancer (ERSPC) Risk Calculator.",
+    "ERSPC Risk Calculator",
+    "benchmark_reference",
+    document_id="benchmark_erspc",
+    evidence_role="benchmark",
+    license_class="public_web_reference",
+    doi_or_url="https://www.prostatecancer-riskcalculator.com/",
+    disease_state="Deteccion temprana y rebiopsia",
+    followup_implications="Permite refinar umbral diagnostico y de rebiopsia junto con MRI, PSAD y antecedentes, sin sustituir la recomendacion primaria de guias.",
+    supports_rule_ids=["diagnostic_workup.erspc_support", "post_negative_biopsy_followup.erspc_support"],
+    applies_to_modules=["diagnostic_workup", "post_negative_biopsy_followup"],
+    field_implications=["age", "psa", "dre_suspicious", "prior_biopsy_count", "prostate_volume_ml"],
+    ui_surfaces=["wizard.sidebar", "wizard.results", "dashboard"],
+)
+
+PREDICT_PROSTATE = citation(
+    "predict_prostate",
+    "PREDICT Prostate survival model.",
+    "PREDICT Prostate",
+    "benchmark_reference",
+    document_id="benchmark_predict_prostate",
+    evidence_role="benchmark",
+    license_class="public_web_reference",
+    doi_or_url="https://prostate.predict.nhs.uk/",
+    disease_state="Localized initial",
+    followup_implications="Ayuda a cuantificar beneficio absoluto y apoyar decision compartida en enfermedad localizada, sin desplazar NCCN/EAU.",
+    supports_rule_ids=["localized_initial.predict_support"],
+    applies_to_modules=["localized_initial"],
+    field_implications=["age", "psa", "clinical_tstage", "isup_grade", "life_expectancy_years"],
+    ui_surfaces=["wizard.sidebar", "wizard.results", "patient_profile"],
+)
+
+PARTIN_TABLES = citation(
+    "partin_tables",
+    "Updated Partin Tables for the prediction of final pathological stage.",
+    "Partin Tables",
+    "benchmark_reference",
+    document_id="benchmark_partin",
+    evidence_role="benchmark",
+    license_class="public_web_reference",
+    doi_or_url="https://pubmed.ncbi.nlm.nih.gov/28318271/",
+    disease_state="Localized initial",
+    followup_implications="Ayuda a counseling patologico preoperatorio y riesgo ganglionar, sin sustituir la jerarquia de guias.",
+    supports_rule_ids=["localized_initial.partin_support"],
+    applies_to_modules=["localized_initial"],
+    field_implications=["clinical_tstage", "psa", "isup_grade"],
+    ui_surfaces=["wizard.sidebar", "wizard.results", "patient_profile"],
+)
+
+CAPRA_UCSF = citation(
+    "capra_ucsf",
+    "Cancer of the Prostate Risk Assessment (CAPRA) and CAPRA-S.",
+    "CAPRA / CAPRA-S",
+    "benchmark_reference",
+    document_id="benchmark_capra",
+    evidence_role="benchmark",
+    license_class="public_web_reference",
+    doi_or_url="https://urology.ucsf.edu/research/cancer/prostate-cancer-risk-assessment-and-the-ucla-prostate-cancer-index",
+    disease_state="Localized and post-prostatectomy",
+    followup_implications="Permite refinar riesgo preoperatorio y posoperatorio como capa de apoyo compatible con NCCN/EAU.",
+    supports_rule_ids=["localized_initial.capra_support", "post_prostatectomy.capra_s_support"],
+    applies_to_modules=["localized_initial", "post_prostatectomy", "recurrence_bcr"],
+    field_implications=["psa", "clinical_tstage", "isup_grade", "pathologic_stage"],
+    ui_surfaces=["wizard.sidebar", "wizard.results", "patient_profile"],
+)
+
+CRPC_PUBLIC_DEFINITION = citation(
+    "nci_crpc_definition",
+    "Castrate-resistant prostate cancer definition.",
+    "NCI definition",
+    "supporting_study",
+    evidence_role="supportive_trial",
+    license_class="public_web_reference",
+    doi_or_url="https://www.cancer.gov/publications/dictionaries/cancer-terms/def/castrate-resistant-prostate-cancer",
+    disease_state="CRPC verification",
+    followup_implications="Refuerza que la enfermedad resistente a la castración exige progresión con testosterona en rango de castración.",
+    supports_rule_ids=["adt_progression_verification.crpc_definition_support"],
+    applies_to_modules=["adt_progression_verification"],
+    field_implications=["castrate_testosterone_status", "testosterone_value", "progression_pattern"],
+    ui_surfaces=["wizard.sidebar", "wizard.results"],
+)
+
+FDA_APALUTAMIDE_NMCRPC = citation(
+    "fda_apalutamide_nmcrpc",
+    "FDA approves apalutamide for non-metastatic castration-resistant prostate cancer.",
+    "FDA apalutamide nmCRPC",
+    "supporting_study",
+    evidence_role="supportive_trial",
+    license_class="public_web_reference",
+    doi_or_url="https://www.fda.gov/drugs/resources-information-approved-drugs/fda-approves-apalutamide-non-metastatic-castration-resistant-prostate-cancer",
+    disease_state="M0 CRPC",
+    followup_implications="Aporta soporte regulatorio para el carril nmCRPC una vez confirmadas castración e imagen convencional M0.",
+    supports_rule_ids=["adt_progression_verification.nmcrpc_redirection"],
+    applies_to_modules=["adt_progression_verification", "m0_crpc"],
+    field_implications=["psadt_months", "castrate_testosterone_status", "conventional_imaging_status"],
+    ui_surfaces=["wizard.sidebar", "wizard.results"],
+)
+
 DOCUMENTS = _document_registry(
     NCCN_PRIMARY,
     EAU_PRIMARY,
@@ -556,6 +658,10 @@ DOCUMENTS = _document_registry(
     MHSPC_REAL_WORLD,
     MSK_PREOP_NOMOGRAM,
     CANARY_PASS,
+    ERSPC_RISK_CALCULATOR,
+    PREDICT_PROSTATE,
+    PARTIN_TABLES,
+    CAPRA_UCSF,
 )
 
 MODULES = {
@@ -569,7 +675,7 @@ MODULES = {
             "¿La sospecha de cáncer clínicamente significativo justifica resonancia magnética multiparamétrica, biopsia dirigida y biopsia sistemática?",
             "¿Existe un patrón de sospecha suficientemente alto como para planear imagen avanzada tras confirmación histológica?",
         ],
-        source_citations=[NCCN_PRIMARY, EAU_PRIMARY],
+        source_citations=[NCCN_PRIMARY, EAU_PRIMARY, ERSPC_RISK_CALCULATOR],
     ),
     "post_negative_biopsy_followup": ModuleEvidence(
         module="post_negative_biopsy_followup",
@@ -581,7 +687,7 @@ MODULES = {
             "¿El seguimiento puede mantenerse de baja intensidad después de una biopsia benigna inicial?",
             "¿Cuándo debe reabrirse el estudio diagnóstico con resonancia magnética o nueva biopsia?",
         ],
-        source_citations=[NCCN_PRIMARY, EAU_PRIMARY, BENIGN_BIOPSY_LONG_TERM, CANARY_PASS],
+        source_citations=[NCCN_PRIMARY, EAU_PRIMARY, BENIGN_BIOPSY_LONG_TERM, CANARY_PASS, ERSPC_RISK_CALCULATOR],
     ),
     "localized_initial": ModuleEvidence(
         module="localized_initial",
@@ -594,7 +700,7 @@ MODULES = {
             "¿La vigilancia activa está indicada, es preferente o no se recomienda?",
             "¿Qué tratamientos locales son elegibles según riesgo, expectativa de vida e histología?",
         ],
-        source_citations=[NCCN_PRIMARY, EAU_PRIMARY, ACTIVE_SURVEILLANCE_REAL_WORLD, LATE_RT_TOXICITY, MSK_PREOP_NOMOGRAM, CANARY_PASS],
+        source_citations=[NCCN_PRIMARY, EAU_PRIMARY, ACTIVE_SURVEILLANCE_REAL_WORLD, LATE_RT_TOXICITY, MSK_PREOP_NOMOGRAM, CANARY_PASS, PARTIN_TABLES, PREDICT_PROSTATE, CAPRA_UCSF],
     ),
     "post_prostatectomy": ModuleEvidence(
         module="post_prostatectomy",
@@ -606,7 +712,7 @@ MODULES = {
             "¿El paciente está en vigilancia, consideración de adyuvancia o escenario de rescate temprano?",
             "¿Cuál es la estimación del puntaje postoperatorio CAPRA-S en el contexto correcto?",
         ],
-        source_citations=[NCCN_PRIMARY, EAU_PRIMARY, LATE_RT_TOXICITY],
+        source_citations=[NCCN_PRIMARY, EAU_PRIMARY, LATE_RT_TOXICITY, CAPRA_UCSF],
     ),
     "recurrence_bcr": ModuleEvidence(
         module="recurrence_bcr",
@@ -618,7 +724,20 @@ MODULES = {
             "¿Se trata de recurrencia posterior a prostatectomía radical, posterior a radioterapia o segunda recurrencia bioquímica?",
             "¿Está indicado el rescate temprano y debe añadirse terapia de privación androgénica?",
         ],
-        source_citations=[NCCN_PRIMARY, EAU_PRIMARY, LATE_RT_TOXICITY, EMBARK_FDA, APCCC_2024],
+        source_citations=[NCCN_PRIMARY, EAU_PRIMARY, LATE_RT_TOXICITY, EMBARK_FDA, APCCC_2024, CAPRA_UCSF],
+    ),
+    "adt_progression_verification": ModuleEvidence(
+        module="adt_progression_verification",
+        title="Progresión bajo ADT / verificación de castración",
+        nccn_panels=["PROS-16", "PROS-17", "PROS-M"],
+        eau_sections=["Castration-resistant disease", "Follow-up"],
+        pivotal_trials=["SPARTAN", "ARAMIS", "PROSPER"],
+        core_questions=[
+            "¿Existe testosterona en rango de castración confirmada o primero debe optimizarse la supresión androgénica?",
+            "¿La imagen convencional define ya un carril M0 o M1 resistente a la castración?",
+            "¿La progresión bajo ADT es solo bioquímica o ya existe progresión radiográfica o clínica con castración confirmada?",
+        ],
+        source_citations=[NCCN_PRIMARY, EAU_PRIMARY, CRPC_PUBLIC_DEFINITION, FDA_APALUTAMIDE_NMCRPC],
     ),
     "mcspc_oligo_metachronous": ModuleEvidence(
         module="mcspc_oligo_metachronous",

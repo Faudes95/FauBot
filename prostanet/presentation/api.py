@@ -4,6 +4,7 @@ from flask import Blueprint, jsonify, request
 
 from prostanet.application.module_registry import ModuleRegistry
 from prostanet.domains.clinical_assessments.service import ClinicalAssessmentService
+from prostanet.domains.clinical_assessments.scenario_harness import run_scenario_harness
 from prostanet.domains.patient_tracking.service import PatientTrackingService
 from prostanet.shared.presentation_text import (
     humanize_assessment,
@@ -187,6 +188,12 @@ def module_sources(module_id: str) -> tuple:
 @modular_api.route("/api/guidelines/metadata", methods=["GET"])
 def guideline_metadata() -> tuple:
     return jsonify({"success": True, "guidelines": humanize_guidelines(registry.get_guidelines_metadata())})
+
+
+@modular_api.route("/api/clinical-calibration", methods=["GET"])
+def clinical_calibration() -> tuple:
+    summary = run_scenario_harness(registry)
+    return jsonify({"success": True, "calibration": summary})
 
 
 @modular_api.route("/api/patients/<nss>/state-timeline", methods=["GET"])

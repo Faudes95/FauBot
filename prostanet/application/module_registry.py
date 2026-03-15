@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from prostanet.domains.adt_progression_verification.service import AdtProgressionVerificationService
 from prostanet.domains.evidence_registry.service import EvidenceRegistryService
 from prostanet.domains.diagnostic_workup.service import DiagnosticWorkupService
 from prostanet.domains.localized_initial.service import LocalizedInitialService
@@ -13,7 +14,9 @@ from prostanet.domains.post_prostatectomy.service import PostProstatectomyServic
 from prostanet.domains.recurrence_bcr.service import RecurrenceBCRService
 from prostanet.domains.state_classifier.service import StateClassifierService
 from prostanet.domains.state_classifier.schemas import STATE_CLASSIFIER_SCHEMA
+from prostanet.shared.decision_quality import build_decision_quality
 from prostanet.shared.module_support import apply_support_bundle, support_bundle_for_module
+from prostanet.shared.validated_algorithms import build_validated_algorithms
 
 
 class ModuleRegistry:
@@ -26,6 +29,7 @@ class ModuleRegistry:
             "localized_initial": LocalizedInitialService(),
             "post_prostatectomy": PostProstatectomyService(),
             "recurrence_bcr": RecurrenceBCRService(),
+            "adt_progression_verification": AdtProgressionVerificationService(),
             "mcspc_oligo_metachronous": McspcOligoMetachronousService(),
             "mcspc_low_volume_sync_oligo": McspcLowVolumeSyncOligoService(),
             "mcspc_high_volume": McspcHighVolumeService(),
@@ -46,7 +50,7 @@ class ModuleRegistry:
         result = self.services[module_id].evaluate(payload)
         evidence = self.get_module_evidence(module_id)
         bundle = support_bundle_for_module(module_id, payload, result, evidence)
-        return apply_support_bundle(
+        enriched = apply_support_bundle(
             result,
             monitoring=bundle["monitoring"],
             transitions=bundle["transitions"],
@@ -60,6 +64,12 @@ class ModuleRegistry:
             supportive_evidence_context=bundle["supportive_evidence_context"],
             benchmarking_flags=bundle["benchmarking_flags"],
         )
+        enriched["validated_algorithms"] = build_validated_algorithms(module_id, payload, enriched)
+        enriched["decision_quality"] = build_decision_quality(module_id, payload, enriched)
+        enriched["state_classification"] = enriched["decision_quality"].get("state_classification", enriched.get("state"))
+        enriched["recommendation_family"] = enriched["decision_quality"].get("recommendation_family", "")
+        enriched["why_not_more_confident"] = enriched["decision_quality"].get("why_not_more_confident", [])
+        return enriched
 
     def classify_state(self, payload: dict) -> dict:
         return self.state_classifier.classify(payload)

@@ -103,6 +103,7 @@ def _assessment_longitudinal_snapshot(assessment):
     nccn = result.get("nccn_primary", {})
     report_sections = result.get("report_sections", {})
     structured = report_sections.get("structured_summary", {})
+    decision_quality = result.get("decision_quality", {}) or {}
     return {
         "summary": nccn.get("resumen_del_caso") or structured.get("resumen_del_caso") or report_sections.get("summary", ""),
         "current_state": assessment.get("state"),
@@ -111,6 +112,10 @@ def _assessment_longitudinal_snapshot(assessment):
         "monitoring_plan": result.get("monitoring_plan", {}),
         "care_overlays": result.get("care_overlays", []),
         "guideline_snapshot": assessment.get("guideline_versions", {}),
+        "recommendation_family": decision_quality.get("recommendation_family") or result.get("recommendation_family", ""),
+        "state_classification": decision_quality.get("state_classification") or result.get("state") or assessment.get("state"),
+        "decision_quality": result.get("decision_quality", {}),
+        "validated_algorithms": result.get("validated_algorithms", []),
     }
 
 
@@ -119,6 +124,8 @@ def _record_patient_state_transition(
     patient_id,
     assessment_id,
     state,
+    event_kind,
+    management_intent_status,
     transition_reason,
     objective_progression,
     monitoring_plan,
@@ -128,15 +135,17 @@ def _record_patient_state_transition(
     cursor.execute(
         '''
         INSERT INTO patient_state_timeline (
-            patient_id, assessment_id, state, transition_reason,
+            patient_id, assessment_id, state, event_kind, management_intent_status, transition_reason,
             objective_progression_json, monitoring_plan_json, care_overlays_json,
             latest_guideline_snapshot_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''',
         (
             patient_id,
             assessment_id,
             state,
+            event_kind,
+            management_intent_status,
             transition_reason,
             _json_blob(objective_progression or {}),
             _json_blob(monitoring_plan or {}),
@@ -154,6 +163,8 @@ def _hydrate_timeline_rows(rows):
         item["monitoring_plan"] = _parse_json_blob(item.pop("monitoring_plan_json", None), {})
         item["care_overlays"] = _parse_json_blob(item.pop("care_overlays_json", None), [])
         item["latest_guideline_snapshot"] = _parse_json_blob(item.pop("latest_guideline_snapshot_json", None), {})
+        item["event_kind"] = item.get("event_kind") or "recommendation_generated"
+        item["management_intent_status"] = item.get("management_intent_status") or "candidate"
         timeline.append(item)
     return timeline
 
@@ -167,6 +178,7 @@ def _decorate_prior_history(prior_history):
     history["monitoring_plan"] = _parse_json_blob(history.get("monitoring_plan_json"), {})
     history["care_overlays"] = _parse_json_blob(history.get("care_overlays_json"), [])
     history["latest_guideline_snapshot"] = _parse_json_blob(history.get("latest_guideline_snapshot_json"), {})
+    history["management_intent_status"] = history.get("management_intent_status") or "candidate"
     return history
 
 def init_tracking_db():
@@ -368,6 +380,14 @@ def init_tracking_db():
         c.execute("ALTER TABLE prior_clinical_history ADD COLUMN latest_guideline_snapshot_json TEXT")
     except sqlite3.OperationalError:
         pass
+    try:
+        c.execute("ALTER TABLE prior_clinical_history ADD COLUMN management_intent_status TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        c.execute("ALTER TABLE prior_clinical_history ADD COLUMN recommendation_family TEXT")
+    except sqlite3.OperationalError:
+        pass
 
     # ══════════════════════════════════════════════════════════════════════════
     # ══  FASE B & C — NUEVAS TABLAS (Expediente Longitudinal + Investigación)
@@ -437,6 +457,64 @@ def init_tracking_db():
         )
     ''')
 
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS mri_facts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            assessment_id INTEGER,
+            fact_date DATE,
+            mpmri_quality TEXT,
+            decision_usable BOOLEAN DEFAULT 0,
+            pirads_score INTEGER,
+            lesion_location TEXT,
+            lesion_size_mm REAL,
+            prostate_volume_ml REAL,
+            findings_json TEXT,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id),
+            FOREIGN KEY(assessment_id) REFERENCES clinical_assessments(id)
+        )
+    ''')
+
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS diagnostic_plans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            assessment_id INTEGER,
+            plan_date DATE DEFAULT (DATE('now')),
+            source_state TEXT,
+            plan_type TEXT,
+            plan_status TEXT,
+            management_intent_status TEXT DEFAULT 'candidate',
+            plan_summary TEXT,
+            recommended_pathway TEXT,
+            next_action TEXT,
+            risk_calculator_pathway TEXT,
+            trigger_conditions_json TEXT,
+            evidence_context_json TEXT,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id),
+            FOREIGN KEY(assessment_id) REFERENCES clinical_assessments(id)
+        )
+    ''')
+
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS biopsy_trigger_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            assessment_id INTEGER,
+            trigger_date DATE DEFAULT (DATE('now')),
+            source_state TEXT,
+            trigger_reason TEXT,
+            priority TEXT,
+            planned_biopsy_type TEXT,
+            planned_biopsy_route TEXT,
+            trigger_status TEXT,
+            management_intent_status TEXT DEFAULT 'candidate',
+            activation_conditions_json TEXT,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id),
+            FOREIGN KEY(assessment_id) REFERENCES clinical_assessments(id)
+        )
+    ''')
+
     # ── 8. PERFIL GENÓMICO ──────────────────────────────────────────────────
     c.execute('''
         CREATE TABLE IF NOT EXISTS genomic_profile (
@@ -497,10 +575,20 @@ def init_tracking_db():
             -- Comparación con biopsia previa
             upgrade_from_previous BOOLEAN DEFAULT 0,
             previous_isup INTEGER,
+            adverse_histology_variant_type TEXT,
+            adverse_histology_variant_detail TEXT,
             pathologist_notes TEXT,
             FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
         )
     ''')
+    try:
+        c.execute("ALTER TABLE biopsy_details ADD COLUMN adverse_histology_variant_type TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        c.execute("ALTER TABLE biopsy_details ADD COLUMN adverse_histology_variant_detail TEXT")
+    except sqlite3.OperationalError:
+        pass
 
     # ── 10. VIGILANCIA ACTIVA (AS) ──────────────────────────────────────────
     c.execute('''
@@ -689,6 +777,8 @@ def init_tracking_db():
             patient_id INTEGER NOT NULL,
             assessment_id INTEGER,
             state TEXT NOT NULL,
+            event_kind TEXT DEFAULT 'recommendation_generated',
+            management_intent_status TEXT DEFAULT 'candidate',
             transition_reason TEXT,
             objective_progression_json TEXT,
             monitoring_plan_json TEXT,
@@ -699,6 +789,14 @@ def init_tracking_db():
             FOREIGN KEY(assessment_id) REFERENCES clinical_assessments(id)
         )
     ''')
+    try:
+        c.execute("ALTER TABLE patient_state_timeline ADD COLUMN event_kind TEXT DEFAULT 'recommendation_generated'")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        c.execute("ALTER TABLE patient_state_timeline ADD COLUMN management_intent_status TEXT DEFAULT 'candidate'")
+    except sqlite3.OperationalError:
+        pass
 
     conn.commit()
     conn.close()
@@ -762,6 +860,13 @@ def attach_clinical_assessment_to_patient(assessment_id, patient_id):
             return False, "Paciente no encontrado"
 
         snapshot = _assessment_longitudinal_snapshot(assessment)
+        from prostanet.domains.patient_tracking.event_graph import (
+            derive_management_intent_status,
+            derive_timeline_event_kind,
+        )
+        record = get_patient_full_record(patient_id) or {}
+        management_intent_status = derive_management_intent_status(assessment.get("state"), assessment.get("result_snapshot", {}), record)
+        event_kind = derive_timeline_event_kind(assessment.get("state"), assessment.get("result_snapshot", {}), record)
 
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
@@ -782,6 +887,8 @@ def attach_clinical_assessment_to_patient(assessment_id, patient_id):
                 assessment_module = ?,
                 assessment_state = ?,
                 assessment_summary = ?,
+                recommendation_family = ?,
+                management_intent_status = ?,
                 current_state = ?,
                 transition_reason = ?,
                 objective_progression_json = ?,
@@ -796,6 +903,8 @@ def attach_clinical_assessment_to_patient(assessment_id, patient_id):
                 assessment.get("module_id"),
                 assessment.get("state"),
                 snapshot["summary"],
+                snapshot.get("recommendation_family", ""),
+                management_intent_status,
                 snapshot["current_state"],
                 snapshot["transition_reason"],
                 _json_blob(snapshot["objective_progression"]),
@@ -810,11 +919,17 @@ def attach_clinical_assessment_to_patient(assessment_id, patient_id):
             patient_id,
             assessment_id,
             assessment.get("state"),
+            event_kind,
+            management_intent_status,
             snapshot["transition_reason"],
             snapshot["objective_progression"],
             snapshot["monitoring_plan"],
             snapshot["care_overlays"],
-            snapshot["guideline_snapshot"],
+            {
+                **snapshot["guideline_snapshot"],
+                "decision_quality": snapshot.get("decision_quality", {}),
+                "validated_algorithms": snapshot.get("validated_algorithms", []),
+            },
         )
         conn.commit()
         conn.close()
@@ -917,28 +1032,42 @@ def _build_family_history_relatives(data):
 
 def _build_imaging_payloads(data):
     payloads = []
+    localized_prior_mri = (
+        str(data.get("assessment_state") or "").strip() == "localized_initial"
+        and _is_truthy(data.get("prior_mpmri"))
+    )
+    pirads_score = data.get("pirads_score")
+    if pirads_score in (None, "", 0, "0") and localized_prior_mri:
+        pirads_score = data.get("prior_mpmri_pirads_score")
+    lesion_location = data.get("index_lesion_location")
+    lesion_size_mm = data.get("index_lesion_size_mm")
     if _has_any_value(
         data,
         [
             "mpmri_date",
             "pirads_score",
+            "prior_mpmri_pirads_score",
             "index_lesion_location",
             "index_lesion_size_mm",
             "mpmri_quality",
         ],
-    ):
+    ) or localized_prior_mri:
         payloads.append(
             {
                 "study_date": data.get("mpmri_date") or datetime.now().strftime("%Y-%m-%d"),
                 "study_type": "mpMRI",
-                "pirads_score": _safe_int(data.get("pirads_score"), None),
-                "pirads_location": data.get("index_lesion_location"),
-                "lesion_size_mm": _safe_float(data.get("index_lesion_size_mm"), 0),
+                "pirads_score": _safe_int(pirads_score, None),
+                "pirads_location": lesion_location,
+                "lesion_size_mm": _safe_float(lesion_size_mm, 0),
+                "precise_score": data.get("precise_score"),
                 "findings": {
                     "mpmri_quality": data.get("mpmri_quality"),
                     "planned_biopsy_type": data.get("planned_biopsy_type"),
                     "planned_biopsy_route": data.get("planned_biopsy_route"),
                     "risk_calculator_pathway": data.get("risk_calculator_pathway"),
+                    "post_biopsy_mri": _is_truthy(data.get("post_biopsy_mri")),
+                    "persistent_lesion_signal": _is_truthy(data.get("persistent_lesion_signal")),
+                    "prior_mpmri_targeted_biopsy_status": data.get("prior_mpmri_targeted_biopsy_status"),
                 },
                 "radiologist_notes": str(data.get("family_history_detail", ""))[:500] or None,
             }
@@ -952,7 +1081,29 @@ def _build_imaging_payloads(data):
                 "findings": {
                     "psma_positive": _is_truthy(data.get("psma_positive")),
                     "psma_negative_dominant_lesions": _is_truthy(data.get("psma_negative_dominant_lesions")),
+                    "conventional_imaging_m0": _is_truthy(data.get("conventional_imaging_m0")),
                 },
+            }
+        )
+    if (
+        str(data.get("imaging_modality", "")) == "Convencional"
+        or _is_truthy(data.get("conventional_imaging_m0"))
+        or str(data.get("conventional_imaging_status", "not_restaged") or "not_restaged") in {"M0", "M1"}
+    ):
+        conventional_status = str(data.get("conventional_imaging_status", "") or "").upper()
+        payloads.append(
+            {
+                "study_date": data.get("local_therapy_date") or datetime.now().strftime("%Y-%m-%d"),
+                "study_type": "Convencional",
+                "findings": {
+                    "conventional_imaging_m0": _is_truthy(data.get("conventional_imaging_m0")) or conventional_status == "M0",
+                    "conventional_imaging_status": conventional_status or ("M0" if _is_truthy(data.get("conventional_imaging_m0")) else ""),
+                    "salvage_local_feasible": _is_truthy(data.get("salvage_local_feasible")),
+                    "local_salvage_candidate": _is_truthy(data.get("local_salvage_candidate")),
+                    "progression_pattern": data.get("progression_pattern"),
+                    "castrate_testosterone_status": data.get("castrate_testosterone_status"),
+                },
+                "radiologist_notes": data.get("psma_pet_result"),
             }
         )
     if _is_truthy(data.get("has_bone_scan")):
@@ -965,6 +1116,123 @@ def _build_imaging_payloads(data):
             }
         )
     return payloads
+
+
+def _build_mri_fact_payload(data):
+    if data.get("assessment_state") not in {"diagnostic_workup", "post_negative_biopsy_followup"}:
+        return None
+    if not _has_any_value(
+        data,
+        [
+            "mpmri_date",
+            "mpmri_quality",
+            "pirads_score",
+            "index_lesion_location",
+            "index_lesion_size_mm",
+            "prostate_volume_ml",
+        ],
+    ):
+        return None
+    quality = data.get("mpmri_quality") or "No disponible"
+    return {
+        "fact_date": data.get("mpmri_date") or datetime.now().strftime("%Y-%m-%d"),
+        "mpmri_quality": quality,
+        "decision_usable": 1 if quality == "Adecuada" else 0,
+        "pirads_score": _safe_int(data.get("pirads_score"), None),
+        "lesion_location": data.get("index_lesion_location"),
+        "lesion_size_mm": _safe_float(data.get("index_lesion_size_mm"), None),
+        "prostate_volume_ml": _safe_float(data.get("prostate_volume_ml"), None),
+        "findings": {
+            "psad": _safe_float(data.get("psad"), None),
+            "psa_velocity_ng_ml_year": _safe_float(data.get("psa_velocity_ng_ml_year"), None),
+            "risk_calculator_pathway": data.get("risk_calculator_pathway"),
+        },
+    }
+
+
+def _build_diagnostic_plan_payload(data, assessment=None):
+    state = str(data.get("assessment_state") or "").strip()
+    if state not in {"diagnostic_workup", "post_negative_biopsy_followup"}:
+        return None
+    result = (assessment or {}).get("result_snapshot", {}) if assessment else {}
+    primary = result.get("nccn_primary", {}) or {}
+    treatments = result.get("eligible_treatments", []) or []
+    recommended_pathway = primary.get("trayectoria_recomendada") or primary.get("recommendation") or ""
+    summary = primary.get("resumen_del_caso") or (result.get("report_sections", {}) or {}).get("summary", "")
+    next_action = ""
+    if str(data.get("mpmri_quality", "")) == "Subóptima":
+        next_action = "Repetir resonancia magnética multiparamétrica de alta calidad"
+    elif str(data.get("planned_biopsy_type", "")) not in {"", "Pendiente"}:
+        next_action = f"{data.get('planned_biopsy_type')} por vía {data.get('planned_biopsy_route') or 'no definida'}"
+    elif recommended_pathway:
+        next_action = recommended_pathway
+    if not summary and not next_action and not treatments:
+        return None
+    trigger_conditions = []
+    if _safe_int(data.get("pirads_score"), 0) >= 4:
+        trigger_conditions.append("Lesión PI-RADS 4-5")
+    if _safe_float(data.get("psad"), 0) >= 0.15:
+        trigger_conditions.append("Densidad del antígeno prostático específico elevada")
+    if _is_truthy(data.get("dre_suspicious")):
+        trigger_conditions.append("Tacto rectal sospechoso")
+    if _safe_float(data.get("psa_velocity_ng_ml_year"), 0) >= 0.75:
+        trigger_conditions.append("Cinética de antígeno prostático específico en ascenso")
+    if state == "post_negative_biopsy_followup" and _is_truthy(data.get("persistent_lesion_signal")):
+        trigger_conditions.append("Persistencia de lesión sospechosa tras biopsia benigna")
+    if not trigger_conditions:
+        trigger_conditions.append("Reevaluación estructurada según la Red Nacional Integral del Cáncer (NCCN) y la Asociación Europea de Urología (EAU)")
+    return {
+        "source_state": state,
+        "plan_type": "reactivacion_diagnostica" if state == "post_negative_biopsy_followup" else "confirmacion_histologica",
+        "plan_status": "planificado",
+        "management_intent_status": "candidate",
+        "plan_summary": summary,
+        "recommended_pathway": recommended_pathway or next_action,
+        "next_action": next_action or recommended_pathway,
+        "risk_calculator_pathway": data.get("risk_calculator_pathway"),
+        "trigger_conditions": trigger_conditions,
+        "evidence_context": [
+            "La recomendación principal sigue anclada en la Red Nacional Integral del Cáncer (NCCN) 5.2026 y la Asociación Europea de Urología (EAU) 2026.",
+            "El plan diagnóstico se persiste como hecho temprano y no como confirmación histológica.",
+        ],
+    }
+
+
+def _build_biopsy_trigger_payload(data, assessment=None):
+    state = str(data.get("assessment_state") or "").strip()
+    if state not in {"diagnostic_workup", "post_negative_biopsy_followup"}:
+        return None
+    result = (assessment or {}).get("result_snapshot", {}) if assessment else {}
+    primary = result.get("nccn_primary", {}) or {}
+    treatments = result.get("eligible_treatments", []) or []
+    biopsy_recommended = any("biops" in str((item if isinstance(item, str) else item.get("name", ""))).lower() for item in treatments)
+    trigger_reason = data.get("repeat_biopsy_trigger") if state == "post_negative_biopsy_followup" else None
+    if not trigger_reason:
+        if biopsy_recommended:
+            trigger_reason = "Sospecha clínica suficiente para confirmación histológica"
+        else:
+            trigger_reason = "Mantener trigger estructurado si cambian densidad, MRI o cinética del antígeno prostático específico"
+    activation_conditions = []
+    if _safe_int(data.get("pirads_score"), 0) >= 4:
+        activation_conditions.append("Lesión PI-RADS 4-5")
+    if _safe_float(data.get("psad"), 0) >= 0.15:
+        activation_conditions.append("PSAD >= 0.15")
+    if _is_truthy(data.get("dre_suspicious")):
+        activation_conditions.append("Tacto rectal sospechoso")
+    if state == "post_negative_biopsy_followup" and _is_truthy(data.get("persistent_lesion_signal")):
+        activation_conditions.append("Lesión persistente tras biopsia benigna")
+    if not activation_conditions:
+        activation_conditions.append(primary.get("recommendation") or "Reevaluación diagnóstica con control seriado")
+    return {
+        "source_state": state,
+        "trigger_reason": trigger_reason,
+        "priority": "alta" if biopsy_recommended else "vigilada",
+        "planned_biopsy_type": (data.get("planned_biopsy_type") or data.get("prior_biopsy_type") or "Pendiente") if biopsy_recommended else "Pendiente",
+        "planned_biopsy_route": (data.get("planned_biopsy_route") or "No definida") if biopsy_recommended else "No definida",
+        "trigger_status": "pendiente_de_confirmacion",
+        "management_intent_status": "candidate",
+        "activation_conditions": activation_conditions,
+    }
 
 
 def _build_genomic_payload(data):
@@ -986,7 +1254,11 @@ def _build_genomic_payload(data):
 
     test_type = "Panel_HRR"
     if str(data.get("genomic_classifier", "No realizado")) != "No realizado":
-        test_type = str(data.get("genomic_classifier"))
+        classifier = str(data.get("genomic_classifier"))
+        if classifier == "Oncotype":
+            test_type = "OncotypeDX_GPS"
+        else:
+            test_type = classifier
     elif str(data.get("decipher_risk", "No realizado")) != "No realizado":
         test_type = "Decipher"
 
@@ -997,11 +1269,19 @@ def _build_genomic_payload(data):
         actionable_findings.append("BRCA2")
     if _is_truthy(data.get("tmb_high")):
         actionable_findings.append("TMB-high")
+    if str(data.get("genomic_classifier_result", "No aplica")) not in {"", "No aplica"}:
+        actionable_findings.append(
+            f"{test_type}:{data.get('genomic_classifier_result')}"
+        )
+    if _present_text := str(data.get("biomarker_source") or data.get("molecular_assay_source") or "").strip():
+        actionable_findings.append(f"Fuente:{_present_text}")
 
     return {
         "test_date": data.get("molecular_report_date") or data.get("molecular_assay_date") or datetime.now().strftime("%Y-%m-%d"),
         "test_type": test_type,
         "decipher_risk": None if str(data.get("decipher_risk", "No realizado")) == "No realizado" else data.get("decipher_risk"),
+        "prolaris_score": data.get("genomic_classifier_result") if test_type == "Prolaris" else None,
+        "gps_score": data.get("genomic_classifier_result") if test_type == "OncotypeDX_GPS" else None,
         "brca2_status": data.get("brca2_status"),
         "msi_status": data.get("msi_status"),
         "hrr_overall": data.get("hrr_status", "Desconocido"),
@@ -1016,31 +1296,51 @@ def _build_genomic_payload(data):
 
 
 def _build_biopsy_payload(data):
-    if not _has_any_value(
+    assessment_state = str(data.get("assessment_state") or "").strip()
+    has_histology = _has_any_value(
         data,
         [
-            "planned_biopsy_type",
-            "prior_biopsy_type",
+            "gleason_primary",
+            "gleason_secondary",
+            "isup_grade",
             "num_cores_positive",
             "total_cores",
-            "isup_grade",
             "percent_pattern_4",
+            "cribriform_pattern",
+            "intraductal_carcinoma",
         ],
-    ):
+    )
+    if assessment_state in {"diagnostic_workup", "post_negative_biopsy_followup"} or not has_histology:
         return None
+    adverse_histology_variant_type = str(data.get("adverse_histology_variant_type", "none") or "none").strip()
+    if adverse_histology_variant_type == "none" and _is_truthy(data.get("rare_histology_variant")):
+        adverse_histology_variant_type = "other_aggressive_unspecified"
+    adverse_histology_variant_detail = str(data.get("adverse_histology_variant_detail", "") or "").strip()
     return {
         "biopsy_date": data.get("prior_biopsy_date") or data.get("mpmri_date") or datetime.now().strftime("%Y-%m-%d"),
         "biopsy_type": data.get("prior_biopsy_type") or data.get("planned_biopsy_type") or "sistematica",
         "biopsy_context": "rebiopsia" if data.get("assessment_state") == "post_negative_biopsy_followup" else "diagnostica",
         "total_cores": _safe_int(data.get("total_cores"), 12),
         "positive_cores": _safe_int(data.get("num_cores_positive"), 0),
-        "gleason_primary": _safe_int(data.get("gleason_primary"), 3),
-        "gleason_secondary": _safe_int(data.get("gleason_secondary"), 3),
-        "isup_grade": _safe_int(data.get("isup_grade"), 1),
+        "gleason_primary": _safe_int(data.get("gleason_primary"), None),
+        "gleason_secondary": _safe_int(data.get("gleason_secondary"), None),
+        "isup_grade": _safe_int(data.get("isup_grade"), None),
         "porcentaje_patron_4": _safe_float(data.get("percent_pattern_4"), 0),
+        "max_core_involvement_pct": _safe_float(data.get("max_core_involvement"), 0) * 100,
         "patron_cribiforme": 1 if _is_truthy(data.get("cribriform_pattern")) else 0,
         "carcinoma_intraductal": 1 if _is_truthy(data.get("intraductal_carcinoma")) else 0,
-        "pathologist_notes": str(data.get("repeat_biopsy_trigger") or ""),
+        "adverse_histology_variant_type": adverse_histology_variant_type,
+        "adverse_histology_variant_detail": adverse_histology_variant_detail,
+        "pathologist_notes": " | ".join(
+            item
+            for item in [
+                str(data.get("repeat_biopsy_trigger") or "").strip(),
+                "MRI-targeted previa" if _is_truthy(data.get("prior_biopsy_mri_targeted")) else "",
+                f"Variante adversa: {adverse_histology_variant_type}" if adverse_histology_variant_type not in {"", "none"} else "",
+                adverse_histology_variant_detail,
+            ]
+            if item
+        ),
     }
 
 
@@ -1074,7 +1374,11 @@ def _build_pro_payload(data):
 
 
 def _should_enroll_as(data):
-    return data.get("assessment_state") == "localized_initial" and _is_truthy(data.get("confirmatory_biopsy_planned"))
+    return (
+        data.get("assessment_state") == "localized_initial"
+        and str(data.get("management_intent_status") or "").strip() in {"chosen", "delivered", "completed"}
+        and str(data.get("selected_management") or "").strip() == "active_surveillance"
+    )
 
 
 def _build_bcr_payload(data):
@@ -1092,15 +1396,24 @@ def _build_bcr_payload(data):
         "bcr_detected": 1 if data.get("assessment_state") == "recurrence_bcr" else 0,
         "bcr_date": datetime.now().strftime("%Y-%m-%d"),
         "bcr_psa": data.get("psa_current") or data.get("psa_postop") or data.get("baseline_psa"),
+        "bcr_definition": "BCR2" if _is_truthy(data.get("bcr2")) else "BCR",
         "psadt_at_bcr": data.get("psadt_months"),
         "time_to_bcr_months": data.get("time_to_recurrence_months"),
         "salvage_treatment": salvage_treatment,
+        "salvage_response": "pendiente",
     }
 
 
 def _build_surgery_payload(data):
     if data.get("assessment_state") != "post_prostatectomy" and not _has_any_value(data, ["pathologic_stage", "margin_location", "surgical_margin"]):
         return None
+    capra_s_score = None
+    try:
+        from clinical_scores import calculate_capra_s
+
+        capra_s_score = calculate_capra_s(data).get("score")
+    except Exception:
+        capra_s_score = None
     return {
         "surgery_date": data.get("local_therapy_date") or datetime.now().strftime("%Y-%m-%d"),
         "surgery_type": "RP_robotica",
@@ -1113,6 +1426,7 @@ def _build_surgery_payload(data):
         "ece_pathological": 1 if _is_truthy(data.get("ece_status")) else 0,
         "svi_pathological": 1 if _is_truthy(data.get("svi_status")) else 0,
         "lni_pathological": 1 if _is_truthy(data.get("lni_status")) else 0,
+        "capra_s_score": capra_s_score,
     }
 
 
@@ -1129,7 +1443,7 @@ def _build_radiation_payload(data):
         "dose_per_fraction_gy": None,
     }
 
-def register_new_patient(data):
+def register_new_patient(data, assessment=None):
     """
     Registra un nuevo paciente y su línea base clínica + tratamiento inicial.
     Retorna (success: bool, message: str)
@@ -1137,6 +1451,7 @@ def register_new_patient(data):
     try:
         assessment_state = str(data.get("assessment_state") or "").strip()
         advanced_states = {
+            "adt_progression_verification",
             "mcspc_oligo_metachronous",
             "mcspc_low_volume_sync_oligo",
             "mcspc_high_volume",
@@ -1247,6 +1562,36 @@ def register_new_patient(data):
         for imaging_payload in _build_imaging_payloads(data):
             save_imaging_study(patient_id, imaging_payload)
 
+        mri_fact_payload = _build_mri_fact_payload(data)
+        if mri_fact_payload:
+            save_mri_fact(
+                patient_id,
+                {
+                    **mri_fact_payload,
+                    "assessment_id": data.get("assessment_id") or (assessment or {}).get("id"),
+                },
+            )
+
+        diagnostic_plan_payload = _build_diagnostic_plan_payload(data, assessment)
+        if diagnostic_plan_payload:
+            save_diagnostic_plan(
+                patient_id,
+                {
+                    **diagnostic_plan_payload,
+                    "assessment_id": data.get("assessment_id") or (assessment or {}).get("id"),
+                },
+            )
+
+        biopsy_trigger_payload = _build_biopsy_trigger_payload(data, assessment)
+        if biopsy_trigger_payload:
+            save_biopsy_trigger(
+                patient_id,
+                {
+                    **biopsy_trigger_payload,
+                    "assessment_id": data.get("assessment_id") or (assessment or {}).get("id"),
+                },
+            )
+
         genomic_payload = _build_genomic_payload(data)
         if genomic_payload:
             save_genomic_profile(patient_id, genomic_payload)
@@ -1339,6 +1684,11 @@ def get_patient_history(nss_or_id):
         c.execute("SELECT * FROM imaging_studies WHERE patient_id = ? ORDER BY study_date DESC", (patient_id,))
         imaging = [dict(row) for row in c.fetchall()]
 
+        c.execute("SELECT * FROM mri_facts WHERE patient_id = ? ORDER BY fact_date DESC, id DESC", (patient_id,))
+        mri_facts = [dict(row) for row in c.fetchall()]
+        for item in mri_facts:
+            item["findings"] = _parse_json_blob(item.pop("findings_json", None), {})
+
         # 9. Genomics
         c.execute("SELECT * FROM genomic_profile WHERE patient_id = ? ORDER BY test_date DESC LIMIT 1", (patient_id,))
         genomics = c.fetchone()
@@ -1346,6 +1696,17 @@ def get_patient_history(nss_or_id):
         # 10. Biopsies
         c.execute("SELECT * FROM biopsy_details WHERE patient_id = ? ORDER BY biopsy_date ASC", (patient_id,))
         biopsies = [dict(row) for row in c.fetchall()]
+
+        c.execute("SELECT * FROM diagnostic_plans WHERE patient_id = ? ORDER BY plan_date DESC, id DESC", (patient_id,))
+        diagnostic_plans = [dict(row) for row in c.fetchall()]
+        for item in diagnostic_plans:
+            item["trigger_conditions"] = _parse_json_blob(item.pop("trigger_conditions_json", None), [])
+            item["evidence_context"] = _parse_json_blob(item.pop("evidence_context_json", None), [])
+
+        c.execute("SELECT * FROM biopsy_trigger_events WHERE patient_id = ? ORDER BY trigger_date DESC, id DESC", (patient_id,))
+        biopsy_triggers = [dict(row) for row in c.fetchall()]
+        for item in biopsy_triggers:
+            item["activation_conditions"] = _parse_json_blob(item.pop("activation_conditions_json", None), [])
 
         # 11. Active Surveillance
         c.execute("SELECT * FROM active_surveillance WHERE patient_id = ? ORDER BY enrollment_date DESC LIMIT 1", (patient_id,))
@@ -1394,8 +1755,11 @@ def get_patient_history(nss_or_id):
             'demographics': dict(demographics) if demographics else {},
             'family_history': family_history,
             'imaging': imaging,
+            'mri_facts': mri_facts,
             'genomics': dict(genomics) if genomics else {},
             'biopsies': biopsies,
+            'diagnostic_plans': diagnostic_plans,
+            'biopsy_triggers': biopsy_triggers,
             'active_surveillance': dict(as_record) if as_record else {},
             'bcr': dict(bcr) if bcr else {},
             'surgery': dict(surgery) if surgery else {},
@@ -1608,6 +1972,111 @@ def save_imaging_study(patient_id, data):
         return False
 
 
+def save_mri_fact(patient_id, data):
+    """Guarda hechos tempranos de resonancia magnética multiparamétrica para seguimiento diagnóstico."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute(
+            '''
+            INSERT INTO mri_facts (
+                patient_id, assessment_id, fact_date, mpmri_quality, decision_usable,
+                pirads_score, lesion_location, lesion_size_mm, prostate_volume_ml, findings_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''',
+            (
+                patient_id,
+                data.get("assessment_id"),
+                data.get("fact_date", datetime.now().strftime("%Y-%m-%d")),
+                data.get("mpmri_quality"),
+                _safe_int(data.get("decision_usable"), 0),
+                data.get("pirads_score"),
+                data.get("lesion_location"),
+                data.get("lesion_size_mm"),
+                data.get("prostate_volume_ml"),
+                json.dumps(data.get("findings", {}), ensure_ascii=False),
+            ),
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"Error saving MRI fact: {e}")
+        return False
+
+
+def save_diagnostic_plan(patient_id, data):
+    """Guarda el plan diagnóstico temprano sin convertirlo en confirmación histológica."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute(
+            '''
+            INSERT INTO diagnostic_plans (
+                patient_id, assessment_id, plan_date, source_state, plan_type, plan_status,
+                management_intent_status, plan_summary, recommended_pathway, next_action,
+                risk_calculator_pathway, trigger_conditions_json, evidence_context_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''',
+            (
+                patient_id,
+                data.get("assessment_id"),
+                data.get("plan_date", datetime.now().strftime("%Y-%m-%d")),
+                data.get("source_state"),
+                data.get("plan_type"),
+                data.get("plan_status", "planificado"),
+                data.get("management_intent_status", "candidate"),
+                data.get("plan_summary"),
+                data.get("recommended_pathway"),
+                data.get("next_action"),
+                data.get("risk_calculator_pathway"),
+                json.dumps(data.get("trigger_conditions", []), ensure_ascii=False),
+                json.dumps(data.get("evidence_context", []), ensure_ascii=False),
+            ),
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"Error saving diagnostic plan: {e}")
+        return False
+
+
+def save_biopsy_trigger(patient_id, data):
+    """Guarda un trigger de biopsia como hecho temprano pendiente de confirmación."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute(
+            '''
+            INSERT INTO biopsy_trigger_events (
+                patient_id, assessment_id, trigger_date, source_state, trigger_reason,
+                priority, planned_biopsy_type, planned_biopsy_route, trigger_status,
+                management_intent_status, activation_conditions_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''',
+            (
+                patient_id,
+                data.get("assessment_id"),
+                data.get("trigger_date", datetime.now().strftime("%Y-%m-%d")),
+                data.get("source_state"),
+                data.get("trigger_reason"),
+                data.get("priority"),
+                data.get("planned_biopsy_type"),
+                data.get("planned_biopsy_route"),
+                data.get("trigger_status", "pendiente_de_confirmacion"),
+                data.get("management_intent_status", "candidate"),
+                json.dumps(data.get("activation_conditions", []), ensure_ascii=False),
+            ),
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"Error saving biopsy trigger: {e}")
+        return False
+
+
 def save_genomic_profile(patient_id, data):
     """Guarda perfil genómico del paciente."""
     try:
@@ -1655,19 +2124,21 @@ def save_biopsy(patient_id, data):
                 patron_cribiforme, carcinoma_intraductal,
                 perineural_invasion, lymphovascular_invasion,
                 porcentaje_patron_4, porcentaje_patron_5,
-                upgrade_from_previous, previous_isup, pathologist_notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                upgrade_from_previous, previous_isup, adverse_histology_variant_type,
+                adverse_histology_variant_detail, pathologist_notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             patient_id, data.get('biopsy_date', datetime.now().strftime('%Y-%m-%d')),
             data.get('biopsy_type', 'sistematica'), data.get('biopsy_context', 'diagnostica'),
             _safe_int(data.get('total_cores', 12), 12), _safe_int(data.get('positive_cores', 0), 0),
             _safe_float(data.get('max_core_involvement_pct', 0), 0),
-            _safe_int(data.get('gleason_primary', 3), 3), _safe_int(data.get('gleason_secondary', 3), 3),
-            data.get('gleason_tertiary'), _safe_int(data.get('isup_grade', 1), 1),
+            _safe_int(data.get('gleason_primary'), None), _safe_int(data.get('gleason_secondary'), None),
+            data.get('gleason_tertiary'), _safe_int(data.get('isup_grade'), None),
             _safe_int(data.get('patron_cribiforme', 0), 0), _safe_int(data.get('carcinoma_intraductal', 0), 0),
             _safe_int(data.get('perineural_invasion', 0), 0), _safe_int(data.get('lymphovascular_invasion', 0), 0),
             _safe_float(data.get('porcentaje_patron_4', 0), 0), _safe_float(data.get('porcentaje_patron_5', 0), 0),
             _safe_int(data.get('upgrade_from_previous', 0), 0), data.get('previous_isup'),
+            data.get('adverse_histology_variant_type'), data.get('adverse_histology_variant_detail'),
             data.get('pathologist_notes')
         ))
         conn.commit()
@@ -1944,6 +2415,13 @@ def get_patient_full_record(nss_or_id):
         # 5. Imaging Studies
         c.execute("SELECT * FROM imaging_studies WHERE patient_id = ? ORDER BY study_date DESC", (patient_id,))
         imaging = [dict(row) for row in c.fetchall()]
+        for item in imaging:
+            item["findings"] = _parse_json_blob(item.pop("findings_json", None), {})
+
+        c.execute("SELECT * FROM mri_facts WHERE patient_id = ? ORDER BY fact_date DESC, id DESC", (patient_id,))
+        mri_facts = [dict(row) for row in c.fetchall()]
+        for item in mri_facts:
+            item["findings"] = _parse_json_blob(item.pop("findings_json", None), {})
 
         # 6. Genomic Profile
         c.execute("SELECT * FROM genomic_profile WHERE patient_id = ? ORDER BY test_date DESC LIMIT 1", (patient_id,))
@@ -1952,6 +2430,17 @@ def get_patient_full_record(nss_or_id):
         # 7. Biopsies
         c.execute("SELECT * FROM biopsy_details WHERE patient_id = ? ORDER BY biopsy_date ASC", (patient_id,))
         biopsies = [dict(row) for row in c.fetchall()]
+
+        c.execute("SELECT * FROM diagnostic_plans WHERE patient_id = ? ORDER BY plan_date DESC, id DESC", (patient_id,))
+        diagnostic_plans = [dict(row) for row in c.fetchall()]
+        for item in diagnostic_plans:
+            item["trigger_conditions"] = _parse_json_blob(item.pop("trigger_conditions_json", None), [])
+            item["evidence_context"] = _parse_json_blob(item.pop("evidence_context_json", None), [])
+
+        c.execute("SELECT * FROM biopsy_trigger_events WHERE patient_id = ? ORDER BY trigger_date DESC, id DESC", (patient_id,))
+        biopsy_triggers = [dict(row) for row in c.fetchall()]
+        for item in biopsy_triggers:
+            item["activation_conditions"] = _parse_json_blob(item.pop("activation_conditions_json", None), [])
 
         # 8. Active Surveillance
         c.execute("SELECT * FROM active_surveillance WHERE patient_id = ? ORDER BY enrollment_date DESC LIMIT 1", (patient_id,))
@@ -2008,8 +2497,11 @@ def get_patient_full_record(nss_or_id):
             'demographics': dict(demographics) if demographics else {},
             'family_history': family_history,
             'imaging': imaging,
+            'mri_facts': mri_facts,
             'genomics': dict(genomics) if genomics else {},
             'biopsies': biopsies,
+            'diagnostic_plans': diagnostic_plans,
+            'biopsy_triggers': biopsy_triggers,
             'active_surveillance': dict(as_record) if as_record else {},
             'bcr': dict(bcr) if bcr else {},
             'surgery': dict(surgery) if surgery else {},
@@ -2069,16 +2561,26 @@ def recompute_patient_care_plan(nss_or_id):
         from prostanet.application.module_registry import ModuleRegistry
 
         registry = ModuleRegistry()
-        updated_result = registry.evaluate_module(assessment["module_id"], assessment.get("input_snapshot", {}))
+        from prostanet.domains.patient_tracking.event_graph import (
+            build_processing_summary,
+            derive_management_intent_status,
+            derive_timeline_event_kind,
+            merge_record_into_assessment_payload,
+        )
+
+        record = get_patient_full_record(patient_id)
+        enriched_payload = merge_record_into_assessment_payload(assessment.get("input_snapshot", {}), record)
+        updated_result = registry.evaluate_module(assessment["module_id"], enriched_payload)
         updated_guidelines = registry.get_guidelines_metadata()
         c.execute(
             '''
             UPDATE clinical_assessments
-            SET state = ?, result_snapshot = ?, guideline_versions = ?, status = ?
+            SET state = ?, input_snapshot = ?, result_snapshot = ?, guideline_versions = ?, status = ?
             WHERE id = ?
             ''',
             (
                 updated_result.get("state", assessment.get("state")),
+                _json_blob(enriched_payload),
                 _json_blob(updated_result),
                 _json_blob(updated_guidelines),
                 assessment.get("status", "linked"),
@@ -2086,9 +2588,13 @@ def recompute_patient_care_plan(nss_or_id):
             ),
         )
         assessment["state"] = updated_result.get("state", assessment.get("state"))
+        assessment["input_snapshot"] = enriched_payload
         assessment["result_snapshot"] = updated_result
         assessment["guideline_versions"] = updated_guidelines
         snapshot = _assessment_longitudinal_snapshot(assessment)
+        processing = build_processing_summary(assessment.get("state"), enriched_payload, record)
+        management_intent_status = derive_management_intent_status(assessment.get("state"), updated_result, record)
+        event_kind = derive_timeline_event_kind(assessment.get("state"), updated_result, record)
         _ensure_prior_history_row(c, patient_id)
         c.execute(
             '''
@@ -2098,6 +2604,8 @@ def recompute_patient_care_plan(nss_or_id):
                 assessment_module = ?,
                 assessment_state = ?,
                 assessment_summary = ?,
+                recommendation_family = ?,
+                management_intent_status = ?,
                 current_state = ?,
                 transition_reason = ?,
                 objective_progression_json = ?,
@@ -2112,12 +2620,19 @@ def recompute_patient_care_plan(nss_or_id):
                 assessment.get("module_id"),
                 assessment.get("state"),
                 snapshot["summary"],
+                snapshot.get("recommendation_family", ""),
+                management_intent_status,
                 snapshot["current_state"],
                 snapshot["transition_reason"],
                 _json_blob(snapshot["objective_progression"]),
                 _json_blob(snapshot["monitoring_plan"]),
                 _json_blob(snapshot["care_overlays"]),
-                _json_blob(snapshot["guideline_snapshot"]),
+                _json_blob({
+                    **snapshot["guideline_snapshot"],
+                    "decision_quality": snapshot.get("decision_quality", {}),
+                    "validated_algorithms": snapshot.get("validated_algorithms", []),
+                    "processing_summary": processing,
+                }),
                 patient_id,
             ),
         )
@@ -2126,11 +2641,18 @@ def recompute_patient_care_plan(nss_or_id):
             patient_id,
             assessment["id"],
             assessment.get("state"),
+            event_kind,
+            management_intent_status,
             f"Recomputación longitudinal: {snapshot['transition_reason']}",
             snapshot["objective_progression"],
             snapshot["monitoring_plan"],
             snapshot["care_overlays"],
-            snapshot["guideline_snapshot"],
+            {
+                **snapshot["guideline_snapshot"],
+                "decision_quality": snapshot.get("decision_quality", {}),
+                "validated_algorithms": snapshot.get("validated_algorithms", []),
+                "processing_summary": processing,
+            },
         )
         conn.commit()
         conn.close()
@@ -2261,6 +2783,9 @@ def export_patient_data(nss, format='dict'):
         flat['n_followups'] = len(record.get('follow_ups', []))
         flat['n_biopsies'] = len(record.get('biopsies', []))
         flat['n_imaging'] = len(record.get('imaging', []))
+        flat['n_mri_facts'] = len(record.get('mri_facts', []))
+        flat['n_diagnostic_plans'] = len(record.get('diagnostic_plans', []))
+        flat['n_biopsy_triggers'] = len(record.get('biopsy_triggers', []))
         flat['n_treatments'] = len(record.get('treatments', []))
         flat['n_alerts'] = len(record.get('alerts', []))
         return flat

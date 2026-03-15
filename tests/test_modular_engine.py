@@ -25,6 +25,7 @@ def test_modular_metadata_and_hub_routes_are_available(app_client):
     assert "post_negative_biopsy_followup" in module_ids
     assert "localized_initial" in module_ids
     assert "recurrence_bcr" in module_ids
+    assert "adt_progression_verification" in module_ids
     assert "m1_crpc" in module_ids
 
     guideline_response = client.get("/api/guidelines/metadata")
@@ -40,6 +41,9 @@ def test_modular_metadata_and_hub_routes_are_available(app_client):
     assert schema_data["success"] is True
     assert "ISUP grade group" not in str(schema_data)
     assert "Grupo de grado de la Sociedad Internacional de Patología Urológica" in str(schema_data)
+    localized_fields = {field["name"] for field in schema_data["schema"]["fields"]}
+    assert "prior_mpmri_pirads_score" in localized_fields
+    assert "adverse_histology_variant_type" in localized_fields
 
     diagnostic_schema_response = client.get("/api/modules/diagnostic_workup/schema")
     assert diagnostic_schema_response.status_code == 200
@@ -51,6 +55,14 @@ def test_modular_metadata_and_hub_routes_are_available(app_client):
     assert lesion_field["default"] == "No especificada"
     assert "Zona periférica posterior" in lesion_field["options"]
 
+    classifier_schema_response = client.get("/api/modules/state-classifier/schema")
+    assert classifier_schema_response.status_code == 200
+    classifier_schema_data = classifier_schema_response.get_json()
+    classifier_fields = {field["name"]: field for field in classifier_schema_data["schema"]["fields"]}
+    assert classifier_fields["prior_prostatectomy"]["label"] == "Prostatectomía radical previa por cáncer de próstata"
+    assert classifier_fields["prior_radiation"]["label"] == "Radioterapia previa por cáncer de próstata"
+    assert classifier_fields["bcr2"]["label"] == "Segunda recurrencia bioquímica tras tratamiento local"
+
     hub_response = client.get("/clinical-hub")
     assert hub_response.status_code == 200
     hub_html = hub_response.get_data(as_text=True)
@@ -58,6 +70,17 @@ def test_modular_metadata_and_hub_routes_are_available(app_client):
     assert "Legacy calculator" not in hub_html
     assert "Diagnóstico confirmado de cáncer de próstata" in hub_html
     assert "Biopsia prostática previa benigna" in hub_html
+    assert "Contexto de progresión sistémica" in hub_html
+    assert "No aplica / sin contexto de progresión bajo ADT" in hub_html
+    assert "Progresión bajo ADT: verificar castración" in hub_html
+    assert "1. Confirmación diagnóstica" in hub_html
+    assert "2. Tratamiento local previo y recurrencia" in hub_html
+    assert "3. Enfermedad metastásica conocida" in hub_html
+    assert "4. Progresión bajo ADT / CRPC" in hub_html
+    assert "Prostatectomía radical previa por cáncer de próstata" in hub_html
+    assert "Radioterapia previa por cáncer de próstata" in hub_html
+    assert "Segunda recurrencia bioquímica tras tratamiento local" in hub_html
+    assert "Este contexto solo aplica cuando ya existe cáncer de próstata confirmado" in hub_html
     assert "md:hidden" in hub_html
 
     patients_html = client.get("/patients").get_data(as_text=True)
@@ -87,12 +110,51 @@ def test_state_classifier_routes_patients_to_expected_modules(app_client):
     assert diagnostic.status_code == 200
     assert diagnostic.get_json()["state"] == "diagnostic_workup"
 
+    diagnostic_residual = client.post(
+        "/api/state-classifier",
+        json={
+            "known_cancer_diagnosis": 0,
+            "prior_negative_biopsy": 0,
+            "prior_prostatectomy": 1,
+            "prior_radiation": 1,
+            "bcr2": 1,
+            "systemic_progression_context": "confirmed_crpc",
+            "current_adt_context": "medical_adt_continuous",
+            "castrate_testosterone_status": "confirmed_castrate",
+            "conventional_imaging_status": "M1",
+            "metastasis_site": "Bone",
+            "metastasis_count": 4,
+            "metachronous_metastasis": 1,
+            "volume_disease": "High",
+        },
+    )
+    assert diagnostic_residual.status_code == 200
+    assert diagnostic_residual.get_json()["state"] == "diagnostic_workup"
+
     benign_followup = client.post(
         "/api/state-classifier",
         json={"known_cancer_diagnosis": 0, "prior_negative_biopsy": 1, "metastasis_site": "M0"},
     )
     assert benign_followup.status_code == 200
     assert benign_followup.get_json()["state"] == "post_negative_biopsy_followup"
+
+    benign_followup_residual = client.post(
+        "/api/state-classifier",
+        json={
+            "known_cancer_diagnosis": 0,
+            "prior_negative_biopsy": 1,
+            "prior_prostatectomy": 1,
+            "bcr2": 1,
+            "systemic_progression_context": "progression_on_adt_verify_castration",
+            "current_adt_context": "medical_adt_continuous",
+            "castrate_testosterone_status": "unknown",
+            "metastasis_site": "Bone",
+            "metastasis_count": 3,
+            "volume_disease": "High",
+        },
+    )
+    assert benign_followup_residual.status_code == 200
+    assert benign_followup_residual.get_json()["state"] == "post_negative_biopsy_followup"
 
     recurrence = client.post(
         "/api/state-classifier",
@@ -107,6 +169,33 @@ def test_state_classifier_routes_patients_to_expected_modules(app_client):
     )
     assert crpc.status_code == 200
     assert crpc.get_json()["state"] == "m1_crpc"
+
+    adt_verification = client.post(
+        "/api/state-classifier",
+        json={
+            "known_cancer_diagnosis": 1,
+            "systemic_progression_context": "progression_on_adt_verify_castration",
+            "current_adt_context": "medical_adt_continuous",
+            "castrate_testosterone_status": "unknown",
+            "progression_pattern": "biochemical_only",
+            "conventional_imaging_status": "not_restaged",
+            "prior_prostatectomy": 1,
+        },
+    )
+    assert adt_verification.status_code == 200
+    assert adt_verification.get_json()["state"] == "adt_progression_verification"
+
+    nmcrpc = client.post(
+        "/api/state-classifier",
+        json={
+            "known_cancer_diagnosis": 1,
+            "systemic_progression_context": "confirmed_crpc",
+            "castrate_testosterone_status": "confirmed_castrate",
+            "conventional_imaging_status": "M0",
+        },
+    )
+    assert nmcrpc.status_code == 200
+    assert nmcrpc.get_json()["state"] == "m0_crpc"
 
 
 def test_localized_module_uses_nccn_2026_and_eau_2026_logic(app_client):
@@ -125,6 +214,8 @@ def test_localized_module_uses_nccn_2026_and_eau_2026_logic(app_client):
         "psad": 0.10,
         "life_expectancy_years": 15,
         "prior_mpmri": 1,
+        "prior_mpmri_pirads_score": "2",
+        "prior_mpmri_targeted_biopsy_status": "si",
         "confirmatory_biopsy_planned": 1,
         "cribriform_pattern": 0,
         "intraductal_carcinoma": 0,
@@ -159,6 +250,149 @@ def test_localized_module_uses_nccn_2026_and_eau_2026_logic(app_client):
     result = response.get_json()["result"]
     assert result["nccn_primary"]["risk_group"] == "UNFAVORABLE INTERMEDIATE"
     assert result["eau_comparison"]["risk_group"] == "INTERMEDIATE (UNFAVORABLE)"
+
+
+def test_adt_progression_verification_requires_castration_before_crpc_redirection(app_client):
+    client, _ = app_client
+
+    not_castrate = client.post(
+        "/api/modules/adt_progression_verification/evaluate",
+        json={
+            "current_adt_context": "medical_adt_continuous",
+            "castrate_testosterone_status": "not_castrate",
+            "testosterone_value": 180,
+            "progression_pattern": "biochemical_only",
+            "conventional_imaging_status": "M0",
+            "psadt_months": 8,
+        },
+    )
+    assert not_castrate.status_code == 200
+    not_castrate_result = not_castrate.get_json()["result"]
+    assert not_castrate_result["decision_quality"]["state_classification"] == "Fracaso de supresión androgénica o castración inadecuada"
+    assert "optimizar" in not_castrate_result["eligible_treatments"][0]["name"].lower()
+
+    nmcrpc = client.post(
+        "/api/modules/adt_progression_verification/evaluate",
+        json={
+            "current_adt_context": "medical_adt_continuous",
+            "castrate_testosterone_status": "confirmed_castrate",
+            "testosterone_value": 18,
+            "progression_pattern": "biochemical_only",
+            "conventional_imaging_status": "M0",
+            "psadt_months": 7,
+        },
+    )
+    assert nmcrpc.status_code == 200
+    nmcrpc_result = nmcrpc.get_json()["result"]
+    assert nmcrpc_result["decision_quality"]["state_classification"] == "Candidato confirmado a enfermedad resistente a la castración sin metástasis"
+    assert "sin metástasis" in nmcrpc_result["eligible_treatments"][0]["name"].lower()
+
+    mcrpc = client.post(
+        "/api/modules/adt_progression_verification/evaluate",
+        json={
+            "current_adt_context": "orchiectomy",
+            "orchiectomy_status": 1,
+            "castrate_testosterone_status": "confirmed_castrate",
+            "testosterone_value": 12,
+            "progression_pattern": "radiographic",
+            "conventional_imaging_status": "M1",
+            "psadt_months": 6,
+        },
+    )
+    assert mcrpc.status_code == 200
+    mcrpc_result = mcrpc.get_json()["result"]
+    assert mcrpc_result["decision_quality"]["state_classification"] == "Candidato confirmado a enfermedad resistente a la castración con metástasis"
+    assert "con metástasis" in mcrpc_result["eligible_treatments"][0]["name"].lower()
+
+
+def test_localized_initial_uses_pirads_and_histology_variant_to_restrict_active_surveillance(app_client):
+    client, _ = app_client
+
+    pirads_high = client.post(
+        "/api/modules/localized_initial/evaluate",
+        json={
+            "age": 63,
+            "life_expectancy_years": 15,
+            "psa": 5.9,
+            "psad": 0.11,
+            "clinical_tstage": "T1c",
+            "gleason_primary": 3,
+            "gleason_secondary": 3,
+            "isup_grade": 1,
+            "num_cores_positive": 2,
+            "total_cores": 12,
+            "max_core_involvement": 0.2,
+            "percent_pattern_4": 0,
+            "prior_mpmri": 1,
+            "prior_mpmri_pirads_score": "5",
+            "prior_mpmri_targeted_biopsy_status": "no",
+            "confirmatory_biopsy_planned": 1,
+            "nodal_status": "N0",
+            "metastasis_site": "M0",
+        },
+    )
+    assert pirads_high.status_code == 200
+    pirads_result = pirads_high.get_json()["result"]
+    names = {item["name"] for item in pirads_result["eligible_treatments"]}
+    assert "Active surveillance" not in names
+    assert any("pi-rads 4 o 5" in item.lower() for item in pirads_result["not_recommended"])
+
+    ductal = client.post(
+        "/api/modules/localized_initial/evaluate",
+        json={
+            "age": 65,
+            "life_expectancy_years": 14,
+            "psa": 7.3,
+            "psad": 0.14,
+            "clinical_tstage": "T2a",
+            "gleason_primary": 3,
+            "gleason_secondary": 4,
+            "isup_grade": 2,
+            "num_cores_positive": 3,
+            "total_cores": 12,
+            "max_core_involvement": 0.25,
+            "percent_pattern_4": 10,
+            "prior_mpmri": 1,
+            "prior_mpmri_pirads_score": "3",
+            "prior_mpmri_targeted_biopsy_status": "si",
+            "confirmatory_biopsy_planned": 1,
+            "adverse_histology_variant_type": "ductal_predominant",
+            "nodal_status": "N0",
+            "metastasis_site": "M0",
+        },
+    )
+    assert ductal.status_code == 200
+    ductal_result = ductal.get_json()["result"]
+    assert "Active surveillance" not in {item["name"] for item in ductal_result["eligible_treatments"]}
+    assert any("variante histológica adversa específica" in item.lower() for item in ductal_result["not_recommended"])
+
+    small_cell = client.post(
+        "/api/modules/localized_initial/evaluate",
+        json={
+            "age": 64,
+            "life_expectancy_years": 16,
+            "psa": 6.8,
+            "psad": 0.12,
+            "clinical_tstage": "T2a",
+            "gleason_primary": 3,
+            "gleason_secondary": 4,
+            "isup_grade": 2,
+            "num_cores_positive": 3,
+            "total_cores": 12,
+            "max_core_involvement": 0.3,
+            "percent_pattern_4": 15,
+            "prior_mpmri": 1,
+            "prior_mpmri_pirads_score": "4",
+            "prior_mpmri_targeted_biopsy_status": "si",
+            "confirmatory_biopsy_planned": 1,
+            "adverse_histology_variant_type": "small_cell_neuroendocrine",
+            "nodal_status": "N0",
+            "metastasis_site": "M0",
+        },
+    )
+    assert small_cell.status_code == 200
+    small_cell_result = small_cell.get_json()["result"]
+    assert small_cell_result["decision_quality"]["unsupported_or_escalate"] is True
 
 
 def test_diagnostic_and_post_negative_biopsy_modules_surface_monitoring_and_sources(app_client):
@@ -461,6 +695,37 @@ def test_supportive_documents_are_mapped_without_displacing_guidelines(app_clien
     assert any(source["local_pdf_path"].endswith("/41.pdf") for source in sources)
 
 
+def test_m1_crpc_surfaces_a_single_tier_one_priority(app_client):
+    client, _ = app_client
+
+    response = client.post(
+        "/api/modules/m1_crpc/evaluate",
+        json={
+            "hrr_status": "Positivo",
+            "hrr_gene": "BRCA2",
+            "biomarker_source": "ctDNA",
+            "molecular_report_date": "2026-03-01",
+            "msi_status": "inestable",
+            "tmb_high": 1,
+            "metastasis_site": "Bone",
+            "prior_therapy": "Enzalutamida, Docetaxel",
+            "prior_docetaxel_cycles": 6,
+            "castrate_testosterone_confirmed": 1,
+            "mcrpc_line_context": "post_taxane",
+            "docetaxel_fit": 0,
+            "chemotherapy_delay_candidate": 1,
+            "pain_symptoms": "Sintomatico",
+            "ecog_performance_status": 1,
+            "psma_positive": 1,
+            "psma_negative_dominant_lesions": 0,
+        },
+    )
+    assert response.status_code == 200
+    treatments = response.get_json()["result"]["eligible_treatments"]
+    preferred = [item for item in treatments if item["priority"] == "preferente"]
+    assert len(preferred) == 1
+
+
 def test_diagnostic_registration_avoids_false_treatment_history_and_hides_advanced_widgets(app_client):
     client, db_path = app_client
 
@@ -508,6 +773,14 @@ def test_diagnostic_registration_avoids_false_treatment_history_and_hides_advanc
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM treatment_history")
     assert cursor.fetchone()[0] == 0
+    cursor.execute("SELECT COUNT(*) FROM biopsy_details")
+    assert cursor.fetchone()[0] == 0
+    cursor.execute("SELECT COUNT(*) FROM diagnostic_plans")
+    assert cursor.fetchone()[0] == 1
+    cursor.execute("SELECT COUNT(*) FROM mri_facts")
+    assert cursor.fetchone()[0] == 1
+    cursor.execute("SELECT COUNT(*) FROM biopsy_trigger_events")
+    assert cursor.fetchone()[0] == 1
     conn.close()
 
     patient_response = client.get("/api/patient/44444444444")
@@ -515,13 +788,143 @@ def test_diagnostic_registration_avoids_false_treatment_history_and_hides_advanc
     patient_data = patient_response.get_json()["patient"]
     assert patient_data["treatments"] == []
     assert patient_data["prior_history"]["current_state"] == "diagnostic_workup"
+    assert patient_data["biopsies"] == []
+    assert patient_data["diagnostic_plans"]
+    assert patient_data["mri_facts"]
+    assert patient_data["biopsy_triggers"]
 
     profile_html = client.get("/patient_profile/44444444444").get_data(as_text=True)
     assert "Última evaluación clínica modular" in profile_html
+    assert "Plan diagnóstico actual" in profile_html
+    assert "Historial de biopsias" not in profile_html
+
+
+def test_clinical_calibration_harness_reaches_full_concordance(app_client):
+    client, _ = app_client
+
+    response = client.get("/api/clinical-calibration")
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["success"] is True
+    calibration = data["calibration"]
+    assert calibration["total_cases"] >= 10
+    assert calibration["failed_cases"] == 0
+    assert calibration["concordance_pct"] == 100.0
+
+
+def test_validated_algorithms_and_decision_quality_surface_in_localized_module(app_client):
+    client, _ = app_client
+
+    response = client.post(
+        "/api/modules/localized_initial/evaluate",
+        json={
+            "age": 63,
+            "life_expectancy_years": 16,
+            "psa": 5.8,
+            "psad": 0.11,
+            "clinical_tstage": "T1c",
+            "gleason_primary": 3,
+            "gleason_secondary": 3,
+            "isup_grade": 1,
+            "num_cores_positive": 2,
+            "total_cores": 12,
+            "max_core_involvement": 0.2,
+            "percent_pattern_4": 0,
+            "prior_mpmri": 1,
+            "prior_mpmri_pirads_score": "2",
+            "prior_mpmri_targeted_biopsy_status": "si",
+            "confirmatory_biopsy_planned": 1,
+            "nodal_status": "N0",
+            "metastasis_site": "M0",
+        },
+    )
+    assert response.status_code == 200
+    result = response.get_json()["result"]
+    names = {item["name"] for item in result["validated_algorithms"]}
+    assert "CAPRA" in names
+    assert "Tablas de Partin" in names
+    assert "MSKCC pre-radical prostatectomy nomogram" in names
+    assert "PREDICT Prostate" in names
+    assert result["decision_quality"]["requires_human_review"] is False
+    assert result["decision_quality"]["confidence_category"] in {"alta", "vigilada"}
+
+
+def test_rich_longitudinal_tables_persist_from_integrated_registration(app_client):
+    client, db_path = app_client
+
+    draft_response = client.post(
+        "/api/clinical-assessments/draft",
+        json={
+            "module_id": "localized_initial",
+            "payload": {
+                "age": 66,
+                "life_expectancy_years": 14,
+                "psa": 7.1,
+                "psad": 0.14,
+                "clinical_tstage": "T1c",
+                "gleason_primary": 3,
+                "gleason_secondary": 4,
+                "isup_grade": 2,
+                "num_cores_positive": 3,
+                "total_cores": 12,
+                "max_core_involvement": 0.25,
+                "percent_pattern_4": 15,
+                "prior_mpmri": 1,
+                "prior_mpmri_pirads_score": "3",
+                "prior_mpmri_targeted_biopsy_status": "si",
+                "prostate_volume_ml": 50,
+                "genomic_classifier": "Decipher",
+                "genomic_classifier_result": "Intermedio",
+                "confirmatory_biopsy_planned": 1,
+                "ipss_score": 9,
+                "iief5_score": 17,
+                "baseline_urinary_qol": 82,
+                "baseline_sexual_qol": 68,
+                "baseline_bowel_qol": 90,
+                "nodal_status": "N0",
+                "metastasis_site": "M0",
+            },
+        },
+    )
+    assert draft_response.status_code == 200
+    assessment_id = draft_response.get_json()["assessment_id"]
+
+    register_response = client.post(
+        "/api/register_patient",
+        json={
+            "assessment_id": assessment_id,
+            "assessment_state": "localized_initial",
+            "nss": "55555555555",
+            "full_name": "Paciente Localizado",
+            "dob": "1968-08-20",
+            "estado_residencia": "Jalisco",
+            "family_history_detail": "Padre con cancer de prostata a los 70 anos",
+            "baseline_psa": 7.1,
+        },
+    )
+    assert register_response.status_code == 200
+    payload = register_response.get_json()
+    assert payload["recommendation_mode"] == "guideline_modular"
+    assert payload["processing_summary"]["state"] == "localized_initial"
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM biopsy_details")
+    assert cursor.fetchone()[0] == 1
+    cursor.execute("SELECT COUNT(*) FROM genomic_profile")
+    assert cursor.fetchone()[0] == 1
+    cursor.execute("SELECT COUNT(*) FROM patient_pros")
+    assert cursor.fetchone()[0] == 1
+    cursor.execute("SELECT COUNT(*) FROM active_surveillance")
+    assert cursor.fetchone()[0] == 0
+    conn.close()
+    profile_html = client.get("/patient_profile/55555555555").get_data(as_text=True)
     assert "Benchmarking operativo del estado actual" in profile_html
-    assert "Torre de control del antígeno prostático específico" not in profile_html
-    assert "Trayectoria clínica del paciente" not in profile_html
+    assert "Torre de control del antígeno prostático específico" in profile_html
     assert "Línea 1" not in profile_html
+    patient_response = client.get("/api/patient/55555555555")
+    assert patient_response.status_code == 200
+    assert patient_response.get_json()["patient"]["active_surveillance"] == {}
 
 
 def test_clinical_assessment_draft_and_patient_registration_flow(app_client):
@@ -599,6 +1002,7 @@ def test_clinical_assessment_draft_and_patient_registration_flow(app_client):
     assert patient_data["latest_assessment"]["id"] == assessment_id
     assert patient_data["prior_history"]["assessment_source"] == "clinical_wizard"
     assert patient_data["prior_history"]["current_state"] == "localized_initial"
+    assert patient_data["prior_history"]["management_intent_status"] == "candidate"
     assert patient_data["state_timeline"]
     assert patient_data["demographics"]["estado_residencia"] == "Jalisco"
     assert patient_data["pros"]
@@ -608,6 +1012,8 @@ def test_clinical_assessment_draft_and_patient_registration_flow(app_client):
     assert timeline_response.status_code == 200
     timeline_data = timeline_response.get_json()["state_timeline"]
     assert timeline_data[-1]["state"] == "localized_initial"
+    assert timeline_data[-1]["event_kind"] == "pathology_confirmed"
+    assert timeline_data[-1]["management_intent_status"] == "candidate"
 
     recompute_response = client.post("/api/patients/11111111111/recompute-care-plan")
     assert recompute_response.status_code == 200

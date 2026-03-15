@@ -541,7 +541,7 @@ def register_patient():
             data = tracking_service.canonicalize_payload(data)
         
         from tracking_db import register_new_patient
-        patient_id, msg = register_new_patient(data)
+        patient_id, msg = register_new_patient(data, assessment=assessment)
         logger.info(f"DB Result: {patient_id}, {msg}")
         
         if patient_id is not None:
@@ -555,37 +555,49 @@ def register_patient():
                     logger.warning("No se pudo vincular la evaluación clínica %s al paciente %s: %s", assessment_id, patient_id, link_msg)
                     link_warning = link_msg
 
-            # ── Integración Motor Clínico (Precision Medicine) ──
+            # ── Benchmark exploratorio legacy (no autoritativo) ──
             from precision_medicine import evaluate_patient_for_mhspc, evaluate_patient_for_mcrpc, evaluate_patient_for_nmcrpc
-            
+            from prostanet.domains.patient_tracking.event_graph import build_processing_summary
+
             line_therapy = safe_int(data.get('line_of_therapy'), 1)
             meta_site = data.get('metastasis_site', 'M0')
             recommendations = assessment.get("result_snapshot", {}) if assessment else {}
+            exploratory_benchmark = None
             
             if not assessment:
                 try:
                     if line_therapy == 1:
-                        recommendations = evaluate_patient_for_mhspc(data)
+                        exploratory_benchmark = evaluate_patient_for_mhspc(data)
                     else:
                         # Line > 1 implies Castration Resistance context in this simplified model
                         if meta_site == 'M0':
                             # nmCRPC (No metastasis detected but rising PSA implied by Line > 1)
-                            recommendations = evaluate_patient_for_nmcrpc(data)
+                            exploratory_benchmark = evaluate_patient_for_nmcrpc(data)
                         else:
                             # mCRPC (Metastatic)
-                            recommendations = evaluate_patient_for_mcrpc(data)
+                            exploratory_benchmark = evaluate_patient_for_mcrpc(data)
 
                 except Exception as e:
                     logger.error(f"Error generando recomendaciones: {e}")
                     import traceback
                     logger.error(traceback.format_exc())
-                    recommendations = {"error": "Algoritmo clínico no disponible"}
+                    exploratory_benchmark = {"error": "Algoritmo clínico legacy no disponible"}
+
+            full_record = tracking_service.get_full_record(data.get("nss"))
+            processing_summary = build_processing_summary(
+                data.get("assessment_state") or (assessment.get("state") if assessment else ""),
+                data,
+                full_record,
+            )
 
             response = {
                 "success": True, 
                 "nss": data.get('nss'),
                 "patient_id": patient_id,
                 "recommendations": recommendations,
+                "recommendation_mode": "guideline_modular" if assessment else "exploratory_legacy_only",
+                "exploratory_benchmark": exploratory_benchmark,
+                "processing_summary": processing_summary,
                 "msg": msg,
                 "assessment_id": assessment_id,
                 "next_routes": {
@@ -1346,6 +1358,18 @@ def api_dashboard_stats():
             tuple(mhspc_states),
         )
         stats["mhspc_combination_adherence_count"] = c.fetchone()["n"]
+
+        from prostanet.application.module_registry import ModuleRegistry
+        from prostanet.domains.clinical_assessments.scenario_harness import run_scenario_harness
+
+        calibration = run_scenario_harness(ModuleRegistry())
+        stats["scenario_harness"] = {
+            "total_cases": calibration["total_cases"],
+            "passed_cases": calibration["passed_cases"],
+            "failed_cases": calibration["failed_cases"],
+            "concordance_pct": calibration["concordance_pct"],
+            "module_summary": calibration["module_summary"],
+        }
 
         conn.close()
         return jsonify({"success": True, **stats})
