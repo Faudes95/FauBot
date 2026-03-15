@@ -13,14 +13,12 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for
 
 # Añadir directorio actual al path para importar el modelo
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from prostate_cancer_model import load_all, predict_patient
-from clinical_scores import calculate_all_scores, generate_comprehensive_summary
-from db_connector import fetch_prostate_patients
+from prostate_cancer_model import load_all
 from prostanet.domains.patient_tracking.service import PatientTrackingService
 from prostanet.presentation.bootstrap import register_modular_blueprints
 from prostanet.presentation.view_models import build_page_chrome
 from prostanet.shared.feature_flags import resolve_feature_flags
-from tracking_db import configure_db_path, get_stats, init_tracking_db, patient_exists, save_patient_result
+from tracking_db import configure_db_path, get_stats, init_tracking_db, patient_exists
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -174,153 +172,8 @@ def calculator_v2():
 
 @app.route("/predict", methods=["POST"])
 def predict():
+    """Calculadora legacy retirada. Use el centro clínico por estadio."""
     return error_response("La calculadora fue retirada. Use el centro clínico por estadio.", 410)
-    data = {}
-    try:
-        ensure_model_loaded()
-        data = parse_json_body()
-
-        # Gleason: calcular total desde primario + secundario
-        gleason_primary = safe_int(data.get('gleason_primary'), 3)
-        gleason_secondary = safe_int(data.get('gleason_secondary'), 3)
-        gleason_total = gleason_primary + gleason_secondary
-
-        # Volumen prostático para PSAD
-        vol = safe_float(data.get('volumen_prostatico'), 40)
-        psa_val = safe_float(data.get('psa'), 0)
-        psad = psa_val / vol if vol > 0 else 0.3
-
-        # ISUP Calculation Logic (Prioritize explicit input, else derive from Gleason)
-        isup_input = data.get('isup_grade')
-        if isup_input is not None and isup_input != '':
-             isup_grade = safe_int(isup_input, 1)
-        else:
-             if gleason_total <= 6: isup_grade = 1
-             elif gleason_total == 7 and gleason_primary == 3: isup_grade = 2
-             elif gleason_total == 7 and gleason_primary == 4: isup_grade = 3
-             elif gleason_total == 8: isup_grade = 4
-             elif gleason_total >= 9: isup_grade = 5
-             else: isup_grade = 1
-
-        # ── Conversión segura de todas las variables del formulario ──────
-        patient = {
-            'age':                    safe_int(data.get('age'), 65),
-            'psa':                    psa_val,
-            'ecog':                   safe_int(data.get('ecog'), 0),
-            'stage':                  safe_int(data.get('stage'), 2),
-            'gleason':                gleason_total,
-            'cci':                    safe_int(data.get('cci'), 0),
-            'psad':                   psad,
-            'isup_grade':             isup_grade,
-            'pirads':                 safe_int(data.get('pirads'), 1),
-            'pct_cores_positive':     safe_float(data.get('pct_cores_positive'), 0),
-            'num_cores_positive':     safe_int(data.get('num_cores_positive'), 0),
-            'total_cores':            safe_int(data.get('total_cores'), 12),
-            'max_core_involvement':   safe_float(data.get('max_core_involvement'), 0),
-            'perineural_invasion':    safe_int(data.get('pni', data.get('perineural_invasion')), 0),
-            'lymphovascular_invasion': safe_int(data.get('lvi', data.get('lymphovascular_invasion')), 0),
-            'surgical_margin_status': safe_int(data.get('surgical_margin', data.get('surgical_margin_status')), 0),
-            'extracapsular_extension_status': safe_int(data.get('ece_status', data.get('extracapsular_extension_status')), 0),
-            'seminal_vesicle_invasion_status': safe_int(data.get('svi_status', data.get('seminal_vesicle_invasion_status')), 0),
-            'lymph_node_invasion_status': safe_int(data.get('lni_status', data.get('lymph_node_invasion_status')), 0),
-            'race_ethnicity':         str(data.get('race_ethnicity') or 'caucasico'),
-            'dre_findings':           str(data.get('dre_findings') or 'T2a'),
-            'family_history':         safe_int(data.get('family_history'), 0),
-            'bmi':                    safe_float(data.get('bmi'), 25.0),
-            'testosterone':           safe_float(data.get('testosterone'), 350.0),
-            'free_psa_ratio':         safe_float(data.get('free_psa_ratio'), 0.15),
-            'previous_biopsies':      safe_int(data.get('previous_biopsies'), 0),
-            'genomic_score':          safe_float(data.get('genomic_score'), 0.0),
-        }
-
-        # ── Datos extendidos para herramientas clínicas ──────────────────
-        uso_5ari_raw = data.get('uso_5ari', 'no')
-        uso_5ari_val = 1 if str(uso_5ari_raw).lower() in ('si', 'sí', '1', 'true', 'yes') else 0
-
-        clinical_data = {
-            **patient,
-            'gleason_primary':    gleason_primary,
-            'gleason_secondary':  gleason_secondary,
-            'clinical_tstage':    str(data.get('clinical_tstage') or 'T2a'),
-            'volumen_prostatico': vol,
-            'surgical_margin_status': patient['surgical_margin_status'],
-            'surgical_margin': patient['surgical_margin_status'],
-            'extracapsular_extension': patient['extracapsular_extension_status'],
-            'ece_status': patient['extracapsular_extension_status'],
-            'seminal_vesicle_invasion': patient['seminal_vesicle_invasion_status'],
-            'svi_status': patient['seminal_vesicle_invasion_status'],
-            'lymph_node_invasion': patient['lymph_node_invasion_status'],
-            'lni_status': patient['lymph_node_invasion_status'],
-            'gleason_total': gleason_total,
-            'isup_grade': isup_grade,
-            'pct_cores_positive': safe_float(data.get('pct_cores_positive'), 0),
-            'num_cores_positive': safe_int(data.get('num_cores_positive'), 0),
-            'total_cores': safe_int(data.get('total_cores'), 12),
-            'tipo_biopsia': str(data.get('tipo_biopsia') or 'sistematica'),
-            'patron_cribiforme': safe_int(data.get('patron_cribiforme'), 0),
-            'carcinoma_intraductal': safe_int(data.get('carcinoma_intraductal'), 0),
-            'porcentaje_patron_4': safe_float(data.get('porcentaje_patron_4'), 0),
-            'tamano_lesion_mm': safe_float(data.get('tamano_lesion_mm'), 0),
-            'psma_resultado': str(data.get('psma_resultado') or 'no_realizado'),
-            'bone_scan_result': str(data.get('bone_scan_result') or 'no_realizado'),
-            'genomic_test_type': str(data.get('genomic_test_type') or 'ninguna'),
-            'hrr_status': str(data.get('hrr_status') or 'desconocido'),
-            'msi_status': str(data.get('msi_status') or 'desconocido'),
-            'tabaquismo': str(data.get('tabaquismo') or 'nunca'),
-            'diabetes_mellitus': safe_int(data.get('diabetes_mellitus'), 0),
-            'hipertension': safe_int(data.get('hipertension'), 0),
-            'sindrome_metabolico': safe_int(data.get('sindrome_metabolico'), 0),
-            'ipss_score': safe_int(data.get('ipss_score'), 0),
-            'mpmri_ece_suspicion': safe_int(data.get('mpmri_ece_suspicion'), 0),
-            'mpmri_svi_suspicion': safe_int(data.get('mpmri_svi_suspicion'), 0),
-            # Variables de laboratorio extendidas
-            'creatinina': safe_float(data.get('creatinina'), 0),
-            'hemoglobina': safe_float(data.get('hemoglobina'), 0),
-            'fosfatasa_alcalina': safe_float(data.get('fosfatasa_alcalina', data.get('alp')), 0),
-            'ldh': safe_float(data.get('ldh'), 0),
-            'uso_5ari': uso_5ari_val,
-        }
-
-        # ── PSA Kinetics (NUEVO) ────────────────────────────────────────
-        from clinical_scores import calculate_psa_kinetics
-        # Expecting 'psa_history': [{'date': 'YYYY-MM-DD', 'value': 4.5}, ...]
-        psa_history_input = data.get('psa_history', [])
-        # Convert to tuple list for function
-        history_tuples = [(item['date'], float(item['value'])) for item in psa_history_input if 'date' in item and 'value' in item]
-        # Include current PSA as well if valid date provided, otherwise assume history includes it or it's separate
-        # For simplicity, we calculate based on history provided.
-        
-        psa_kinetics = calculate_psa_kinetics(history_tuples)
-
-        # ── Ejecutar predicción ML + scores clínicos ─────────────────────
-        ml_result = predict_patient(model, artifacts, patient, ts_risk)
-        clinical_scores = calculate_all_scores(clinical_data)
-
-        # ── Generar Resumen Clínico Inteligente ──────────────────────────
-        # summary = generate_comprehensive_summary(clinical_scores, ml_result, clinical_data)
-        
-        # ── Generar Reporte Narrativo Textual (NUEVO) ────────────────────
-        from report_generator import generate_narrative_report
-        narrative_report = generate_narrative_report(clinical_data, clinical_scores, psa_kinetics)
-        
-        # Guardar en base de datos de seguimiento
-        save_patient_result(clinical_data, ml_result, clinical_scores, {'narrative': narrative_report, 'kinetics': psa_kinetics})
-
-        return jsonify({
-            "success": True,
-            "prediction": ml_result,
-            "clinical_scores": clinical_scores,
-            "psa_kinetics": psa_kinetics,
-            "narrative_report": narrative_report,
-        })
-
-    except ValueError as e:
-        logger.error(f"❌ Error de Validación (ValueError): {str(e)}")
-        logger.error(f"🔍 Datos recibidos: {json.dumps(data, indent=2)}")
-        return jsonify({"success": False, "error": f"Error de Datos: {str(e)}"}), 400
-    except Exception as e:
-        logger.exception("Error en predicción")
-        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route('/api/stats', methods=['GET'])
 def api_stats():
@@ -330,43 +183,8 @@ def api_stats():
 
 @app.route('/api/sync', methods=['POST'])
 def api_sync():
-    """Sincroniza pacientes desde la base de datos maestra."""
-    ensure_model_loaded()
-    patients = fetch_prostate_patients()
-    processed_count = 0
-    
-    for p in patients:
-        try:
-            # Reutilizar lógica de predicción
-            # Preparar datos adicionales necesarios para el modelo
-            # (El modelo necesita 'volumen_prostatico' para PSAD si no existe, etc.)
-            # Usar defaults seguros si faltan datos
-            p_data = p.copy()
-            if 'volumen_prostatico' not in p_data: p_data['volumen_prostatico'] = 40
-            
-            # 1. ML Prediction
-            ml_res = predict_patient(model, artifacts, p_data)
-            
-            # 2. Clinical Scores
-            scores = calculate_all_scores(p_data)
-            
-            # 3. Summary
-            summary = generate_comprehensive_summary(scores, ml_res, p_data)
-            
-            # 4. Save
-            p_data['source_type'] = 'urologia_db'
-            save_patient_result(p_data, ml_res, scores, summary)
-            
-            processed_count += 1
-        except Exception as e:
-            app.logger.error(f"Error processing synced patient {p.get('source_id')}: {e}")
-            continue
-            
-    return jsonify({
-        "success": True, 
-        "synced_count": processed_count,
-        "total_found": len(patients)
-    })
+    """Sincronización legacy retirada. Use el centro clínico para ingesta de documentos."""
+    return error_response("La sincronización legacy fue retirada. Use ingesta de documentos desde el perfil del paciente.", 410)
 
 
 @app.route("/patients")
@@ -473,7 +291,7 @@ def patient_profile(nss):
             current_context.setdefault('gleason', current_context.get('gleason_score', 6))
 
             try:
-                from precision_medicine import evaluate_patient_for_mhspc
+                from prostanet.shared.precision_medicine_legacy import evaluate_patient_for_mhspc
                 from prostanet.domains.patient_tracking.profile_compass import build_patient_profile_view_model
 
                 recs = evaluate_patient_for_mhspc(current_context)
@@ -512,6 +330,7 @@ def patient_profile(nss):
                     "recommendation_audit": [],
                     "document_board": {},
                     "recommendations": recs,
+                    "copilot": {},
                 }
 
         page_chrome = build_page_chrome(
@@ -879,7 +698,7 @@ def register_patient():
                     link_warning = link_msg
 
             # ── Benchmark exploratorio legacy (no autoritativo) ──
-            from precision_medicine import evaluate_patient_for_mhspc, evaluate_patient_for_mcrpc, evaluate_patient_for_nmcrpc
+            from prostanet.shared.precision_medicine_legacy import evaluate_patient_for_mhspc, evaluate_patient_for_mcrpc, evaluate_patient_for_nmcrpc
             from prostanet.domains.patient_tracking.event_graph import build_processing_summary
 
             line_therapy = safe_int(data.get('line_of_therapy'), 1)
@@ -953,165 +772,8 @@ def register_patient():
 
 @app.route("/api/register_from_calculator", methods=["POST"])
 def register_from_calculator():
+    """Registro desde calculadora legacy retirado. Use el centro clínico."""
     return error_response("La calculadora fue retirada. Use el centro clínico por estadio.", 410)
-    """
-    Registra un paciente directamente desde la calculadora.
-    Guarda: identidad, baseline clínico, scores calculados y reporte narrativo.
-    El reporte sirve como documento de ingreso y punto de partida del seguimiento.
-    """
-    try:
-        data = request.get_json()
-        logger.info(f"Registro desde calculadora: NSS={data.get('nss')}")
-
-        import sqlite3
-        conn = sqlite3.connect('prostanet_tracking.db')
-        c = conn.cursor()
-
-        nss = data.get('nss', '').strip()
-        full_name = data.get('full_name', '').strip()
-        dob = data.get('dob')
-        dx_date = data.get('diagnosis_date')
-
-        if not nss or not full_name:
-            return jsonify({"success": False, "error": "NSS y nombre son requeridos"}), 400
-
-        # Check if patient already exists
-        c.execute("SELECT id FROM patient_identity WHERE nss = ?", (nss,))
-        existing = c.fetchone()
-        if existing:
-            conn.close()
-            return jsonify({"success": False, "error": f"Paciente con NSS {nss} ya existe"}), 400
-
-        # 1. Insert patient identity
-        c.execute("""INSERT INTO patient_identity (nss, full_name, dob, diagnosis_date)
-                     VALUES (?, ?, ?, ?)""", (nss, full_name, dob, dx_date))
-        patient_id = c.lastrowid
-
-        # 2. Insert clinical baseline
-        c.execute("""INSERT INTO clinical_baseline (
-            patient_id, baseline_psa, testosterone_baseline, hemoglobin, alp, ldh,
-            tnm_stage, gleason_score, metastasis_site, volume_disease, ecog_score,
-            genomic_test_done, hrr_status, msi_status, comorbidities_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (
-            patient_id,
-            data.get('baseline_psa', 0),
-            data.get('testosterone_baseline', 0),
-            data.get('hemoglobin', 0),
-            data.get('alp', 0),
-            data.get('ldh', 0),
-            data.get('tnm_stage', 'T2a'),
-            data.get('gleason_score', 6),
-            data.get('metastasis_site', 'M0'),
-            data.get('volume_disease', 'Low'),
-            data.get('ecog_score', 0),
-            data.get('genomic_test_done', 0),
-            data.get('hrr_status', 'desconocido'),
-            data.get('msi_status', 'desconocido'),
-            json.dumps({
-                'cci': data.get('cci', 0),
-                'bmi': data.get('bmi', 25),
-                'family_history': data.get('family_history', 0),
-                'tabaquismo': data.get('tabaquismo', 'nunca'),
-                'diabetes_mellitus': data.get('diabetes_mellitus', 0),
-                'hipertension': data.get('hipertension', 0),
-                'sindrome_metabolico': data.get('sindrome_metabolico', 0),
-                'uso_5ari': data.get('uso_5ari', 'no'),
-                'creatinina': data.get('creatinina', 0),
-                'ipss_score': data.get('ipss_score', 0),
-            })
-        ))
-
-        # 3. Insert biopsy details if available
-        cores_pos = data.get('cores_positivos', 0)
-        cores_tot = data.get('cores_totales', 12)
-        if cores_pos > 0 or cores_tot > 0:
-            try:
-                c.execute("""INSERT INTO biopsy_details (
-                    patient_id, biopsy_date, biopsy_type, cores_taken, cores_positive,
-                    gleason_primary, gleason_secondary, gleason_sum, grade_group, pirads_score
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (
-                    patient_id,
-                    dx_date or datetime.now().strftime('%Y-%m-%d'),
-                    data.get('tipo_biopsia', 'sistematica'),
-                    cores_tot,
-                    cores_pos,
-                    data.get('gleason_score', 6) // 2,  # approximation
-                    data.get('gleason_score', 6) - (data.get('gleason_score', 6) // 2),
-                    data.get('gleason_score', 6),
-                    1,  # Will be recalculated
-                    data.get('pirads', 0)
-                ))
-            except Exception as e:
-                logger.warning(f"Error guardando biopsia: {e}")
-
-        # 4. Save demographics
-        try:
-            c.execute("""INSERT INTO patient_demographics (
-                patient_id, tabaquismo, diabetes_mellitus, hipertension,
-                sindrome_metabolico, ipss_score, ocupacion
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)""", (
-                patient_id,
-                data.get('tabaquismo', 'nunca'),
-                data.get('diabetes_mellitus', 0),
-                data.get('hipertension', 0),
-                data.get('sindrome_metabolico', 0),
-                data.get('ipss_score', 0),
-                'No especificada'
-            ))
-        except Exception as e:
-            logger.warning(f"Error guardando demographics: {e}")
-
-        # 5. Save calculated scores as prior clinical history
-        scores = data.get('calculated_scores', {})
-        report = data.get('narrative_report', '')
-        kinetics = data.get('psa_kinetics', {})
-
-        try:
-            c.execute("""INSERT OR REPLACE INTO prior_clinical_history (
-                patient_id, calculated_scores_json, narrative_report, psa_kinetics_json, source
-            ) VALUES (?, ?, ?, ?, ?)""", (
-                patient_id,
-                json.dumps(scores),
-                report,
-                json.dumps(kinetics),
-                'calculator'
-            ))
-        except Exception:
-            # Table may not have these columns, create it
-            try:
-                c.execute("""CREATE TABLE IF NOT EXISTS calculator_reports (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    patient_id INTEGER,
-                    calculated_scores_json TEXT,
-                    narrative_report TEXT,
-                    psa_kinetics_json TEXT,
-                    source TEXT DEFAULT 'calculator',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
-                )""")
-                c.execute("""INSERT INTO calculator_reports (
-                    patient_id, calculated_scores_json, narrative_report, psa_kinetics_json, source
-                ) VALUES (?, ?, ?, ?, ?)""", (
-                    patient_id, json.dumps(scores), report, json.dumps(kinetics), 'calculator'
-                ))
-            except Exception as e2:
-                logger.warning(f"Error guardando scores/report: {e2}")
-
-        conn.commit()
-        conn.close()
-
-        logger.info(f"Paciente registrado desde calculadora: {nss} (ID={patient_id})")
-
-        return jsonify({
-            "success": True,
-            "patient_id": patient_id,
-            "nss": nss,
-            "msg": f"Paciente {full_name} registrado con scores y reporte como documento de ingreso"
-        })
-
-    except Exception as e:
-        logger.exception("Error registrando desde calculadora")
-        return jsonify({"success": False, "error": str(e)}), 500
 
 
 # ══════════════════════════════════════════════════════════════════════════════

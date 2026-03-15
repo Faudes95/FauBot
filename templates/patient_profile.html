@@ -1652,6 +1652,299 @@
         </details>
         {% endif %}
 
+        <!-- ═══════════════════════════════════════════════════════════════════ -->
+        <!-- 11. COPILOTO CLÍNICO — Alertas, Schedule, Comorbilidad, ADT       -->
+        <!-- ═══════════════════════════════════════════════════════════════════ -->
+        {% set copilot = profile.copilot|default({}) %}
+
+        {% if copilot.clinical_alerts or copilot.overdue_alerts %}
+        <details class="pn-accordion pn-surface border border-red-700/30" open>
+            <summary class="flex items-center justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-bold text-white">Alertas clínicas del copiloto</h2>
+                    <p class="mt-1 text-sm text-slate-400">
+                        {{ copilot.clinical_alerts|length }} alerta(s) clínica(s)
+                        {% if copilot.overdue_alerts %} · {{ copilot.overdue_alerts|length }} evento(s) vencido(s){% endif %}
+                    </p>
+                </div>
+            </summary>
+            <div class="mt-4 space-y-2">
+                {% for alert in copilot.clinical_alerts %}
+                <div class="flex items-start gap-3 px-4 py-3 rounded-lg border
+                    {{ 'bg-red-900/20 border-red-500/30' if alert.severity == 'critical' else 'bg-yellow-900/20 border-yellow-500/30' if alert.severity == 'warning' else 'bg-blue-900/20 border-blue-500/30' }}">
+                    <span class="{{ 'text-red-400 alert-pulse' if alert.severity == 'critical' else 'text-yellow-400' if alert.severity == 'warning' else 'text-blue-400' }} text-base mt-0.5">
+                        {% if alert.severity == 'critical' %}!!{% elif alert.severity == 'warning' %}!{% else %}i{% endif %}
+                    </span>
+                    <div class="flex-1">
+                        <div class="font-medium text-white text-sm">{{ alert.title }}</div>
+                        <div class="text-xs text-slate-300 mt-1">{{ alert.message }}</div>
+                        {% if alert.recommended_action %}
+                        <div class="text-xs text-cyan-400 mt-1">{{ alert.recommended_action }}</div>
+                        {% endif %}
+                        {% if alert.guideline_reference %}
+                        <div class="text-[11px] text-slate-500 mt-1">{{ alert.guideline_reference }}</div>
+                        {% endif %}
+                    </div>
+                    <div class="text-right shrink-0">
+                        {% if alert.triggering_value %}
+                        <div class="text-xs font-mono text-white">{{ alert.triggering_value }}</div>
+                        {% endif %}
+                        {% if alert.threshold %}
+                        <div class="text-[11px] text-slate-500">Umbral: {{ alert.threshold }}</div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+
+                {% for od in copilot.overdue_alerts %}
+                <div class="flex items-start gap-3 px-4 py-3 rounded-lg border
+                    {{ 'bg-red-900/20 border-red-500/30' if od.severity == 'critical' else 'bg-yellow-900/20 border-yellow-500/30' }}">
+                    <span class="{{ 'text-red-400' if od.severity == 'critical' else 'text-yellow-400' }} text-base mt-0.5">
+                        {% if od.severity == 'critical' %}!!{% else %}!{% endif %}
+                    </span>
+                    <div class="flex-1">
+                        <div class="font-medium text-white text-sm">{{ od.label }} — Vencido</div>
+                        <div class="text-xs text-slate-300 mt-1">{{ od.message }}</div>
+                    </div>
+                    <div class="text-right shrink-0">
+                        <div class="text-xs font-mono text-red-400">{{ od.days_overdue }} d</div>
+                        <div class="text-[11px] text-slate-500">Vencido: {{ od.due_date }}</div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </details>
+        {% endif %}
+
+        {% if copilot.schedule %}
+        <details class="pn-accordion pn-surface">
+            <summary class="flex items-center justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-bold text-white">Calendario de seguimiento programado</h2>
+                    <p class="mt-1 text-sm text-slate-400">{{ copilot.schedule|length }} evento(s) en los pr&oacute;ximos 12 meses</p>
+                </div>
+            </summary>
+            <div class="mt-4">
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead>
+                            <tr class="border-b border-slate-700 text-xs text-slate-400 uppercase">
+                                <th class="text-left py-2 px-3">Fecha</th>
+                                <th class="text-left py-2 px-3">Evento</th>
+                                <th class="text-left py-2 px-3">Tipo</th>
+                                <th class="text-left py-2 px-3">Gu&iacute;a</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for ev in copilot.schedule %}
+                            <tr class="border-b border-slate-800 hover:bg-slate-800/50">
+                                <td class="py-2 px-3 text-white font-mono text-xs">{{ ev.due_date }}</td>
+                                <td class="py-2 px-3 text-white">{{ ev.label }}</td>
+                                <td class="py-2 px-3 text-slate-400">{{ ev.event_type }}</td>
+                                <td class="py-2 px-3 text-slate-500 text-xs">{{ ev.guideline }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </details>
+        {% endif %}
+
+        {% if copilot.comorbidity_scores %}
+        <details class="pn-accordion pn-surface">
+            <summary class="flex items-center justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-bold text-white">Scores de comorbilidad y fragilidad</h2>
+                    <p class="mt-1 text-sm text-slate-400">CCI ajustado por edad y G8 Geriatric Screening</p>
+                </div>
+            </summary>
+            <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                {% if copilot.comorbidity_scores.charlson %}
+                {% set cci = copilot.comorbidity_scores.charlson %}
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500 mb-2">Charlson Comorbidity Index</div>
+                    <div class="flex items-baseline gap-2">
+                        <span class="text-3xl font-bold {{ 'text-green-400' if cci.risk_category == 'LOW' else 'text-yellow-400' if cci.risk_category == 'MODERATE' else 'text-orange-400' if cci.risk_category == 'HIGH' else 'text-red-400' }}">
+                            {{ cci.age_adjusted_score }}
+                        </span>
+                        <span class="text-sm text-slate-400">puntos (ajustado por edad)</span>
+                    </div>
+                    <div class="mt-2 text-sm text-white">Categor&iacute;a: {{ cci.risk_category }}</div>
+                    <div class="mt-1 text-xs text-slate-400">Supervivencia estimada a 10 a&ntilde;os: {{ cci.estimated_10y_survival }}</div>
+                    {% if cci.conditions_present %}
+                    <div class="mt-3 text-xs text-slate-500">
+                        <span class="text-slate-400">Condiciones:</span>
+                        {{ cci.conditions_present|join(', ') }}
+                    </div>
+                    {% endif %}
+                </div>
+                {% endif %}
+
+                {% if copilot.comorbidity_scores.g8 %}
+                {% set g8 = copilot.comorbidity_scores.g8 %}
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500 mb-2">G8 Geriatric Screening</div>
+                    <div class="flex items-baseline gap-2">
+                        <span class="text-3xl font-bold {{ 'text-green-400' if g8.score > 14 else 'text-red-400' }}">
+                            {{ g8.score }}
+                        </span>
+                        <span class="text-sm text-slate-400">/ 17</span>
+                    </div>
+                    <div class="mt-2 text-sm text-white">{{ g8.interpretation }}</div>
+                    <div class="mt-1 text-xs text-slate-400">{{ g8.fitness_for_treatment }}</div>
+                </div>
+                {% endif %}
+            </div>
+        </details>
+        {% endif %}
+
+        {% if copilot.adt_side_effects %}
+        <details class="pn-accordion pn-surface">
+            <summary class="flex items-center justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-bold text-white">Monitoreo de efectos secundarios de ADT</h2>
+                    <p class="mt-1 text-sm text-slate-400">Riesgo cardiovascular, s&iacute;ndrome metab&oacute;lico y salud &oacute;sea</p>
+                </div>
+            </summary>
+            <div class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+                {% set cv = copilot.adt_side_effects.cv_risk %}
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500 mb-2">Riesgo cardiovascular</div>
+                    <div class="flex items-baseline gap-2">
+                        <span class="text-2xl font-bold {{ 'text-green-400' if cv.risk_category == 'low' else 'text-yellow-400' if cv.risk_category == 'intermediate' else 'text-red-400' }}">
+                            {{ cv.framingham_10y_risk_pct }}%
+                        </span>
+                        <span class="text-xs text-slate-400">10 a&ntilde;os</span>
+                    </div>
+                    <div class="mt-2 text-sm text-white capitalize">{{ cv.risk_category }}</div>
+                    {% for rec in cv.recommendations[:2] %}
+                    <div class="mt-1 text-xs text-slate-400">{{ rec }}</div>
+                    {% endfor %}
+                </div>
+
+                {% set ms = copilot.adt_side_effects.metabolic_syndrome %}
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500 mb-2">S&iacute;ndrome metab&oacute;lico (ATP III)</div>
+                    <div class="flex items-baseline gap-2">
+                        <span class="text-2xl font-bold {{ 'text-red-400' if ms.has_metabolic_syndrome else 'text-green-400' }}">
+                            {{ ms.criteria_met }}/{{ ms.criteria_total }}
+                        </span>
+                        <span class="text-xs text-slate-400">criterios</span>
+                    </div>
+                    <div class="mt-2 text-sm {{ 'text-red-400' if ms.has_metabolic_syndrome else 'text-green-400' }}">
+                        {{ 'Presente' if ms.has_metabolic_syndrome else 'No presente' }}
+                    </div>
+                    {% for crit in ms.criteria_details %}
+                    {% if crit.met %}
+                    <div class="mt-1 text-xs text-red-300">{{ crit.criterion }}: {{ crit.value }}</div>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+
+                {% set bone = copilot.adt_side_effects.bone_health %}
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500 mb-2">Salud &oacute;sea</div>
+                    {% if bone.worst_t_score is not none %}
+                    <div class="flex items-baseline gap-2">
+                        <span class="text-2xl font-bold {{ 'text-red-400' if bone.bone_category == 'osteoporosis' else 'text-yellow-400' if bone.bone_category == 'osteopenia' else 'text-green-400' }}">
+                            T={{ bone.worst_t_score }}
+                        </span>
+                    </div>
+                    {% endif %}
+                    <div class="mt-2 text-sm text-white capitalize">{{ bone.bone_category|replace('_', ' ') }}</div>
+                    <div class="mt-1 text-xs text-slate-400">Riesgo fractura: {{ bone.fracture_risk }}</div>
+                    <div class="mt-1 text-xs text-slate-400">Vitamina D: {{ bone.vitamin_d_status|replace('_', ' ') }}</div>
+                    {% for rec in bone.recommendations[:2] %}
+                    <div class="mt-1 text-xs text-cyan-400">{{ rec }}</div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            {% if copilot.adt_side_effects.monitoring_schedule %}
+            <div class="mt-4">
+                <div class="text-xs uppercase tracking-wider text-slate-500 mb-2">Protocolo de monitoreo bajo ADT</div>
+                <div class="grid grid-cols-2 md:grid-cols-5 gap-2">
+                    {% for item in copilot.adt_side_effects.monitoring_schedule %}
+                    <div class="bg-slate-900/50 rounded-lg p-2 border border-slate-700/50 text-xs">
+                        <div class="text-white font-medium">{{ item.test }}</div>
+                        <div class="text-slate-500 mt-1">{{ item.frequency }}</div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+        </details>
+        {% endif %}
+
+        <!-- ── 11e. Visualización de respuesta terapéutica (Spider + Swimmer) ── -->
+        {% if copilot.response_visualization %}
+        {% set viz = copilot.response_visualization %}
+
+        {% if viz.swimmer|length > 0 %}
+        <details class="pn-accordion pn-surface" open>
+            <summary class="flex items-center justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-bold text-white">🏊 Gráfico de nadador — Duración de tratamientos</h2>
+                    <p class="mt-1 text-sm text-slate-400">Duración de cada línea terapéutica con marcadores de respuesta y progresión.</p>
+                </div>
+            </summary>
+            <div class="mt-4">
+                <div class="h-64 w-full">
+                    <canvas id="swimmerChart"></canvas>
+                </div>
+            </div>
+        </details>
+        {% endif %}
+
+        {% if viz.spider.has_data %}
+        <details class="pn-accordion pn-surface">
+            <summary class="flex items-center justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-bold text-white">🕸️ Gráfico de araña — Lesiones individuales</h2>
+                    <p class="mt-1 text-sm text-slate-400">Cambio porcentual longitudinal de cada lesión respecto a baseline (RECIST 1.1).</p>
+                </div>
+            </summary>
+            <div class="mt-4">
+                <div class="h-72 w-full">
+                    <canvas id="spiderChart"></canvas>
+                </div>
+                <div class="mt-3 flex items-center gap-4 text-xs text-slate-400">
+                    <span class="flex items-center gap-1"><span class="inline-block w-8 h-px bg-green-400"></span> PR (−30%)</span>
+                    <span class="flex items-center gap-1"><span class="inline-block w-8 h-px bg-red-400"></span> PD (+20%)</span>
+                </div>
+                <div class="mt-2 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
+                    {% for line in viz.spider.lines %}
+                    <div class="bg-slate-900/50 rounded p-2 border border-slate-700/50 text-xs">
+                        <div class="flex items-center gap-1">
+                            <span class="inline-block w-3 h-3 rounded-full" style="background: {{ line.color }}"></span>
+                            <span class="text-white font-medium">{{ line.location }}</span>
+                        </div>
+                        <div class="text-slate-500 mt-1">Mejor: {{ line.best_response_pct }}%</div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </details>
+        {% endif %}
+
+        {% if viz.psa_trajectory.has_data %}
+        <details class="pn-accordion pn-surface">
+            <summary class="flex items-center justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-bold text-white">📈 Trayectoria de antígeno prostático específico con tratamientos</h2>
+                    <p class="mt-1 text-sm text-slate-400">Serie temporal de antígeno prostático específico con bandas de tratamiento superpuestas.</p>
+                </div>
+            </summary>
+            <div class="mt-4">
+                <div class="h-64 w-full">
+                    <canvas id="psaTrajectoryChart"></canvas>
+                </div>
+            </div>
+        </details>
+        {% endif %}
+        {% endif %}
+
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════════════ -->
@@ -1852,6 +2145,7 @@
 {% endblock %}
 
 {% block page_scripts %}
+    {% set copilot = profile_view.copilot|default({}) if profile_view else {} %}
     <script>
         const humanizeClinicalText = window.clinicalPresentation?.humanize || ((value) => value);
         // ── Datos del paciente ────────────────────────────────────────────────
@@ -2068,6 +2362,185 @@
                     scales: {
                         x: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
                         y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } }
+                    }
+                }
+            });
+        }
+        {% endif %}
+
+        // ── Swimmer Plot ─────────────────────────────────────────────────────
+        {% if copilot.response_visualization and copilot.response_visualization.swimmer|length > 0 %}
+        const swimCtx = document.getElementById('swimmerChart')?.getContext('2d');
+        if (swimCtx) {
+            const swimData = {{ copilot.response_visualization.swimmer | tojson }};
+            const swimLabels = swimData.map(d => humanizeClinicalText(d.label));
+            const swimDatasets = [{
+                label: 'Duración (meses)',
+                data: swimData.map((d, i) => ({
+                    x: [d.start_month, d.start_month + d.duration_months],
+                    y: i
+                })),
+                backgroundColor: swimData.map(d => d.color),
+                borderRadius: 4,
+                borderSkipped: false,
+                barPercentage: 0.6,
+            }];
+
+            new Chart(swimCtx, {
+                type: 'bar',
+                data: {
+                    labels: swimLabels,
+                    datasets: [{
+                        label: 'Duración (meses)',
+                        data: swimData.map(d => [d.start_month, d.start_month + d.duration_months]),
+                        backgroundColor: swimData.map(d => d.color + 'cc'),
+                        borderColor: swimData.map(d => d.color),
+                        borderWidth: 1,
+                        borderRadius: 4,
+                        borderSkipped: false,
+                        barPercentage: 0.5,
+                    }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: (ctx) => {
+                                    const d = swimData[ctx.dataIndex];
+                                    let txt = `${d.duration_months} meses`;
+                                    if (d.outcome) txt += ` — ${humanizeClinicalText(d.outcome)}`;
+                                    if (d.markers?.length) txt += ' | ' + d.markers.map(m => m.type).join(', ');
+                                    return txt;
+                                }
+                            }
+                        },
+                        annotation: {
+                            annotations: (() => {
+                                const annots = {};
+                                swimData.forEach((d, idx) => {
+                                    (d.markers || []).forEach((m, mi) => {
+                                        annots[`m${idx}_${mi}`] = {
+                                            type: 'point',
+                                            xValue: m.month,
+                                            yValue: idx,
+                                            backgroundColor: m.color,
+                                            borderColor: '#fff',
+                                            borderWidth: 1,
+                                            radius: 6,
+                                        };
+                                    });
+                                });
+                                return annots;
+                            })()
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'linear',
+                            grid: { color: '#334155' },
+                            ticks: { color: '#94a3b8', callback: v => v + ' mo' },
+                            title: { display: true, text: 'Meses desde inicio', color: '#94a3b8' }
+                        },
+                        y: {
+                            grid: { display: false },
+                            ticks: { color: '#94a3b8' }
+                        }
+                    }
+                }
+            });
+        }
+        {% endif %}
+
+        // ── Spider Plot ──────────────────────────────────────────────────────
+        {% if copilot.response_visualization and copilot.response_visualization.spider.has_data %}
+        const spiderCtx = document.getElementById('spiderChart')?.getContext('2d');
+        if (spiderCtx) {
+            const spiderData = {{ copilot.response_visualization.spider | tojson }};
+            const spiderDatasets = spiderData.lines.map(line => ({
+                label: line.location,
+                data: line.points.map(p => ({ x: p.measurement_date, y: p.change_from_baseline_pct })),
+                borderColor: line.color,
+                backgroundColor: line.color + '33',
+                tension: 0.3,
+                pointRadius: 4,
+                fill: false,
+            }));
+
+            new Chart(spiderCtx, {
+                type: 'line',
+                data: { datasets: spiderDatasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { labels: { color: '#94a3b8', boxWidth: 12 } },
+                        annotation: {
+                            annotations: {
+                                prLine: { type: 'line', yMin: -30, yMax: -30, borderColor: '#10b981', borderWidth: 1, borderDash: [6, 3], label: { display: true, content: 'PR −30%', position: 'start', color: '#10b981', font: { size: 10 } } },
+                                pdLine: { type: 'line', yMin: 20, yMax: 20, borderColor: '#ef4444', borderWidth: 1, borderDash: [6, 3], label: { display: true, content: 'PD +20%', position: 'start', color: '#ef4444', font: { size: 10 } } },
+                                zeroLine: { type: 'line', yMin: 0, yMax: 0, borderColor: '#475569', borderWidth: 1 }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: { type: 'category', labels: spiderData.timepoints, grid: { color: '#334155' }, ticks: { color: '#94a3b8', maxRotation: 45 } },
+                        y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8', callback: v => v + '%' }, title: { display: true, text: '% Cambio desde baseline', color: '#94a3b8' } }
+                    }
+                }
+            });
+        }
+        {% endif %}
+
+        // ── PSA Trajectory con bandas de tratamiento ─────────────────────────
+        {% if copilot.response_visualization and copilot.response_visualization.psa_trajectory.has_data %}
+        const trajCtx = document.getElementById('psaTrajectoryChart')?.getContext('2d');
+        if (trajCtx) {
+            const trajData = {{ copilot.response_visualization.psa_trajectory | tojson }};
+            const annotations = {};
+            (trajData.treatment_bands || []).forEach((band, i) => {
+                annotations['band' + i] = {
+                    type: 'box',
+                    xMin: band.start_date,
+                    xMax: band.end_date,
+                    backgroundColor: band.color,
+                    borderWidth: 0,
+                    label: { display: true, content: humanizeClinicalText(band.label), position: 'start', color: '#94a3b8', font: { size: 9 } }
+                };
+            });
+
+            new Chart(trajCtx, {
+                type: 'line',
+                data: {
+                    labels: trajData.points.map(p => p.date),
+                    datasets: [{
+                        label: 'PSA (ng/mL)',
+                        data: trajData.points.map(p => p.psa),
+                        borderColor: '#22d3ee',
+                        backgroundColor: '#22d3ee33',
+                        tension: 0.3,
+                        pointRadius: 3,
+                        fill: true,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { labels: { color: '#94a3b8' } },
+                        annotation: { annotations }
+                    },
+                    scales: {
+                        x: { grid: { color: '#334155' }, ticks: { color: '#94a3b8', maxRotation: 45 } },
+                        y: {
+                            type: 'logarithmic',
+                            grid: { color: '#334155' },
+                            ticks: { color: '#94a3b8', callback: v => v >= 1 ? v : v.toFixed(2) },
+                            title: { display: true, text: 'PSA (ng/mL) — escala log', color: '#94a3b8' }
+                        }
                     }
                 }
             });

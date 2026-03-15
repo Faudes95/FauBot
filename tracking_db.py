@@ -1266,9 +1266,187 @@ def init_tracking_db():
         '''
     )
 
+    # ── NUEVAS TABLAS: Copiloto Clínico (v4) ──────────────────────────────
+
+    # Eventos programados de seguimiento (schedule_engine)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS scheduled_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            label TEXT,
+            management_track TEXT,
+            due_date DATE NOT NULL,
+            guideline TEXT,
+            completed INTEGER DEFAULT 0,
+            completed_date DATE,
+            completed_visit_id INTEGER,
+            overdue_alert_sent INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+    ''')
+
+    # Evaluaciones de respuesta terapéutica (RECIST/PCWG3/PSA)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS response_assessments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            assessment_date DATE,
+            treatment_id INTEGER,
+            recist_category TEXT,
+            sum_target_diameters REAL,
+            baseline_sum_diameters REAL,
+            nadir_sum_diameters REAL,
+            pcwg3_bone_status TEXT,
+            new_bone_lesion_count INTEGER,
+            psa_response_category TEXT,
+            psa_baseline REAL,
+            psa_current REAL,
+            psa_nadir REAL,
+            psa_change_from_baseline_pct REAL,
+            overall_response TEXT,
+            clinical_benefit INTEGER,
+            details_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+    ''')
+
+    # Tracking de lesiones individuales
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS lesion_tracking (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            lesion_id TEXT,
+            first_detected_date DATE,
+            first_detected_study_id INTEGER,
+            anatomical_location TEXT,
+            lesion_category TEXT,
+            current_status TEXT DEFAULT 'present',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+    ''')
+
+    # Mediciones longitudinales de lesiones
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS lesion_measurements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            lesion_id INTEGER NOT NULL,
+            study_id INTEGER,
+            measurement_date DATE,
+            longest_diameter_mm REAL,
+            suvmax REAL,
+            volume_ml REAL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(lesion_id) REFERENCES lesion_tracking(id)
+        )
+    ''')
+
+    # Biomarcadores longitudinales (ctDNA, PSA serie, etc.)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS biomarker_longitudinal (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            biomarker_type TEXT NOT NULL,
+            value REAL,
+            unit TEXT,
+            sample_date DATE,
+            lab_source TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+    ''')
+
+    # ── MIGRACIONES: Nuevas columnas en tablas existentes ────────────────
+
+    # patient_demographics: Charlson Comorbidity Index
+    for ddl in (
+        "ALTER TABLE patient_demographics ADD COLUMN charlson_score INTEGER",
+        "ALTER TABLE patient_demographics ADD COLUMN charlson_details_json TEXT",
+        "ALTER TABLE patient_demographics ADD COLUMN g8_score REAL",
+        "ALTER TABLE patient_demographics ADD COLUMN g8_details_json TEXT",
+        "ALTER TABLE patient_demographics ADD COLUMN frailty_status TEXT",
+    ):
+        try:
+            c.execute(ddl)
+        except sqlite3.OperationalError:
+            pass
+
+    # patient_pros: PROs extendidos
+    for ddl in (
+        "ALTER TABLE patient_pros ADD COLUMN g8_total INTEGER",
+        "ALTER TABLE patient_pros ADD COLUMN facit_fatigue_total INTEGER",
+        "ALTER TABLE patient_pros ADD COLUMN fact_p_physical REAL",
+        "ALTER TABLE patient_pros ADD COLUMN fact_p_social REAL",
+        "ALTER TABLE patient_pros ADD COLUMN fact_p_emotional REAL",
+        "ALTER TABLE patient_pros ADD COLUMN fact_p_functional REAL",
+        "ALTER TABLE patient_pros ADD COLUMN fact_p_prostate REAL",
+        "ALTER TABLE patient_pros ADD COLUMN continence_status TEXT",
+        "ALTER TABLE patient_pros ADD COLUMN time_to_continence_months INTEGER",
+        "ALTER TABLE patient_pros ADD COLUMN sexual_recovery_status TEXT",
+        "ALTER TABLE patient_pros ADD COLUMN time_to_erection_months INTEGER",
+    ):
+        try:
+            c.execute(ddl)
+        except sqlite3.OperationalError:
+            pass
+
+    # follow_up_visits: Monitoreo CV/metabólico bajo ADT
+    for ddl in (
+        "ALTER TABLE follow_up_visits ADD COLUMN dxa_t_score_lumbar REAL",
+        "ALTER TABLE follow_up_visits ADD COLUMN dxa_t_score_hip REAL",
+        "ALTER TABLE follow_up_visits ADD COLUMN total_cholesterol REAL",
+        "ALTER TABLE follow_up_visits ADD COLUMN hdl_cholesterol REAL",
+        "ALTER TABLE follow_up_visits ADD COLUMN triglycerides REAL",
+        "ALTER TABLE follow_up_visits ADD COLUMN systolic_bp INTEGER",
+        "ALTER TABLE follow_up_visits ADD COLUMN diastolic_bp INTEGER",
+        "ALTER TABLE follow_up_visits ADD COLUMN waist_circumference_cm REAL",
+        "ALTER TABLE follow_up_visits ADD COLUMN hba1c REAL",
+        "ALTER TABLE follow_up_visits ADD COLUMN vitamin_d_level REAL",
+        "ALTER TABLE follow_up_visits ADD COLUMN calcium_level REAL",
+        "ALTER TABLE follow_up_visits ADD COLUMN toxicity_structured_json TEXT",
+    ):
+        try:
+            c.execute(ddl)
+        except sqlite3.OperationalError:
+            pass
+
+    # clinical_baseline: Biomarcadores diagnósticos avanzados
+    for ddl in (
+        "ALTER TABLE clinical_baseline ADD COLUMN free_psa REAL",
+        "ALTER TABLE clinical_baseline ADD COLUMN p2psa REAL",
+        "ALTER TABLE clinical_baseline ADD COLUMN intact_psa REAL",
+        "ALTER TABLE clinical_baseline ADD COLUMN hk2 REAL",
+        "ALTER TABLE clinical_baseline ADD COLUMN phi_score REAL",
+        "ALTER TABLE clinical_baseline ADD COLUMN four_k_probability REAL",
+        "ALTER TABLE clinical_baseline ADD COLUMN selectmdx_result TEXT",
+        "ALTER TABLE clinical_baseline ADD COLUMN exodx_result TEXT",
+    ):
+        try:
+            c.execute(ddl)
+        except sqlite3.OperationalError:
+            pass
+
+    # genomic_profile: Biomarcadores emergentes
+    for ddl in (
+        "ALTER TABLE genomic_profile ADD COLUMN ctdna_detected INTEGER",
+        "ALTER TABLE genomic_profile ADD COLUMN ctdna_vaf REAL",
+        "ALTER TABLE genomic_profile ADD COLUMN ctdna_date DATE",
+        "ALTER TABLE genomic_profile ADD COLUMN tmb_score REAL",
+        "ALTER TABLE genomic_profile ADD COLUMN pdl1_expression TEXT",
+        "ALTER TABLE genomic_profile ADD COLUMN ntrk_fusion TEXT",
+        "ALTER TABLE genomic_profile ADD COLUMN ret_alteration TEXT",
+    ):
+        try:
+            c.execute(ddl)
+        except sqlite3.OperationalError:
+            pass
+
     conn.commit()
     conn.close()
-    logger.info("Tracking DB initialized (v3 — Expediente Longitudinal + Investigación).")
+    logger.info("Tracking DB initialized (v4 — Copiloto Clínico + Scheduling + RECIST/PCWG3).")
 
 
 def create_clinical_assessment_draft(module_id, state, input_snapshot, result_snapshot, guideline_versions):

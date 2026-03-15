@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from precision_medicine import evaluate_patient_for_mhspc
+from prostanet.shared.precision_medicine_legacy import evaluate_patient_for_mhspc
 
 from prostanet.domains.evidence_registry.service import EvidenceRegistryService
 from prostanet.domains.guideline_comparison.service import GuidelineComparisonService

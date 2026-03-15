@@ -494,9 +494,8 @@ def calculate_all_scores(patient_data: dict[str, Any]) -> dict[str, Any]:
         
     return results
 
-def generate_comprehensive_summary(scores: dict[str, Any], ml_prediction: dict[str, Any], patient_data: dict[str, Any]) -> str:
-    # ... (rest of summary logic if needed, but we use report_generator.py now)
-    return "Consulte reporte narrativo detallado."
+
+
 
 
 
@@ -1679,3 +1678,457 @@ def generate_comprehensive_summary(scores: dict, ml_prediction: dict, patient: d
     summary['statistical_impact'] = stats
 
     return summary
+
+
+# ============================================================================
+# CHARLSON COMORBIDITY INDEX (CCI)
+#   Charlson ME et al. J Chronic Dis 1987; 40(5):373-83
+#   Actualización Quan H et al. Med Care 2011; 49(6):626-33
+# ============================================================================
+
+def charlson_comorbidity_index(patient: dict[str, Any]) -> dict[str, Any]:
+    """
+    Calcula el Índice de Comorbilidad de Charlson.
+
+    Variables esperadas (todas opcionales, default=False):
+        - age: edad del paciente
+        - myocardial_infarction: infarto al miocardio
+        - congestive_heart_failure: insuficiencia cardiaca congestiva
+        - peripheral_vascular_disease: enfermedad vascular periférica
+        - cerebrovascular_disease: enfermedad cerebrovascular
+        - dementia: demencia
+        - chronic_pulmonary_disease: enfermedad pulmonar crónica
+        - connective_tissue_disease: enfermedad del tejido conectivo
+        - peptic_ulcer_disease: úlcera péptica
+        - mild_liver_disease: enfermedad hepática leve
+        - diabetes_without_complications: diabetes sin complicaciones
+        - diabetes_with_complications: diabetes con complicaciones
+        - hemiplegia: hemiplejía o paraplejía
+        - renal_disease: enfermedad renal (creatinina >3 o diálisis)
+        - solid_tumor_localized: tumor sólido localizado (sin metástasis)
+        - leukemia_lymphoma: leucemia o linfoma
+        - moderate_severe_liver_disease: enfermedad hepática moderada/severa
+        - metastatic_solid_tumor: tumor sólido con metástasis
+        - aids_hiv: SIDA/VIH
+
+    Retorna dict con:
+        - score: puntuación total
+        - age_adjusted_score: score ajustado por edad
+        - risk_category: LOW | MODERATE | HIGH | VERY_HIGH
+        - estimated_10y_survival_pct: supervivencia estimada a 10 años
+        - conditions: lista de condiciones presentes
+    """
+    def _flag(key):
+        v = patient.get(key)
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            return v >= 1
+        if isinstance(v, str):
+            return v.strip().lower() in ("si", "sí", "yes", "true", "1", "on")
+        return False
+
+    # Pesos estándar
+    weights = [
+        ("myocardial_infarction", 1),
+        ("congestive_heart_failure", 1),
+        ("peripheral_vascular_disease", 1),
+        ("cerebrovascular_disease", 1),
+        ("dementia", 1),
+        ("chronic_pulmonary_disease", 1),
+        ("connective_tissue_disease", 1),
+        ("peptic_ulcer_disease", 1),
+        ("mild_liver_disease", 1),
+        ("diabetes_without_complications", 1),
+        ("diabetes_with_complications", 2),
+        ("hemiplegia", 2),
+        ("renal_disease", 2),
+        ("solid_tumor_localized", 2),
+        ("leukemia_lymphoma", 2),
+        ("moderate_severe_liver_disease", 3),
+        ("metastatic_solid_tumor", 6),
+        ("aids_hiv", 6),
+    ]
+
+    score = 0
+    conditions = []
+    for key, weight in weights:
+        if _flag(key):
+            score += weight
+            conditions.append(key)
+
+    # Ajuste por edad (Charlson age-adjusted)
+    age = patient.get("age", 0)
+    age_points = 0
+    if isinstance(age, (int, float)) and age >= 50:
+        age_points = max(0, (int(age) - 40) // 10)
+    age_adjusted = score + age_points
+
+    # Categorización
+    if age_adjusted == 0:
+        category = "LOW"
+        survival_10y = 98
+    elif age_adjusted <= 2:
+        category = "LOW"
+        survival_10y = 90
+    elif age_adjusted <= 4:
+        category = "MODERATE"
+        survival_10y = 72
+    elif age_adjusted <= 6:
+        category = "HIGH"
+        survival_10y = 52
+    else:
+        category = "VERY_HIGH"
+        survival_10y = 26
+
+    return {
+        "score": score,
+        "age_adjusted_score": age_adjusted,
+        "age_points": age_points,
+        "risk_category": category,
+        "estimated_10y_survival_pct": survival_10y,
+        "conditions": conditions,
+    }
+
+
+# ============================================================================
+# G8 GERIATRIC SCREENING TOOL
+#   Bellera CA et al. Ann Oncol 2012; 23(8):2166-72
+#   Corte ≤14 → paciente vulnerable, requiere evaluación geriátrica integral
+# ============================================================================
+
+def g8_geriatric_assessment(patient: dict[str, Any]) -> dict[str, Any]:
+    """
+    Calcula el G8 Geriatric Screening Score (0-17).
+
+    Variables esperadas:
+        - g8_food_intake: 0=severe decrease, 1=moderate decrease, 2=normal
+        - g8_weight_loss: 0=loss>3kg, 1=unknown, 2=loss 1-3kg, 3=no loss
+        - g8_mobility: 0=bed/chair, 1=gets out but not outdoors, 2=goes outdoors
+        - g8_neuropsych: 0=severe dementia/depression, 1=mild, 2=no problems
+        - g8_bmi: 0=BMI<19, 1=BMI 19-<21, 2=BMI 21-<23, 3=BMI≥23
+        - g8_medications: 0=more than 3, 1=3 or fewer
+        - g8_self_health: 0=not as good, 0.5=does not know, 1=as good, 2=better
+        - age: edad del paciente
+
+    Retorna:
+        - score: puntuación total (0-17)
+        - fit_for_aggressive_treatment: True si score >14
+        - interpretation: texto descriptivo
+    """
+    score = 0.0
+
+    food = patient.get("g8_food_intake", 2)
+    score += min(max(float(food), 0), 2)
+
+    weight = patient.get("g8_weight_loss", 3)
+    score += min(max(float(weight), 0), 3)
+
+    mobility = patient.get("g8_mobility", 2)
+    score += min(max(float(mobility), 0), 2)
+
+    neuro = patient.get("g8_neuropsych", 2)
+    score += min(max(float(neuro), 0), 2)
+
+    bmi_score = patient.get("g8_bmi", 3)
+    score += min(max(float(bmi_score), 0), 3)
+
+    meds = patient.get("g8_medications", 1)
+    score += min(max(float(meds), 0), 1)
+
+    self_health = patient.get("g8_self_health", 2)
+    score += min(max(float(self_health), 0), 2)
+
+    # Edad: 0=>85, 1=80-85, 2=<80
+    age = patient.get("age", 70)
+    if isinstance(age, (int, float)):
+        if age > 85:
+            score += 0
+        elif age >= 80:
+            score += 1
+        else:
+            score += 2
+    else:
+        score += 2
+
+    score = round(score, 1)
+    is_fit = score > 14
+
+    if score > 14:
+        interpretation = "Sin indicios de fragilidad. Apto para tratamiento estándar."
+    elif score >= 10:
+        interpretation = "Vulnerabilidad detectada. Se recomienda evaluación geriátrica integral antes de decidir tratamiento agresivo."
+    else:
+        interpretation = "Fragilidad significativa. Considerar tratamiento adaptado, reducción de dosis o mejor soporte de cuidado."
+
+    return {
+        "score": score,
+        "fit_for_aggressive_treatment": is_fit,
+        "interpretation": interpretation,
+    }
+
+
+# ============================================================================
+# PROSTATE HEALTH INDEX (PHI)
+#   Catalona WJ et al. J Urol 2011; 186(5):1840-5
+#   PHI = ([-2]proPSA / fPSA) × √tPSA
+# ============================================================================
+
+def prostate_health_index(patient: dict[str, Any]) -> dict[str, Any]:
+    """
+    Calcula el Prostate Health Index (PHI).
+
+    Variables esperadas:
+        - psa: PSA total (ng/mL)
+        - free_psa: PSA libre (ng/mL)
+        - p2psa: [-2]proPSA (pg/mL)
+
+    Retorna:
+        - phi_score: valor del PHI
+        - risk_interpretation: bajo/intermedio/alto
+        - biopsy_recommendation: recomendación
+        - probability_high_grade_pct: probabilidad de cáncer significativo
+    """
+    psa = patient.get("psa", 0)
+    free_psa = patient.get("free_psa", 0)
+    p2psa = patient.get("p2psa", 0)
+
+    if not psa or not free_psa or not p2psa or psa <= 0 or free_psa <= 0:
+        return {
+            "phi_score": None,
+            "risk_interpretation": "No calculable (datos insuficientes)",
+            "biopsy_recommendation": "Se requieren PSA total, PSA libre y [-2]proPSA para calcular PHI.",
+            "probability_high_grade_pct": None,
+        }
+
+    phi = (p2psa / free_psa) * math.sqrt(psa)
+
+    if phi < 27:
+        risk = "BAJO"
+        prob = 11
+        rec = "Baja probabilidad de cáncer significativo. Considerar vigilancia con PSA y seguimiento."
+    elif phi < 36:
+        risk = "INTERMEDIO"
+        prob = 20
+        rec = "Probabilidad intermedia. Considerar biopsia según contexto clínico y mpMRI."
+    elif phi < 55:
+        risk = "ALTO"
+        prob = 34
+        rec = "Alta probabilidad de cáncer clínicamente significativo. Biopsia recomendada."
+    else:
+        risk = "MUY ALTO"
+        prob = 52
+        rec = "Muy alta probabilidad de cáncer significativo. Biopsia urgente recomendada."
+
+    return {
+        "phi_score": round(phi, 1),
+        "risk_interpretation": risk,
+        "biopsy_recommendation": rec,
+        "probability_high_grade_pct": prob,
+    }
+
+
+# ============================================================================
+# 4K SCORE (Approximation)
+#   Parekh DJ et al. Eur Urol 2015; 68(3):464-70
+#   Combina: PSA total, PSA libre, PSA intacta, hK2, edad, DRE, biopsia previa
+#   Estima probabilidad de cáncer de próstata de alto grado (Gleason ≥7)
+# ============================================================================
+
+def four_k_score(patient: dict[str, Any]) -> dict[str, Any]:
+    """
+    Estimación simplificada del 4Kscore.
+
+    El 4Kscore real usa un modelo propietario con 4 kalicreínas
+    (tPSA, fPSA, iPSA, hK2) + datos clínicos. Esta es una
+    aproximación basada en coeficientes publicados.
+
+    Variables esperadas:
+        - psa: PSA total (ng/mL)
+        - free_psa: PSA libre (ng/mL)
+        - intact_psa: PSA intacta (ng/mL) [opcional]
+        - hk2: Kalicreína humana 2 (ng/mL) [opcional]
+        - age: Edad
+        - prior_biopsy: Biopsia previa (boolean)
+        - dre_abnormal: Tacto rectal anormal (boolean)
+    """
+    psa = patient.get("psa", 0)
+    free_psa = patient.get("free_psa", 0)
+    intact_psa = patient.get("intact_psa")
+    hk2 = patient.get("hk2")
+    age = patient.get("age", 65)
+    prior_bx = patient.get("prior_biopsy", False)
+    dre_abn = patient.get("dre_abnormal", False)
+
+    try:
+        psa = float(psa)
+        free_psa = float(free_psa) if free_psa else 0
+        age = int(float(age))
+    except (ValueError, TypeError):
+        return {
+            "four_k_probability_pct": None,
+            "risk_category": "No calculable",
+            "recommendation": "Se requieren PSA total y PSA libre como mínimo.",
+        }
+
+    if psa <= 0:
+        return {
+            "four_k_probability_pct": None,
+            "risk_category": "No calculable",
+            "recommendation": "PSA total debe ser >0.",
+        }
+
+    # Simplified logistic approximation based on published coefficients
+    # ln(odds) = intercept + b1*ln(PSA) + b2*ln(fPSA) + b3*age + b4*DRE + b5*prior_bx
+    logit = -8.5
+    logit += 1.7 * math.log(max(psa, 0.01))
+    if free_psa > 0:
+        ratio = free_psa / psa
+        logit -= 2.0 * ratio  # lower free/total ratio → higher risk
+    logit += 0.05 * age
+    if dre_abn:
+        logit += 0.8
+    if prior_bx:
+        logit -= 0.5  # prior negative biopsy reduces risk
+
+    # Incorporate iPSA and hK2 if available
+    if intact_psa is not None:
+        try:
+            ipsa = float(intact_psa)
+            if ipsa > 0 and psa > 0:
+                logit += 0.5 * math.log(ipsa / psa + 0.01)
+        except (ValueError, TypeError):
+            pass
+
+    if hk2 is not None:
+        try:
+            hk2_val = float(hk2)
+            if hk2_val > 0:
+                logit += 0.4 * math.log(hk2_val + 0.01)
+        except (ValueError, TypeError):
+            pass
+
+    probability = 1 / (1 + math.exp(-logit))
+    prob_pct = round(probability * 100, 1)
+
+    if prob_pct < 7.5:
+        category = "BAJO"
+        rec = "Baja probabilidad de cáncer de alto grado. Considerar vigilancia o diferir biopsia."
+    elif prob_pct < 15:
+        category = "INTERMEDIO"
+        rec = "Riesgo intermedio. Considerar mpMRI y decisión compartida sobre biopsia."
+    else:
+        category = "ALTO"
+        rec = "Alta probabilidad de cáncer de alto grado. Biopsia recomendada."
+
+    completeness = "completo" if (intact_psa is not None and hk2 is not None) else "aproximado (faltan iPSA/hK2)"
+
+    return {
+        "four_k_probability_pct": prob_pct,
+        "risk_category": category,
+        "recommendation": rec,
+        "model_completeness": completeness,
+        "reference": "Parekh DJ et al. Eur Urol 2015;68(3):464-70",
+    }
+
+
+# ============================================================================
+# ERSPC / PCPT RISK CALCULATOR (Approximation)
+#   Thompson IM et al. NEJM 2004 (PCPT)
+#   Roobol MJ et al. Eur Urol 2012 (ERSPC)
+#   Estima riesgo de cáncer de próstata y de cáncer de alto grado
+# ============================================================================
+
+def erspc_risk_calculator(patient: dict[str, Any]) -> dict[str, Any]:
+    """
+    Calculadora de riesgo ERSPC/PCPT simplificada.
+
+    Estima probabilidad de:
+    1. Cualquier cáncer de próstata en biopsia
+    2. Cáncer de alto grado (Gleason ≥7) en biopsia
+
+    Variables:
+        - psa: PSA total (ng/mL)
+        - age: Edad
+        - dre_abnormal: Tacto rectal anormal (boolean)
+        - prostate_volume_ml: Volumen prostático (mL)
+        - prior_biopsy: Biopsia previa negativa (boolean)
+        - family_history: Historia familiar de CaP (boolean)
+    """
+    psa = patient.get("psa", 0)
+    age = patient.get("age", 65)
+    dre_abn = patient.get("dre_abnormal", False)
+    volume = patient.get("prostate_volume_ml", 0)
+    prior_bx = patient.get("prior_biopsy", False)
+    fam_hx = patient.get("family_history", False)
+
+    try:
+        psa = float(psa)
+        age = int(float(age))
+        volume = float(volume) if volume else 0
+    except (ValueError, TypeError):
+        return {
+            "any_cancer_probability_pct": None,
+            "high_grade_probability_pct": None,
+            "recommendation": "Datos insuficientes para el cálculo.",
+        }
+
+    if psa <= 0:
+        return {
+            "any_cancer_probability_pct": None,
+            "high_grade_probability_pct": None,
+            "recommendation": "PSA total debe ser >0.",
+        }
+
+    # ERSPC-like logistic model for any cancer
+    logit_any = -6.5
+    logit_any += 1.1 * math.log(max(psa, 0.01))
+    logit_any += 0.03 * age
+    if dre_abn:
+        logit_any += 1.0
+    if volume > 0:
+        psad = psa / volume
+        logit_any += 2.0 * psad
+    if prior_bx:
+        logit_any -= 0.7
+    if fam_hx:
+        logit_any += 0.3
+
+    # High-grade model
+    logit_hg = -8.0
+    logit_hg += 1.4 * math.log(max(psa, 0.01))
+    logit_hg += 0.04 * age
+    if dre_abn:
+        logit_hg += 1.2
+    if volume > 0:
+        logit_hg += 3.0 * (psa / volume)
+    if prior_bx:
+        logit_hg -= 0.5
+
+    prob_any = round(100 / (1 + math.exp(-logit_any)), 1)
+    prob_hg = round(100 / (1 + math.exp(-logit_hg)), 1)
+
+    # Ensure high grade ≤ any cancer
+    prob_hg = min(prob_hg, prob_any)
+
+    if prob_hg >= 15:
+        rec = "Riesgo elevado de cáncer significativo. Biopsia recomendada (preferiblemente guiada por mpMRI)."
+    elif prob_any >= 25:
+        rec = "Riesgo intermedio. Considerar mpMRI antes de biopsia. Decisión compartida."
+    else:
+        rec = "Riesgo bajo. Seguimiento con PSA. Considerar biomarcadores adicionales (PHI, 4Kscore) si duda persiste."
+
+    return {
+        "any_cancer_probability_pct": prob_any,
+        "high_grade_probability_pct": prob_hg,
+        "recommendation": rec,
+        "inputs_used": {
+            "psa": psa,
+            "age": age,
+            "dre_abnormal": dre_abn,
+            "prostate_volume_ml": volume or "No documentado",
+            "prior_biopsy": prior_bx,
+            "family_history": fam_hx,
+        },
+        "reference": "ERSPC-RC: Roobol MJ et al. Eur Urol 2012 / PCPT-RC: Thompson IM et al. NEJM 2004",
+    }

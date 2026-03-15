@@ -539,6 +539,21 @@ def support_bundle_for_module(module_id: str, payload: dict[str, Any], result: d
         )
         transitions = []
 
+    # ── CCI/G8 benchmarking flags for all modules ──
+    _age_for_g8 = 0
+    try:
+        _age_for_g8 = int(float(payload.get("age") or payload.get("edad") or 0))
+    except (ValueError, TypeError):
+        pass
+    if _age_for_g8 >= 70:
+        benchmarking_flags.append(
+            benchmark_flag("G8 Geriatric Screening", "complete" if not _missing(payload.get("g8_score")) else "missing", "Paciente ≥70 años: documentar G8 antes de intensificar tratamiento (corte ≤14 = fragilidad).")
+        )
+    if module_id not in {"diagnostic_workup", "post_negative_biopsy_followup"}:
+        benchmarking_flags.append(
+            benchmark_flag("Charlson Comorbidity Index", "complete" if not _missing(payload.get("charlson_score")) else "missing", "CCI ajustado por edad modula la tolerabilidad e intensidad terapéutica.")
+        )
+
     return {
         "monitoring": monitoring,
         "transitions": transitions,

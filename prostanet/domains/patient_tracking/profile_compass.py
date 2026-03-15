@@ -743,6 +743,147 @@ def _build_longitudinal_sections(patient: dict[str, Any], state: str, display_as
     return sections
 
 
+def _build_copilot_sections(patient: dict[str, Any], state: str, management_track: str, raw_assessment: dict[str, Any]) -> dict[str, Any]:
+    """Build copilot clinical data: schedule, alerts, comorbidity scores, ADT side effects."""
+    import logging
+    copilot_logger = logging.getLogger(__name__)
+    copilot: dict[str, Any] = {
+        "schedule": [],
+        "overdue_alerts": [],
+        "clinical_alerts": [],
+        "comorbidity_scores": {},
+        "adt_side_effects": None,
+    }
+
+    patient_id = patient.get("identity", {}).get("id")
+    if not patient_id:
+        return copilot
+
+    identity = patient.get("identity", {})
+    baseline = patient.get("baseline", {}) or {}
+    prior = patient.get("prior_history", {}) or {}
+    followups = patient.get("follow_ups", []) or []
+
+    # ── Schedule ──
+    try:
+        from prostanet.domains.patient_tracking.schedule_engine import generate_schedule, check_overdue
+        start_date = identity.get("diagnosis_date") or identity.get("created_at", "")
+        if start_date and management_track:
+            schedule = generate_schedule(
+                patient_id=patient_id,
+                management_track=management_track,
+                treatment_start_date=start_date,
+                horizon_months=12,
+            )
+            copilot["schedule"] = [ev.to_dict() for ev in schedule[:20]]
+
+            overdue = check_overdue(
+                patient_id=patient_id,
+                management_track=management_track,
+                treatment_start_date=start_date,
+            )
+            copilot["overdue_alerts"] = [a.to_dict() for a in overdue]
+    except Exception as exc:
+        copilot_logger.debug("Copilot schedule error: %s", exc)
+
+    # ── Clinical alerts ──
+    try:
+        from prostanet.domains.patient_tracking.alert_engine import ClinicalAlertEngine
+        alert_data: dict[str, Any] = {}
+        alert_data.update(identity)
+        alert_data.update(baseline)
+        alert_data.update(prior)
+        if followups:
+            last_fu = followups[-1]
+            alert_data["psa"] = last_fu.get("psa_current")
+            alert_data["hemoglobin"] = last_fu.get("hemoglobin_current")
+            alert_data["ecog"] = last_fu.get("ecog_current")
+            alert_data["testosterone"] = last_fu.get("testosterone_current")
+            alert_data["alp"] = last_fu.get("alp_current")
+            if len(followups) >= 2:
+                alert_data["ecog_previous"] = followups[-2].get("ecog_current")
+        alert_data["management_track"] = management_track
+        alerts = ClinicalAlertEngine.run_all(patient_id, alert_data)
+        copilot["clinical_alerts"] = [a.to_dict() for a in alerts]
+    except Exception as exc:
+        copilot_logger.debug("Copilot alerts error: %s", exc)
+
+    # ── Comorbidity scores (CCI, G8) ──
+    try:
+        from clinical_scores import charlson_comorbidity_index, g8_geriatric_assessment
+        score_data: dict[str, Any] = {}
+        score_data.update(identity)
+        score_data.update(baseline)
+        score_data.update(prior)
+        copilot["comorbidity_scores"]["charlson"] = charlson_comorbidity_index(score_data)
+        copilot["comorbidity_scores"]["g8"] = g8_geriatric_assessment(score_data)
+    except Exception as exc:
+        copilot_logger.debug("Copilot comorbidity error: %s", exc)
+
+    # ── ADT side effects (only if on ADT) ──
+    if prior.get("prior_adt") or management_track in ("on_arpi", "systemic_surveillance"):
+        try:
+            from prostanet.domains.patient_tracking.adt_side_effects import ADTSideEffectService
+            adt_data: dict[str, Any] = {}
+            adt_data.update(identity)
+            adt_data.update(baseline)
+            adt_data.update(prior)
+            if followups:
+                adt_data.update(followups[-1])
+            profile = ADTSideEffectService.full_assessment(adt_data)
+            copilot["adt_side_effects"] = profile.to_dict()
+        except Exception as exc:
+            copilot_logger.debug("Copilot ADT side effects error: %s", exc)
+
+    # ── Response visualization (waterfall, spider, swimmer) ──
+    try:
+        from prostanet.domains.reporting.response_visualization import ResponseVisualizationService
+        treatments = patient.get("treatments") or []
+        psa_series = patient.get("psa_series") or []
+
+        # Construir datos de lesiones desde lesion_tracking si existe
+        lesion_data: list[dict[str, Any]] = []
+        try:
+            from tracking_db import get_db_connection
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute("SELECT id, lesion_id, anatomical_location, lesion_category FROM lesion_tracking WHERE patient_id = ?", (patient_id,))
+            tracked_lesions = c.fetchall()
+            for tl in tracked_lesions:
+                c.execute(
+                    "SELECT measurement_date, longest_diameter_mm, suvmax, volume_ml FROM lesion_measurements WHERE lesion_id = ? ORDER BY measurement_date ASC",
+                    (tl["id"],)
+                )
+                measurements = [dict(m) for m in c.fetchall()]
+                if measurements:
+                    lesion_data.append({
+                        "lesion_id": tl["lesion_id"] or str(tl["id"]),
+                        "anatomical_location": tl["anatomical_location"],
+                        "lesion_category": tl["lesion_category"],
+                        "measurements": measurements,
+                    })
+            conn.close()
+        except Exception:
+            pass
+
+        diagnosis_date = identity.get("diagnosis_date")
+        baseline_psa_val = baseline.get("baseline_psa")
+
+        viz_bundle = ResponseVisualizationService.build_visualization_bundle(
+            treatments=treatments,
+            lesions=lesion_data,
+            psa_series=psa_series,
+            baseline_psa=float(baseline_psa_val) if baseline_psa_val else None,
+            diagnosis_date=diagnosis_date,
+        )
+        copilot["response_visualization"] = viz_bundle.to_dict()
+    except Exception as exc:
+        copilot_logger.debug("Copilot response visualization error: %s", exc)
+        copilot["response_visualization"] = {"waterfall": [], "spider": {"has_data": False}, "swimmer": [], "psa_trajectory": {"has_data": False}}
+
+    return copilot
+
+
 def build_patient_profile_view_model(
     *,
     patient: dict[str, Any],
@@ -811,4 +952,5 @@ def build_patient_profile_view_model(
         "recommendation_audit": (patient.get("recommendation_audit") or [])[:8],
         "document_board": document_board,
         "recommendations": recommendations or {},
+        "copilot": _build_copilot_sections(patient, state, management_track, raw_assessment),
     }

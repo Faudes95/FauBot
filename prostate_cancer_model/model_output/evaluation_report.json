@@ -1,9 +1,0 @@
-{
-  "risk_accuracy": 0.9883333333333333,
-  "risk_auc_roc": 0.9991261229043827,
-  "treatment_accuracy": 0.355,
-  "cure_rate_mae": 0.06262122314152667,
-  "survival_5y_mae": 0.055086819428351155,
-  "survival_10y_mae": 0.0706481344673203,
-  "survival_constraint_violations": 0
-}
