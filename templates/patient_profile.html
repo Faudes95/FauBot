@@ -18,16 +18,77 @@
             0%, 100% { opacity: 1; }
             50% { opacity: 0.5; }
         }
+        .pn-accordion summary::-webkit-details-marker { display: none; }
+        .pn-accordion summary {
+            list-style: none;
+            cursor: pointer;
+        }
+        .pn-accordion summary::after {
+            content: '+';
+            font-size: 1rem;
+            color: #67e8f9;
+        }
+        .pn-accordion[open] summary::after {
+            content: '−';
+        }
+        .pn-algorithm-bar {
+            height: 0.5rem;
+            border-radius: 999px;
+            background: rgba(148, 163, 184, 0.15);
+            overflow: hidden;
+        }
+        .pn-algorithm-bar > span {
+            display: block;
+            height: 100%;
+            border-radius: 999px;
+        }
+        .pn-stack {
+            display: flex;
+            width: 100%;
+            border-radius: 999px;
+            overflow: hidden;
+            min-height: 0.7rem;
+            background: rgba(15, 23, 42, 0.55);
+        }
+        .pn-stack > span {
+            display: block;
+            min-width: 0.4rem;
+        }
+        .pn-tone-cyan { background: linear-gradient(90deg, #0891b2, #22d3ee); }
+        .pn-tone-emerald { background: linear-gradient(90deg, #047857, #34d399); }
+        .pn-tone-amber { background: linear-gradient(90deg, #b45309, #fbbf24); }
+        .pn-tone-orange { background: linear-gradient(90deg, #c2410c, #fb923c); }
+        .pn-tone-rose { background: linear-gradient(90deg, #be123c, #fb7185); }
     </style>
 {% endblock %}
 
 {% block content %}
     {% set current_state_key = latest_assessment.state if latest_assessment else patient.prior_history.current_state %}
     {% set diagnostic_states = ['diagnostic_workup', 'post_negative_biopsy_followup'] %}
-    {% set diagnostic_state = current_state_key in diagnostic_states %}
+    {% set profile = profile_view or {} %}
+    {% set diagnostic_state = profile.diagnostic_state if profile and profile.diagnostic_state is not none else current_state_key in diagnostic_states %}
     {% set benchmarking_flags = latest_assessment.display_result.benchmarking_flags if latest_assessment and latest_assessment.display_result.benchmarking_flags else [] %}
     {% set decision_quality = latest_assessment.display_result.decision_quality if latest_assessment and latest_assessment.display_result.decision_quality else {} %}
     {% set validated_algorithms = latest_assessment.display_result.validated_algorithms if latest_assessment and latest_assessment.display_result.validated_algorithms else [] %}
+    {% set clinical_compass = profile.clinical_compass if profile else {} %}
+    {% set stage_specific_panels = profile.stage_specific_panels if profile else [] %}
+    {% set algorithm_panels = profile.algorithm_panels if profile else [] %}
+    {% set pivotal_panel = profile.pivotal_panel if profile else {} %}
+    {% set supportive_evidence_context = profile.supportive_evidence_context if profile else [] %}
+    {% set profile_sources = profile.source_citations if profile else [] %}
+    {% set longitudinal_sections = profile.longitudinal_sections if profile else [] %}
+    {% set agenda_board = profile.agenda_board if profile else {} %}
+    {% set next_due_items = profile.next_due_items if profile else [] %}
+    {% set overdue_items = profile.overdue_items if profile else [] %}
+    {% set visit_schema = profile.visit_schema if profile else {} %}
+    {% set therapy_checkpoints = profile.therapy_checkpoints if profile else [] %}
+    {% set protocol_comparators = profile.protocol_comparators if profile else [] %}
+    {% set data_provenance = profile.data_provenance if profile else [] %}
+    {% set clinical_signals = profile.clinical_signals if profile else {} %}
+    {% set next_best_action = profile.next_best_action if profile else {} %}
+    {% set transition_proposals = profile.transition_proposals if profile else [] %}
+    {% set recommendation_audit = profile.recommendation_audit if profile else [] %}
+    {% set document_board = profile.document_board if profile else {} %}
     <div class="space-y-6">
 
         <!-- ═══════════════════════════════════════════════════════════════════ -->
@@ -68,6 +129,34 @@
                 </div>
             </div>
 
+            {% if clinical_compass.current_diagnosis %}
+            <div class="mt-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Diagnóstico actual</div>
+                    <div class="mt-2 text-sm font-semibold text-white">{{ clinical_compass.current_diagnosis }}</div>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Etapa / módulo actual</div>
+                    <div class="mt-2 text-sm font-semibold text-cyan-200">{{ clinical_compass.current_stage_label }}</div>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Decisión clínica hoy</div>
+                    <div class="mt-2 text-sm text-slate-200">{{ clinical_compass.primary_clinical_question }}</div>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Estado de manejo</div>
+                    <div class="mt-2 text-sm font-semibold text-amber-200">{{ clinical_compass.management_intent_status }}</div>
+                    <div class="mt-1 text-xs text-slate-500">{{ clinical_compass.event_kind_label }}</div>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Último dato decisor</div>
+                    <div class="mt-2 text-sm font-semibold text-white">{{ clinical_compass.last_decisive_data.label }}</div>
+                    <div class="mt-1 text-xs text-slate-400">{{ clinical_compass.last_decisive_data.value }}</div>
+                    <div class="mt-1 text-[11px] text-slate-500">{{ clinical_compass.last_decisive_data.date }}</div>
+                </div>
+            </div>
+            {% endif %}
+
             <!-- Alertas Activas -->
             {% if patient.alerts %}
             <div class="mt-4 space-y-2">
@@ -89,78 +178,273 @@
             {% endif %}
         </header>
 
-        {% if latest_assessment %}
-        <section class="pn-surface border border-emerald-700/40 bg-emerald-950/10">
-            <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
-                <div>
-                    <h2 class="text-lg font-bold text-white flex items-center gap-2">
-                        📄 Última evaluación clínica modular
-                    </h2>
-                    <p class="mt-2 text-sm text-slate-300">{{ latest_assessment.module_label }}</p>
-                    <p class="mt-2 text-sm text-slate-400">{{ latest_assessment.display_result.nccn_primary.resumen_del_caso or latest_assessment.display_result.report_sections.summary }}</p>
-                </div>
-                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4 min-w-[280px]">
-                    <div class="text-xs uppercase tracking-wider text-slate-500">Recomendación principal</div>
-                    <div class="mt-2 text-sm text-white">{{ latest_assessment.display_result.nccn_primary.titulo_clinico or latest_assessment.display_result.nccn_primary.label }}</div>
-                    <div class="mt-1 text-sm text-slate-300">{{ latest_assessment.display_result.nccn_primary.trayectoria_recomendada or latest_assessment.display_result.nccn_primary.recommendation }}</div>
-                </div>
-            </div>
-            <div class="mt-4 grid gap-4 lg:grid-cols-2">
-                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
-                    <div class="text-xs uppercase tracking-wider text-slate-500">Fundamentos personalizados</div>
+        {% if next_best_action.title or transition_proposals or clinical_signals.critical_missing or clinical_signals.active_safety %}
+        <section class="pn-surface border border-cyan-700/30 bg-cyan-950/10">
+            <div class="grid grid-cols-1 xl:grid-cols-4 gap-4">
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4 xl:col-span-2">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Siguiente mejor acción</div>
+                    <div class="mt-2 text-base font-semibold text-white">{{ next_best_action.title or 'Sin siguiente acción prioritaria' }}</div>
+                    {% if next_best_action.rationale %}
+                    <p class="mt-2 text-sm text-slate-300">{{ next_best_action.rationale }}</p>
+                    {% endif %}
                     <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
-                        {% for item in latest_assessment.display_result.nccn_primary.fundamentos_personalizados or [] %}
+                        {% for item in next_best_action.immediate_actions or [] %}
                         <li>{{ item }}</li>
                         {% else %}
-                        <li>Sin fundamentos personalizados estructurados.</li>
+                        <li>Sin acciones inmediatas adicionales.</li>
                         {% endfor %}
                     </ul>
                 </div>
                 <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
-                    <div class="text-xs uppercase tracking-wider text-slate-500">Comparación con la Asociación Europea de Urología (EAU) 2026</div>
-                    <p class="mt-3 text-sm text-slate-300">{{ latest_assessment.display_result.eau_comparison.explicacion_breve or latest_assessment.display_result.eau_comparison.comparison.summary }}</p>
-                    <div class="mt-4 text-xs uppercase tracking-wider text-slate-500">Mensaje para toma de decisiones compartida</div>
-                    <p class="mt-2 text-sm text-slate-300">{{ latest_assessment.display_result.nccn_primary.mensaje_para_toma_de_decisiones_compartida }}</p>
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Dato crítico faltante</div>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in clinical_signals.critical_missing or [] %}
+                        <li>{{ item }}</li>
+                        {% else %}
+                        <li>Sin dato faltante crítico activo.</li>
+                        {% endfor %}
+                    </ul>
+                    {% if clinical_signals.awaiting_review %}
+                    <div class="mt-4 text-xs uppercase tracking-wider text-slate-500">Re-evaluación pendiente</div>
+                    <ul class="mt-2 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in clinical_signals.awaiting_review %}
+                        <li>{{ item }}</li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Riesgo / seguridad activa</div>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in clinical_signals.active_safety or [] %}
+                        <li>{{ item }}</li>
+                        {% else %}
+                        <li>Sin alertas de seguridad activas estructuradas.</li>
+                        {% endfor %}
+                    </ul>
                 </div>
             </div>
-            {% if decision_quality %}
-            <div class="mt-4 grid gap-4 lg:grid-cols-3">
-                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
-                    <div class="text-xs uppercase tracking-wider text-slate-500">Calidad de decision</div>
-                    <div class="mt-2 text-lg font-semibold text-white">{{ decision_quality.confidence_category or 'No documentada' }}</div>
-                    <p class="mt-2 text-sm text-slate-300">Familia recomendada: {{ decision_quality.recommendation_family or latest_assessment.display_result.recommendation_family or 'No documentada' }}</p>
+            {% if transition_proposals %}
+            <div class="mt-5 grid grid-cols-1 xl:grid-cols-2 gap-4">
+                {% for proposal in transition_proposals[:2] %}
+                <div class="rounded-2xl border border-amber-500/20 bg-amber-950/10 p-4">
+                    <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+                        <div>
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Transición sugerida</div>
+                            <div class="mt-2 text-sm font-semibold text-white">{{ proposal.target_state }}</div>
+                            {% if proposal.target_management_track %}
+                            <div class="mt-1 text-xs text-slate-400">Track sugerido: {{ proposal.target_management_track }}</div>
+                            {% endif %}
+                            <p class="mt-3 text-sm text-slate-300">{{ proposal.rationale }}</p>
+                            <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                                {% for item in proposal.next_actions or [] %}
+                                <li>{{ item }}</li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                        {% if proposal.id %}
+                        <button type="button" class="pn-btn pn-btn-primary px-3 py-2 text-xs" onclick="confirmTransitionProposal({{ proposal.id }})">
+                            Confirmar transición
+                        </button>
+                        {% endif %}
+                    </div>
                 </div>
-                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4 lg:col-span-2">
-                    <div class="text-xs uppercase tracking-wider text-slate-500">Por que no confiar mas</div>
-                    <ul class="mt-2 space-y-2 text-sm text-slate-300 list-disc pl-5">
-                        {% for item in decision_quality.why_not_more_confident or latest_assessment.display_result.why_not_more_confident or [] %}
-                        <li>{{ item }}</li>
-                        {% else %}
-                        <li>Sin limitaciones estructuradas adicionales.</li>
-                        {% endfor %}
-                    </ul>
-                </div>
+                {% endfor %}
             </div>
             {% endif %}
         </section>
+        {% endif %}
 
-        {% if validated_algorithms %}
+        {% if latest_assessment %}
+        <section class="pn-surface border border-emerald-700/40 bg-emerald-950/10">
+            <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-5">
+                <div class="max-w-4xl">
+                    <div class="text-xs uppercase tracking-[0.2em] text-emerald-300">Brújula clínica actual</div>
+                    <div class="sr-only">Última evaluación clínica modular</div>
+                    <h2 class="mt-2 text-2xl font-bold text-white">{{ clinical_compass.current_diagnosis }}</h2>
+                    <p class="mt-2 text-sm text-slate-300">{{ latest_assessment.display_result.nccn_primary.resumen_del_caso or latest_assessment.display_result.report_sections.summary }}</p>
+                    <div class="mt-4 flex flex-wrap gap-2">
+                        <span class="px-2.5 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border border-cyan-500/20 bg-cyan-500/10 text-cyan-200">{{ clinical_compass.current_stage_label }}</span>
+                        <span class="px-2.5 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border border-amber-500/20 bg-amber-500/10 text-amber-200">{{ clinical_compass.management_intent_status }}</span>
+                        <span class="px-2.5 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border border-slate-600 bg-slate-900/60 text-slate-300">{{ clinical_compass.event_kind_label }}</span>
+                        <span class="px-2.5 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border border-emerald-500/20 bg-emerald-500/10 text-emerald-200">Calidad {{ clinical_compass.confidence_category }}</span>
+                    </div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 xl:max-w-sm">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Dirección clínica recomendada</div>
+                    <div class="mt-2 text-sm font-semibold text-white">{{ latest_assessment.display_result.nccn_primary.titulo_clinico or latest_assessment.display_result.nccn_primary.label }}</div>
+                    <p class="mt-2 text-sm text-slate-300">{{ clinical_compass.recommended_direction }}</p>
+                    <div class="mt-3 text-xs text-slate-500 uppercase tracking-wider">Familia recomendada</div>
+                    <p class="mt-1 text-sm text-cyan-200">{{ clinical_compass.recommendation_family }}</p>
+                </div>
+            </div>
+            <div class="mt-5 grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Qué decisión clínica se está tomando hoy</div>
+                    <p class="mt-2 text-sm text-white">{{ clinical_compass.primary_clinical_question }}</p>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in clinical_compass.why_this_now %}
+                        <li>{{ item }}</li>
+                        {% else %}
+                        <li>Sin fundamentos personalizados adicionales.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Qué podría cambiar el rumbo</div>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in clinical_compass.what_could_change_course %}
+                        <li>{{ item }}</li>
+                        {% else %}
+                        <li>Sin cambios de rumbo estructurados adicionales.</li>
+                        {% endfor %}
+                    </ul>
+                    {% if clinical_compass.why_not_more_confident %}
+                    <div class="mt-4 text-xs uppercase tracking-wider text-slate-500">Por qué no confiar más</div>
+                    <ul class="mt-2 space-y-2 text-sm text-slate-400 list-disc pl-5">
+                        {% for item in clinical_compass.why_not_more_confident %}
+                        <li>{{ item }}</li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Siguiente mejor paso y vigilancia</div>
+                    <p class="mt-2 text-sm text-white">{{ clinical_compass.monitoring_cadence }}</p>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in clinical_compass.next_actions %}
+                        <li>{{ item }}</li>
+                        {% else %}
+                        <li>Sin acciones estructuradas adicionales.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+            <div class="mt-5">
+                <div class="text-xs uppercase tracking-wider text-slate-500 mb-3">Freshness de datos decisores</div>
+                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
+                    {% for item in clinical_compass.data_freshness %}
+                    <div class="rounded-xl border border-slate-700 bg-slate-900/40 p-3">
+                        <div class="text-xs uppercase tracking-wider text-slate-500">{{ item.label }}</div>
+                        <div class="mt-2 text-sm font-medium text-white">{{ item.value }}</div>
+                        <div class="mt-1 text-[11px] text-slate-500">{{ item.date }}</div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </section>
+
+        {% if stage_specific_panels %}
         <section class="pn-surface">
-            <h2 class="text-lg font-bold text-white mb-4">Algoritmos validados y refinadores conectados</h2>
+            <div class="flex items-center justify-between gap-3 mb-4">
+                <h2 class="text-lg font-bold text-white">Paneles clínicos específicos de la etapa</h2>
+                <span class="text-xs text-slate-500 uppercase tracking-[0.18em]">{{ clinical_compass.current_stage_label }}</span>
+            </div>
+            <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                {% for panel in stage_specific_panels %}
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/50 p-4">
+                    <h3 class="text-sm font-semibold text-white">{{ panel.title }}</h3>
+                    <p class="mt-1 text-sm text-slate-400">{{ panel.subtitle }}</p>
+                    {% if panel['items'] %}
+                    <div class="mt-4 grid grid-cols-1 gap-3">
+                        {% for item in panel['items'] %}
+                        <div class="rounded-xl border border-slate-700/80 bg-slate-950/40 p-3">
+                            <div class="text-xs uppercase tracking-wider text-slate-500">{{ item.label }}</div>
+                            <div class="mt-1 text-sm text-white">{{ item.value }}</div>
+                            {% if item.detail %}
+                            <div class="mt-1 text-xs text-slate-400">{{ item.detail }}</div>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                    {% if panel.bullets %}
+                    <ul class="mt-4 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for bullet in panel.bullets %}
+                        <li>{{ bullet }}</li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+        {% endif %}
+
+        {% if algorithm_panels %}
+        <section class="pn-surface">
+            <h2 class="text-lg font-bold text-white mb-4">Algoritmos y refinadores aplicables hoy</h2>
             <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                {% for algorithm in validated_algorithms %}
+                {% for algorithm in algorithm_panels %}
                 <div class="rounded-2xl border border-slate-700 bg-slate-900/50 p-4">
                     <div class="flex items-center justify-between gap-3">
-                        <div class="text-sm font-medium text-white">{{ algorithm.name }}</div>
+                        <div class="text-sm font-semibold text-white">{{ algorithm.name }}</div>
                         <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] bg-cyan-500/10 text-cyan-200 border border-cyan-500/20">
                             {{ algorithm.status }}
                         </span>
                     </div>
                     <p class="mt-2 text-sm text-slate-300">{{ algorithm.summary }}</p>
-                    <p class="mt-2 text-xs text-slate-500 uppercase tracking-wider">Utilidad clinica</p>
+                    {% if algorithm.primary_metric %}
+                    <div class="mt-4 rounded-xl border border-slate-700/80 bg-slate-950/40 p-3">
+                        <div class="text-xs uppercase tracking-wider text-slate-500">{{ algorithm.primary_metric.label }}</div>
+                        <div class="mt-1 text-lg font-semibold text-white">{{ algorithm.primary_metric.value }}</div>
+                        {% if algorithm.primary_metric.detail %}
+                        <div class="mt-1 text-xs text-slate-400">{{ algorithm.primary_metric.detail }}</div>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                    {% if algorithm.bars %}
+                    <div class="mt-4 space-y-3">
+                        {% for bar in algorithm.bars %}
+                        <div>
+                            <div class="flex items-center justify-between text-xs text-slate-400 mb-1">
+                                <span>{{ bar.label }}</span>
+                                <span>{{ bar.display }}</span>
+                            </div>
+                            <div class="pn-algorithm-bar">
+                                <span class="{{ 'pn-tone-cyan' if bar.tone == 'cyan' else 'pn-tone-emerald' if bar.tone == 'emerald' else 'pn-tone-amber' if bar.tone == 'amber' else 'pn-tone-orange' if bar.tone == 'orange' else 'pn-tone-rose' }}" style="width: {{ bar.value }}%;"></span>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                    {% if algorithm.segments %}
+                    <div class="mt-4">
+                        <div class="pn-stack">
+                            {% for segment in algorithm.segments %}
+                            <span class="{{ 'pn-tone-cyan' if segment.tone == 'cyan' else 'pn-tone-emerald' if segment.tone == 'emerald' else 'pn-tone-amber' if segment.tone == 'amber' else 'pn-tone-orange' if segment.tone == 'orange' else 'pn-tone-rose' }}" style="width: {{ segment.value }}%;"></span>
+                            {% endfor %}
+                        </div>
+                        <div class="mt-3 space-y-2">
+                            {% for segment in algorithm.segments %}
+                            <div class="flex items-center justify-between text-xs text-slate-400">
+                                <span>{{ segment.label }}</span>
+                                <span>{{ segment.display }}</span>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% if algorithm.threshold %}
+                    <div class="mt-3 text-xs text-amber-200">Umbral clínico: {{ algorithm.threshold.label }}</div>
+                    {% endif %}
+                    {% if algorithm.visual_type == 'readiness' %}
+                    <div class="mt-4 rounded-xl border border-slate-700/80 bg-slate-950/40 p-3">
+                        <div class="text-xs uppercase tracking-wider text-slate-500">Estado de preparación</div>
+                        <div class="mt-2 text-sm text-white">{{ 'Lista para correrse' if not algorithm.details else 'Aún faltan datos' }}</div>
+                        {% if algorithm.details %}
+                        <ul class="mt-2 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                            {% for missing in algorithm.details %}
+                            <li>{{ missing }}</li>
+                            {% endfor %}
+                        </ul>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                    <div class="mt-4 text-xs uppercase tracking-wider text-slate-500">Utilidad clínica</div>
                     <p class="mt-1 text-sm text-slate-400">{{ algorithm.clinical_use }}</p>
                     {% if algorithm.evidence_note %}
-                    <p class="mt-2 text-xs text-amber-200">{{ algorithm.evidence_note }}</p>
+                    <p class="mt-3 text-xs text-amber-200">{{ algorithm.evidence_note }}</p>
                     {% endif %}
                     {% if algorithm.source_url %}
                     <a href="{{ algorithm.source_url }}" target="_blank" rel="noopener noreferrer" class="mt-3 inline-flex text-xs text-cyan-300 hover:text-cyan-200">
@@ -173,72 +457,460 @@
         </section>
         {% endif %}
 
-        <section class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <section class="space-y-6">
             <div class="pn-surface">
-                <h2 class="text-lg font-bold text-white mb-4">Plan de monitoreo longitudinal</h2>
-                {% set monitoring = latest_assessment.display_result.monitoring_plan or {} %}
-                <div class="space-y-3 text-sm text-slate-300">
+                <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4 mb-4">
                     <div>
-                        <div class="text-xs uppercase tracking-wider text-slate-500">Cadencia</div>
-                        <p class="mt-1">{{ monitoring.cadence or 'Sin cadencia estructurada.' }}</p>
+                        <h2 class="text-lg font-bold text-white">Agenda clínica por etapa</h2>
+                        <p class="mt-1 text-sm text-slate-400">
+                            {{ agenda_board.stage_protocol.title if agenda_board.stage_protocol else 'Agenda activa de seguimiento' }}
+                            {% if agenda_board.management_track_label %} · {{ agenda_board.management_track_label }}{% endif %}
+                        </p>
                     </div>
-                    <div>
-                        <div class="text-xs uppercase tracking-wider text-slate-500">Acciones</div>
-                        <ul class="mt-2 space-y-2 list-disc pl-5">
-                            {% for item in monitoring.actions or [] %}
+                    <button onclick="openVisitModal()" class="pn-btn pn-btn-primary px-3 py-2 text-xs">
+                        + Completar visita / estudio
+                    </button>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-3 mb-5">
+                    <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                        <div class="text-xs uppercase tracking-wider text-slate-500">Próximo hito</div>
+                        <div class="mt-2 text-sm font-semibold text-white">{{ (next_due_items[0].title if next_due_items else overdue_items[0].title if overdue_items else 'Sin hitos inmediatos') }}</div>
+                        <div class="mt-1 text-xs text-slate-400">{{ (next_due_items[0].due_at if next_due_items else overdue_items[0].due_at if overdue_items else '') }}</div>
+                    </div>
+                    <div class="rounded-xl border border-amber-500/20 bg-amber-950/20 p-4">
+                        <div class="text-xs uppercase tracking-wider text-slate-500">Vencidos</div>
+                        <div class="mt-2 text-2xl font-semibold text-amber-300">{{ overdue_items|length }}</div>
+                        <div class="mt-1 text-xs text-slate-400">Requieren acción prioritaria</div>
+                    </div>
+                    <div class="rounded-xl border border-cyan-500/20 bg-cyan-950/20 p-4">
+                        <div class="text-xs uppercase tracking-wider text-slate-500">Due ahora</div>
+                        <div class="mt-2 text-2xl font-semibold text-cyan-200">{{ next_due_items|length }}</div>
+                        <div class="mt-1 text-xs text-slate-400">Dentro de la ventana esperada</div>
+                    </div>
+                    <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                        <div class="text-xs uppercase tracking-wider text-slate-500">Cadencia primaria</div>
+                        <div class="mt-2 text-sm text-white">{{ agenda_board.stage_protocol.cadence_summary if agenda_board.stage_protocol else clinical_compass.monitoring_cadence }}</div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                    <div class="rounded-2xl border border-slate-700 bg-slate-900/50 p-4 xl:col-span-2">
+                        <div class="text-xs uppercase tracking-wider text-slate-500">Items activos de agenda</div>
+                        <div class="mt-4 space-y-3">
+                            {% for item in overdue_items + next_due_items %}
+                            <div class="rounded-xl border {{ 'border-rose-500/20 bg-rose-950/10' if item.status == 'overdue' else 'border-cyan-500/20 bg-cyan-950/10' }} p-4">
+                                <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+                                    <div>
+                                        <div class="flex items-center gap-2 flex-wrap">
+                                            <div class="text-sm font-semibold text-white">{{ item.title }}</div>
+                                            <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] {{ 'bg-rose-500/10 text-rose-200 border border-rose-500/20' if item.status == 'overdue' else 'bg-cyan-500/10 text-cyan-200 border border-cyan-500/20' }}">
+                                                {{ item.status }}
+                                            </span>
+                                        </div>
+                                        <p class="mt-2 text-sm text-slate-300">{{ item.summary }}</p>
+                                        <div class="mt-2 text-xs text-slate-400">Ventana {{ item.window_start }} a {{ item.window_end }}</div>
+                                        {% if item.required_inputs %}
+                                        <div class="mt-2 text-xs text-slate-500">Inputs esperados: {{ item.required_inputs|join(', ') }}</div>
+                                        {% endif %}
+                                    </div>
+                                    <div class="flex gap-2 items-start">
+                                        {% if item.item_type in ['psa', 'testosterone', 'lab_panel', 'pro_assessment', 'toxicity_review', 'therapy_review', 'supportive_care', 'goals_of_care'] %}
+                                        <button type="button" class="pn-btn pn-btn-primary px-3 py-2 text-xs" onclick="openVisitModal({{ item.id or 'null' }})">
+                                            {{ item.action_label or 'Registrar visita' }}
+                                        </button>
+                                        {% endif %}
+                                        {% if item.id %}
+                                        <button type="button" class="pn-btn pn-btn-secondary px-3 py-2 text-xs" onclick="completeAgendaItem({{ item.id }})">
+                                            Marcar completado
+                                        </button>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            </div>
+                            {% else %}
+                            <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4 text-sm text-slate-300">
+                                Sin items activos de agenda en la ventana inmediata.
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    <div class="rounded-2xl border border-slate-700 bg-slate-900/50 p-4">
+                        <div class="text-xs uppercase tracking-wider text-slate-500">Qué dato faltante cambia conducta</div>
+                        <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                            {% for item in clinical_signals.critical_missing or clinical_compass.decision_changing_inputs %}
                             <li>{{ item }}</li>
                             {% else %}
-                            <li>Sin acciones estructuradas.</li>
+                            <li>Sin gaps decisores estructurados en este momento.</li>
                             {% endfor %}
                         </ul>
-                    </div>
-                    <div>
-                        <div class="text-xs uppercase tracking-wider text-slate-500">Disparadores de transición</div>
-                        <ul class="mt-2 space-y-2 list-disc pl-5">
-                            {% for item in monitoring.triggers or [] %}
-                            <li>{{ item }}</li>
+
+                        <div class="mt-5 text-xs uppercase tracking-wider text-slate-500">Recomendaciones activas de seguimiento</div>
+                        <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                            {% for item in agenda_board.active_recommendations or [] %}
+                            <li>{{ item.title }}: {{ item.summary }}</li>
                             {% else %}
-                            <li>Sin disparadores estructurados.</li>
+                            <li>Sin recomendaciones activas adicionales.</li>
                             {% endfor %}
                         </ul>
                     </div>
                 </div>
             </div>
-            <div class="pn-surface">
-                <h2 class="text-lg font-bold text-white mb-4">Capas de soporte y cuidado concurrente</h2>
-                <div class="space-y-3">
-                    {% for overlay in care_overlays %}
-                    <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
-                        <div class="flex items-center justify-between gap-3">
-                            <div class="text-sm font-medium text-white">{{ overlay.title }}</div>
-                            <span class="text-xs uppercase tracking-wider text-cyan-300">{{ overlay.status }}</span>
+
+            <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                <div class="pn-surface xl:col-span-2">
+                    <h2 class="text-lg font-bold text-white mb-4">Re-evaluación terapéutica y checkpoints</h2>
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        {% for checkpoint in therapy_checkpoints %}
+                        <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                            <div class="flex items-center justify-between gap-3">
+                                <div class="text-sm font-semibold text-white">{{ checkpoint.title }}</div>
+                                <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] {{ 'bg-emerald-500/10 text-emerald-200 border border-emerald-500/20' if checkpoint.status in ['ready', 'available'] else 'bg-amber-500/10 text-amber-200 border border-amber-500/20' if checkpoint.status in ['optional'] else 'bg-rose-500/10 text-rose-200 border border-rose-500/20' }}">
+                                    {{ checkpoint.status }}
+                                </span>
+                            </div>
+                            <p class="mt-2 text-sm text-slate-300">{{ checkpoint.rationale }}</p>
+                            {% if checkpoint.action %}
+                            <div class="mt-3 text-xs text-cyan-200">{{ checkpoint.action }}</div>
+                            {% endif %}
                         </div>
-                        <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
-                            {% for reason in overlay.reasons or [] %}
-                            <li>{{ reason }}</li>
-                            {% endfor %}
-                        </ul>
-                        <div class="mt-3 text-xs uppercase tracking-wider text-slate-500">Acciones sugeridas</div>
-                        <ul class="mt-2 space-y-2 text-sm text-slate-300 list-disc pl-5">
-                            {% for action in overlay.actions or [] %}
-                            <li>{{ action }}</li>
-                            {% else %}
-                            <li>Sin acciones estructuradas.</li>
-                            {% endfor %}
-                        </ul>
+                        {% else %}
+                        <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4 text-sm text-slate-300 lg:col-span-2">
+                            No hay checkpoints terapéuticos adicionales para esta etapa.
+                        </div>
+                        {% endfor %}
                     </div>
-                    {% else %}
-                    <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4 text-sm text-slate-300">
-                        Sin capas de soporte concurrente activas en la última evaluación modular.
+
+                    <div class="mt-5">
+                        <div class="text-xs uppercase tracking-wider text-slate-500 mb-3">Comparadores de protocolo</div>
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                            {% for comparator in protocol_comparators %}
+                            <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                                <div class="flex items-center justify-between gap-3">
+                                    <div class="text-sm font-semibold text-white">{{ comparator.title }}</div>
+                                    <span class="text-[11px] uppercase tracking-[0.18em] text-slate-400">{{ comparator.mode }}</span>
+                                </div>
+                                <p class="mt-2 text-sm text-slate-300">{{ comparator.cadence_summary }}</p>
+                                {% if comparator.source_url %}
+                                <a href="{{ comparator.source_url }}" target="_blank" rel="noopener noreferrer" class="mt-3 inline-flex text-xs text-cyan-300 hover:text-cyan-200">
+                                    {{ comparator.source_label or 'Abrir fuente' }}
+                                </a>
+                                {% endif %}
+                                {% if comparator.notes %}
+                                <ul class="mt-3 space-y-2 text-xs text-slate-400 list-disc pl-5">
+                                    {% for note in comparator.notes %}
+                                    <li>{{ note }}</li>
+                                    {% endfor %}
+                                </ul>
+                                {% endif %}
+                            </div>
+                            {% endfor %}
+                        </div>
                     </div>
-                    {% endfor %}
+                </div>
+
+                <div class="pn-surface">
+                    <h2 class="text-lg font-bold text-white mb-4">Capas activas de soporte y provenance</h2>
+                    <div class="space-y-3">
+                        {% for overlay in care_overlays %}
+                        <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                            <div class="flex items-center justify-between gap-3">
+                                <div class="text-sm font-medium text-white">{{ overlay.title }}</div>
+                                <span class="text-xs uppercase tracking-wider text-cyan-300">{{ overlay.status }}</span>
+                            </div>
+                            <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                                {% for reason in overlay.reasons or [] %}
+                                <li>{{ reason }}</li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                        {% endfor %}
+                        <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Provenance clínica reciente</div>
+                            <div class="mt-3 space-y-3">
+                                {% for item in data_provenance %}
+                                <div class="rounded-lg border border-slate-700/80 bg-slate-950/40 p-3">
+                                    <div class="text-sm font-medium text-white">{{ item.field_name }}</div>
+                                    <div class="mt-1 text-xs text-slate-400">{{ item.source_type }} · {{ item.source_date or item.created_at }}</div>
+                                    {% if item.value is not none %}
+                                    <div class="mt-2 text-xs text-slate-300">{{ item.value }}</div>
+                                    {% endif %}
+                                </div>
+                                {% else %}
+                                <div class="text-sm text-slate-300">Sin provenance reciente estructurada.</div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </section>
 
         <section class="pn-surface">
-            <h2 class="text-lg font-bold text-white mb-4">Línea de estados clínicos persistidos</h2>
-            <div class="space-y-4">
+            <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4 mb-4">
+                <div>
+                    <h2 class="text-lg font-bold text-white">Documentos clínicos y verificación humana</h2>
+                    <p class="mt-1 text-sm text-slate-400">La ingesta documental alimenta el longitudinal solo después de verificación explícita. El texto completo permanece en almacenamiento privado local.</p>
+                </div>
+                <div class="flex gap-3 items-center">
+                    <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border border-amber-500/20 bg-amber-500/10 text-amber-200">
+                        Pendientes {{ document_board.pending_count or 0 }}
+                    </span>
+                    <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border border-emerald-500/20 bg-emerald-500/10 text-emerald-200">
+                        Verificados {{ document_board.verified_count or 0 }}
+                    </span>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Adjuntar documento fuente</div>
+                    <form id="documentUploadForm" class="mt-4 space-y-3">
+                        <div>
+                            <label class="text-xs text-slate-400">Título clínico</label>
+                            <input type="text" name="title" class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm text-white" placeholder="Ej. Reporte PSMA-PET marzo 2026">
+                        </div>
+                        <div>
+                            <label class="text-xs text-slate-400">Tipo documental esperado</label>
+                            <select name="document_type" class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm text-white">
+                                <option value="auto">Detectar automáticamente</option>
+                                <option value="pathology_report">Reporte histopatológico / biopsia</option>
+                                <option value="laboratory_bundle">Paquete de laboratorios</option>
+                                <option value="imaging_report">Reporte de imagen</option>
+                                <option value="genomic_report">Reporte molecular / genómico</option>
+                                <option value="surgery_summary">Resumen quirúrgico</option>
+                                <option value="radiotherapy_summary">Resumen de radioterapia</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="text-xs text-slate-400">Fecha fuente</label>
+                            <input type="date" name="source_date" class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm text-white">
+                        </div>
+                        <div>
+                            <label class="text-xs text-slate-400">Archivo</label>
+                            <input type="file" name="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.txt" class="mt-1 block w-full text-sm text-slate-300">
+                        </div>
+                        <button type="submit" class="pn-btn pn-btn-primary w-full px-3 py-2 text-xs">Subir documento clínico</button>
+                    </form>
+                    <p class="mt-3 text-xs text-slate-500">V1 admite PDF, imagen y texto. La extracción automática es heurística; la confirmación clínica es obligatoria.</p>
+                </div>
+
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/50 p-4 xl:col-span-2">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Documentos pendientes de verificación</div>
+                    <div class="mt-4 space-y-3">
+                        {% for document in document_board.pending_documents or [] %}
+                        <div class="rounded-xl border border-slate-700/80 bg-slate-950/40 p-4">
+                            <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+                                <div>
+                                    <div class="flex items-center gap-2 flex-wrap">
+                                        <div class="text-sm font-semibold text-white">{{ document.title or document.file_name }}</div>
+                                        <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border border-cyan-500/20 bg-cyan-500/10 text-cyan-200">{{ document.document_type_label }}</span>
+                                        <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border border-amber-500/20 bg-amber-500/10 text-amber-200">{{ document.verification_status or 'draft' }}</span>
+                                    </div>
+                                    <div class="mt-2 text-xs text-slate-400">{{ document.file_name }} · {{ document.source_date or document.created_at }}</div>
+                                    {% if document.preview_excerpt %}
+                                    <p class="mt-3 text-sm text-slate-300 line-clamp-3">{{ document.preview_excerpt }}</p>
+                                    {% endif %}
+                                    <div class="mt-2 text-xs text-slate-500">
+                                        Candidatos extraídos: {{ document.candidate_count or 0 }}
+                                        {% if document.task and document.task.task_status %}
+                                        · Tarea: {{ document.task.task_status }}
+                                        {% endif %}
+                                    </div>
+                                </div>
+                                <div class="flex gap-2 items-start">
+                                    <button type="button" class="pn-btn pn-btn-secondary px-3 py-2 text-xs" onclick="extractDocument({{ document.id }})">
+                                        Extraer candidatos
+                                    </button>
+                                    <button type="button" class="pn-btn pn-btn-primary px-3 py-2 text-xs" onclick="openDocumentVerifyModal({{ document.id }})">
+                                        Verificar facts
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        {% else %}
+                        <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4 text-sm text-slate-300">
+                            No hay documentos pendientes de verificación.
+                        </div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="mt-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Qué cambió por el último documento</div>
+                            <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                                {% for item in document_board.latest_changes or [] %}
+                                <li><span class="text-white">{{ item.document_title }}</span>: {{ item.change }}</li>
+                                {% else %}
+                                <li>Sin cambios estructurados recientes desde documentos verificados.</li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                        <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Facts verificados recientes</div>
+                            <div class="mt-3 space-y-2">
+                                {% for fact in document_board.verified_today or [] %}
+                                <div class="rounded-lg border border-slate-700/80 bg-slate-950/40 p-3">
+                                    <div class="text-sm font-medium text-white">{{ fact.field_name }}</div>
+                                    <div class="mt-1 text-xs text-slate-400">{{ fact.fact_group }} · {{ fact.source_date or fact.created_at }}</div>
+                                    <div class="mt-2 text-xs text-slate-300">{{ fact.value }}</div>
+                                </div>
+                                {% else %}
+                                <div class="text-sm text-slate-300">Sin facts verificados recientes.</div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="pn-surface">
+            <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 mb-4">
+                <div>
+                    <h2 class="text-lg font-bold text-white">Evidencia y estudios pivotales</h2>
+                    <p class="mt-1 text-sm text-slate-400">Las guías primarias anclan la recomendación principal; los estudios pivotales solo se priorizan cuando el perfil del paciente realmente es elegible.</p>
+                </div>
+                <button onclick="runPivotalMatch(event)" class="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 rounded text-xs font-medium text-white transition-colors">
+                    Evaluar Estudios Pivotales
+                </button>
+            </div>
+            <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/50 p-4 xl:col-span-1">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Anclas de evidencia</div>
+                    <div class="mt-3 space-y-3">
+                        {% for source in clinical_compass.evidence_anchor %}
+                        <div class="rounded-xl border border-slate-700/80 bg-slate-950/40 p-3">
+                            <div class="text-sm font-medium text-white">{{ source.label }}</div>
+                            <div class="mt-1 text-xs text-slate-400">{{ source.title }}</div>
+                            {% if source.url %}
+                            <a href="{{ source.url }}" target="_blank" rel="noopener noreferrer" class="mt-2 inline-flex text-xs text-cyan-300 hover:text-cyan-200">Abrir fuente</a>
+                            {% elif source.local_pdf_path %}
+                            <div class="mt-2 text-xs text-slate-500">{{ source.local_pdf_path }}</div>
+                            {% endif %}
+                        </div>
+                        {% else %}
+                        <div class="text-sm text-slate-400">Sin anclas de evidencia estructuradas.</div>
+                        {% endfor %}
+                    </div>
+                    {% if supportive_evidence_context %}
+                    <div class="mt-4 text-xs uppercase tracking-wider text-slate-500">Contexto supportive</div>
+                    <ul class="mt-2 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in supportive_evidence_context %}
+                        <li>{{ item }}</li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/50 p-4 xl:col-span-2">
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+                        <div class="rounded-xl border border-slate-700/80 bg-slate-950/40 p-3">
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Elegibles</div>
+                            <div class="mt-2 text-2xl font-semibold text-emerald-300">{{ pivotal_panel.eligible_count or 0 }}</div>
+                        </div>
+                        <div class="rounded-xl border border-slate-700/80 bg-slate-950/40 p-3">
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Parciales</div>
+                            <div class="mt-2 text-2xl font-semibold text-amber-300">{{ pivotal_panel.partial_count or 0 }}</div>
+                        </div>
+                        <div class="rounded-xl border border-slate-700/80 bg-slate-950/40 p-3">
+                            <div class="text-xs uppercase tracking-wider text-slate-500">No elegibles</div>
+                            <div class="mt-2 text-2xl font-semibold text-slate-300">{{ pivotal_panel.ineligible_count or 0 }}</div>
+                        </div>
+                        <div class="rounded-xl border border-slate-700/80 bg-slate-950/40 p-3">
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Última evaluación</div>
+                            <div class="mt-2 text-sm font-semibold text-white">{{ pivotal_panel.last_evaluated_at or 'No evaluado' }}</div>
+                        </div>
+                    </div>
+                    {% if pivotal_panel.has_results %}
+                    <div>
+                        <div class="text-xs uppercase tracking-wider text-slate-500 mb-3">Elegibles hoy</div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {% for match in pivotal_panel.eligible_matches %}
+                            <div class="p-3 bg-slate-950/40 rounded-lg border border-emerald-500/20">
+                                <div class="flex justify-between items-start mb-1">
+                                    <span class="font-bold text-white text-sm">{{ match.study_name }}</span>
+                                    <span class="text-xs px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">Elegible</span>
+                                </div>
+                                <div class="text-xs text-slate-400">{{ match.expected_outcome }}</div>
+                            </div>
+                            {% else %}
+                            <div class="col-span-full text-sm text-slate-400">No hay estudios pivotales elegibles todavía.</div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% if pivotal_panel.partial_matches %}
+                    <details class="pn-accordion mt-4 rounded-xl border border-slate-700 bg-slate-950/30 p-4">
+                        <summary class="flex items-center justify-between gap-3">
+                            <div>
+                                <div class="text-sm font-semibold text-white">Estudios parcialmente aplicables</div>
+                                <div class="text-xs text-slate-500">Mostrar solo si el clínico quiere revisar escenarios cercanos.</div>
+                            </div>
+                        </summary>
+                        <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {% for match in pivotal_panel.partial_matches %}
+                            <div class="p-3 bg-slate-900/50 rounded-lg border border-amber-500/20">
+                                <div class="flex justify-between items-start mb-1">
+                                    <span class="font-bold text-white text-sm">{{ match.study_name }}</span>
+                                    <span class="text-xs px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/20">Parcial</span>
+                                </div>
+                                <div class="text-xs text-slate-400">{{ match.expected_outcome }}</div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </details>
+                    {% endif %}
+                    {% if pivotal_panel.hidden_ineligible_count %}
+                    <details class="pn-accordion mt-4 rounded-xl border border-slate-700 bg-slate-950/30 p-4">
+                        <summary class="flex items-center justify-between gap-3">
+                            <div>
+                                <div class="text-sm font-semibold text-white">No elegibles</div>
+                                <div class="text-xs text-slate-500">{{ pivotal_panel.hidden_ineligible_count }} estudios ocultos por defecto para disminuir ruido visual.</div>
+                            </div>
+                        </summary>
+                        <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {% for match in pivotal_panel.ineligible_matches %}
+                            <div class="p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
+                                <div class="flex justify-between items-start mb-1">
+                                    <span class="font-bold text-white text-sm">{{ match.study_name }}</span>
+                                    <span class="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-300">No elegible</span>
+                                </div>
+                                <div class="text-xs text-slate-400">{{ match.expected_outcome }}</div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </details>
+                    {% endif %}
+                    {% else %}
+                    <div class="text-center py-6 text-slate-500">
+                        <p class="text-sm">No se ha evaluado aún. Presione "Evaluar Estudios Pivotales" para confrontar el perfil del paciente y mostrar por defecto solo los estudios elegibles.</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </section>
+
+        <section class="pn-surface">
+            <div class="flex items-center justify-between gap-3 mb-4">
+                <h2 class="text-lg font-bold text-white">Registro longitudinal completo</h2>
+                <div class="flex flex-wrap gap-2">
+                    {% for section in longitudinal_sections %}
+                    <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border border-slate-700 bg-slate-900/60 text-slate-300">
+                        {{ section.title }} · {{ section.count }}
+                    </span>
+                    {% endfor %}
+                </div>
+            </div>
+            <p class="text-sm text-slate-400">Toda la información previa sigue disponible debajo en acordeones clínicos. El cambio es de jerarquía visual, no de pérdida de datos.</p>
+        </section>
+
+        <details class="pn-accordion pn-surface" open>
+            <summary class="flex items-center justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-bold text-white">Línea de estados clínicos persistidos</h2>
+                    <p class="mt-1 text-sm text-slate-400">Secuencia de estados, eventos y estatus de manejo ya confirmados en el longitudinal.</p>
+                </div>
+            </summary>
+            <div class="mt-4 space-y-4">
                 {% for event in state_timeline %}
                 <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
                     <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
@@ -275,12 +947,17 @@
                 </div>
                 {% endfor %}
             </div>
-        </section>
+        </details>
 
         {% if benchmarking_flags %}
-        <section class="pn-surface">
-            <h2 class="text-lg font-bold text-white mb-4">Benchmarking operativo del estado actual</h2>
-            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <details class="pn-accordion pn-surface">
+            <summary class="flex items-center justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-bold text-white">Benchmarking operativo del estado actual</h2>
+                    <p class="mt-1 text-sm text-slate-400">Trazabilidad de completitud y adopción útil para práctica clínica y benchmarking de plataforma.</p>
+                </div>
+            </summary>
+            <div class="mt-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {% for flag in benchmarking_flags %}
                 <div class="rounded-2xl border border-slate-700 bg-slate-900/50 p-4">
                     <div class="flex items-center justify-between gap-3">
@@ -293,7 +970,7 @@
                 </div>
                 {% endfor %}
             </div>
-        </section>
+        </details>
         {% endif %}
         {% endif %}
 
@@ -301,7 +978,14 @@
         <!-- 2. PSA CONTROL TOWER (Inspirado en Mayo Clinic)                   -->
         <!-- ═══════════════════════════════════════════════════════════════════ -->
         {% if not diagnostic_state %}
-        <section class="pn-surface">
+        <details class="pn-accordion pn-surface">
+            <summary class="flex items-center justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-bold text-white">📊 Torre de control del antígeno prostático específico</h2>
+                    <p class="mt-1 text-sm text-slate-400">Vista completa de PSA, nadir, velocidad y tiempo de duplicación.</p>
+                </div>
+            </summary>
+            <div class="mt-4">
             <div class="flex justify-between items-center mb-4">
                 <h2 class="text-lg font-bold text-white flex items-center gap-2">
                     📊 Torre de control del antígeno prostático específico
@@ -344,17 +1028,22 @@
             <div class="h-72 w-full relative">
                 <canvas id="psaControlChart"></canvas>
             </div>
-        </section>
+            </div>
+        </details>
         {% endif %}
 
         <!-- ═══════════════════════════════════════════════════════════════════ -->
         <!-- 3. TIMELINE DE ESCENARIOS CLÍNICOS (Patient Journey)              -->
         <!-- ═══════════════════════════════════════════════════════════════════ -->
         {% if not diagnostic_state %}
-        <section class="pn-surface">
-            <h2 class="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                🗺️ Trayectoria clínica del paciente
-            </h2>
+        <details class="pn-accordion pn-surface">
+            <summary class="flex items-center justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-bold text-white">🗺️ Trayectoria clínica del paciente</h2>
+                    <p class="mt-1 text-sm text-slate-400">Mapa longitudinal de hitos confirmados y trayectorias terapéuticas.</p>
+                </div>
+            </summary>
+            <div class="mt-4">
 
             <!-- Timeline horizontal -->
             <div class="relative">
@@ -431,7 +1120,8 @@
                     </div>
                 </div>
             </div>
-        </section>
+            </div>
+        </details>
         {% endif %}
 
         <!-- ═══════════════════════════════════════════════════════════════════ -->
@@ -550,7 +1240,14 @@
         <!-- ═══════════════════════════════════════════════════════════════════ -->
         <!-- 6. PROs LONGITUDINALES                                            -->
         <!-- ═══════════════════════════════════════════════════════════════════ -->
-        <section class="pn-surface">
+        <details class="pn-accordion pn-surface" {{ 'open' if patient.pros|length > 0 and diagnostic_state else '' }}>
+            <summary class="flex items-center justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-bold text-white">📋 Resultados reportados por el paciente</h2>
+                    <p class="mt-1 text-sm text-slate-400">Evolución funcional y de calidad de vida para seguimiento longitudinal.</p>
+                </div>
+            </summary>
+            <div class="mt-4">
             <div class="flex justify-between items-center mb-4">
                 <h2 class="text-lg font-bold text-white flex items-center gap-2">
                     📋 Resultados reportados por el paciente
@@ -569,10 +1266,18 @@
                 <p class="text-sm">Sin evaluaciones de resultados reportados por el paciente registradas. Use el botón para agregar.</p>
             </div>
         {% endif %}
-        </section>
+            </div>
+        </details>
 
         {% if patient.diagnostic_plans|length > 0 or patient.mri_facts|length > 0 or patient.biopsy_triggers|length > 0 %}
-        <section class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+        <details class="pn-accordion pn-surface" {{ 'open' if diagnostic_state else '' }}>
+            <summary class="flex items-center justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-bold text-white">Activos diagnósticos longitudinales</h2>
+                    <p class="mt-1 text-sm text-slate-400">Plan diagnóstico, MRI facts y triggers de biopsia persistidos.</p>
+                </div>
+            </summary>
+            <div class="mt-4 grid grid-cols-1 xl:grid-cols-3 gap-6">
             {% if patient.diagnostic_plans|length > 0 %}
             {% set latest_plan = patient.diagnostic_plans[0] %}
             <div class="pn-surface">
@@ -673,14 +1378,22 @@
                 </div>
             </div>
             {% endif %}
-        </section>
+            </div>
+        </details>
         {% endif %}
 
         <!-- ═══════════════════════════════════════════════════════════════════ -->
         <!-- 7. BIOPSIAS & PATOLOGÍA                                           -->
         <!-- ═══════════════════════════════════════════════════════════════════ -->
         {% if patient.biopsies|length > 0 %}
-        <section class="pn-surface">
+        <details class="pn-accordion pn-surface">
+                <summary class="flex items-center justify-between gap-3">
+                    <div>
+                        <h2 class="text-lg font-bold text-white">🔬 Historial de biopsias</h2>
+                        <p class="mt-1 text-sm text-slate-400">Patología confirmada, histología adversa y cambios respecto a biopsias previas.</p>
+                    </div>
+                </summary>
+                <div class="mt-4">
                 <h2 class="text-lg font-bold text-white mb-4">🔬 Historial de biopsias</h2>
             <p class="pn-scroll-hint mb-3 md:hidden">Desliza lateralmente para ver todas las columnas de la tabla.</p>
             <div class="pn-scroll-x">
@@ -730,46 +1443,23 @@
                     </tbody>
                 </table>
             </div>
-        </section>
+                </div>
+        </details>
         {% endif %}
 
-        <!-- ═══════════════════════════════════════════════════════════════════ -->
-        <!-- 8. ESTUDIOS PIVOTALES APLICABLES                                  -->
-        <!-- ═══════════════════════════════════════════════════════════════════ -->
-        <section class="pn-surface">
-            <div class="flex justify-between items-center mb-4">
-                <h2 class="text-lg font-bold text-white flex items-center gap-2">
-                    📚 Confrontación con Estudios Pivotales
-                </h2>
-                <button onclick="runPivotalMatch(event)" class="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 rounded text-xs font-medium text-white transition-colors">
-                    Evaluar Estudios Pivotales
-                </button>
-            </div>
-        {% if patient.pivotal_matches is defined and patient.pivotal_matches|length > 0 %}
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {% for match in patient.pivotal_matches %}
-                <div class="p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
-                    <div class="flex justify-between items-start mb-1">
-                        <span class="font-bold text-white text-sm">{{ match.study_name }}</span>
-                        <span class="text-xs px-2 py-0.5 rounded {{ 'bg-green-900/50 text-green-400' if match.eligible else 'bg-slate-700 text-slate-400' }}">
-                            {{ 'Elegible' if match.eligible else 'No elegible' }}
-                        </span>
-                    </div>
-                    <div class="text-xs text-slate-400">{{ match.expected_outcome }}</div>
-                </div>
-                {% endfor %}
-            </div>
-        {% else %}
-            <div class="text-center py-6 text-slate-500">
-                <p class="text-sm">No se ha evaluado aún. Presione "Evaluar Estudios Pivotales" para confrontar el perfil del paciente contra ~27 estudios pivotales.</p>
-            </div>
-        {% endif %}
-        </section>
+        <!-- Estudios pivotales se muestran arriba en la brújula de evidencia -->
 
         <!-- ═══════════════════════════════════════════════════════════════════ -->
         <!-- 9. TABLA DE SEGUIMIENTO (Expandida)                               -->
         <!-- ═══════════════════════════════════════════════════════════════════ -->
-        <section class="pn-surface overflow-hidden">
+        <details class="pn-accordion pn-surface overflow-hidden">
+            <summary class="flex items-center justify-between gap-3 p-0">
+                <div class="p-4">
+                    <h3 class="font-bold text-white text-sm">📋 Historial de visitas de seguimiento</h3>
+                    <p class="mt-1 text-sm text-slate-400">Laboratorio, toxicidad, tratamiento y estado longitudinal completos.</p>
+                </div>
+            </summary>
+            <div class="mt-1">
             <div class="p-4 border-b border-slate-700 flex justify-between items-center">
                 <h3 class="font-bold text-white text-sm">📋 Historial de visitas de seguimiento</h3>
                 <span class="text-xs text-slate-500">{{ patient.follow_ups|length }} visitas registradas</span>
@@ -812,12 +1502,18 @@
                             <td class="px-4 py-3">
                                 <div class="flex flex-col text-xs">
                                     <span>Escala visual analógica: {{ visit.pain_score or '-' }}/10</span>
-                                    {% if visit.skeletal_events and 'true' in visit.skeletal_events|string|lower %}
+                                    {% if visit.skeletal and (visit.skeletal.fracture or visit.skeletal.cord or visit.skeletal.radiation) %}
                                     <span class="text-red-500 font-bold">⚠ Evento esquelético relacionado</span>
                                     {% endif %}
                                 </div>
                             </td>
-                            <td class="px-4 py-3 text-xs max-w-[120px] truncate">{{ visit.toxicity_events or '-' }}</td>
+                            <td class="px-4 py-3 text-xs max-w-[200px]">
+                                {% if visit.toxicity %}
+                                {{ visit.toxicity|tojson }}
+                                {% else %}
+                                -
+                                {% endif %}
+                            </td>
                             <td class="px-4 py-3 text-slate-300 text-xs">{{ visit.current_treatment or '-' }}</td>
                             <td class="px-4 py-3">
                                 <span class="px-2 py-1 rounded-full bg-slate-700 text-xs text-slate-300 border border-slate-600">
@@ -829,13 +1525,72 @@
                     </tbody>
                 </table>
             </div>
-        </section>
+            </div>
+        </details>
+
+        {% if patient.stage_visits %}
+        <details class="pn-accordion pn-surface overflow-hidden">
+            <summary class="flex items-center justify-between gap-3 p-0">
+                <div class="p-4">
+                    <h3 class="font-bold text-white text-sm">🧾 Bundles de visita por etapa</h3>
+                    <p class="mt-1 text-sm text-slate-400">Carga estructurada de visitas con estado, track y payload clínico reutilizable.</p>
+                </div>
+            </summary>
+            <div class="mt-1 p-4 space-y-3">
+                {% for visit in patient.stage_visits[:8] %}
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="flex items-center justify-between gap-3">
+                        <div>
+                            <div class="text-sm font-semibold text-white">{{ visit.state|replace('_', ' ') }}</div>
+                            <div class="mt-1 text-xs text-slate-400">{{ visit.management_track|replace('_', ' ') }} · {{ visit.visit_date }}</div>
+                        </div>
+                        <span class="text-xs uppercase tracking-[0.18em] text-cyan-300">{{ visit.visit_type }}</span>
+                    </div>
+                    {% if visit.visit_bundle.payload %}
+                    <div class="mt-3 text-xs text-slate-300 overflow-x-auto">
+                        <pre class="whitespace-pre-wrap">{{ visit.visit_bundle.payload|tojson(indent=2) }}</pre>
+                    </div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </details>
+        {% endif %}
+
+        {% if data_provenance %}
+        <details class="pn-accordion pn-surface overflow-hidden">
+            <summary class="flex items-center justify-between gap-3 p-0">
+                <div class="p-4">
+                    <h3 class="font-bold text-white text-sm">🧬 Provenance clínica</h3>
+                    <p class="mt-1 text-sm text-slate-400">Trazabilidad del origen de los datos decisores recientes.</p>
+                </div>
+            </summary>
+            <div class="mt-1 p-4">
+                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                    {% for item in data_provenance %}
+                    <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                        <div class="text-sm font-semibold text-white">{{ item.field_name }}</div>
+                        <div class="mt-1 text-xs text-slate-400">{{ item.source_type }} · {{ item.source_date or item.created_at }}</div>
+                        <div class="mt-2 text-xs text-slate-300">{{ item.value }}</div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </details>
+        {% endif %}
 
         <!-- ═══════════════════════════════════════════════════════════════════ -->
         <!-- 10. DEMOGRÁFICOS MÉXICO (si existen)                               -->
         <!-- ═══════════════════════════════════════════════════════════════════ -->
         {% if patient.demographics and patient.demographics.seguridad_social %}
-        <section class="pn-surface">
+        <details class="pn-accordion pn-surface">
+            <summary class="flex items-center justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-bold text-white">🇲🇽 Perfil demográfico y cohorte</h2>
+                    <p class="mt-1 text-sm text-slate-400">Variables poblacionales útiles para contexto y benchmarking, no para desplazar la decisión clínica principal.</p>
+                </div>
+            </summary>
+            <div class="mt-4">
             <h2 class="text-lg font-bold text-white mb-4 flex items-center gap-2">
                 🇲🇽 Perfil Demográfico
             </h2>
@@ -893,7 +1648,8 @@
                 </div>
                 {% endif %}
             </div>
-        </section>
+            </div>
+        </details>
         {% endif %}
 
     </div>
@@ -903,95 +1659,79 @@
     <!-- ═══════════════════════════════════════════════════════════════════════ -->
     <div id="addVisitModal" class="fixed inset-0 bg-black/80 hidden items-center justify-center z-50 backdrop-blur-sm">
         <div class="pn-modal-shell max-w-lg w-full mx-4 p-6 max-h-[90vh] overflow-y-auto">
-            <h2 class="text-xl font-bold text-white mb-4">Registrar Visita de Seguimiento</h2>
+            <h2 class="text-xl font-bold text-white mb-2">Completar visita / estudio por etapa</h2>
+            <p class="text-sm text-slate-400 mb-4">
+                {{ agenda_board.management_track_label or clinical_compass.current_stage_label }}
+            </p>
             <form id="visitForm" class="space-y-4">
                 <input type="hidden" name="patient_id" value="{{ patient.identity.id }}">
+                <input type="hidden" name="state" value="{{ latest_assessment.state if latest_assessment else patient.prior_history.current_state }}">
+                <input type="hidden" name="management_track" value="{{ agenda_board.management_track }}">
+                <input type="hidden" id="agendaIdsInput" name="agenda_ids">
 
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-xs font-medium text-slate-400 mb-1">Antígeno prostático específico actual (PSA) (ng/mL)</label>
-                        <input type="number" step="0.01" name="psa" required
-                            class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
+                {% for section in visit_schema.sections or [] %}
+                <div class="pt-3 border-t border-slate-700 first:border-t-0 first:pt-0">
+                    <div class="mb-3">
+                        <div class="text-sm font-semibold text-white">{{ section.title }}</div>
+                        {% if section.subtitle %}
+                        <div class="mt-1 text-xs text-slate-400">{{ section.subtitle }}</div>
+                        {% endif %}
                     </div>
-                    <div>
-                        <label class="block text-xs font-medium text-slate-400 mb-1">Testosterona (ng/dL)</label>
-                        <input type="number" step="0.1" name="testosterone"
-                            class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
-                    </div>
-                </div>
-
-                <div class="grid grid-cols-2 gap-4 pt-2 border-t border-slate-700">
-                    <div>
-                        <label class="block text-xs font-medium text-slate-400 mb-1">Fosfatasa alcalina (ALP)</label>
-                        <input type="number" step="1" name="alp" placeholder="U/L"
-                            class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-medium text-slate-400 mb-1">Lactato deshidrogenasa (LDH)</label>
-                        <input type="number" step="1" name="ldh" placeholder="U/L"
-                            class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-medium text-slate-400 mb-1">Hemoglobina (g/dL)</label>
-                        <input type="number" step="0.1" name="hemoglobin" placeholder="g/dL"
-                            class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-medium text-slate-400 mb-1">Albúmina (g/dL)</label>
-                        <input type="number" step="0.1" name="albumin" placeholder="g/dL"
-                            class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
-                    </div>
-                </div>
-
-                <div class="grid grid-cols-2 gap-4 pt-2 border-t border-slate-700">
-                    <div>
-                        <label class="block text-xs font-medium text-slate-400 mb-1">Escala de dolor (0-10)</label>
-                        <input type="number" min="0" max="10" name="pain"
-                            class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-medium text-slate-400 mb-1">ECOG Actual</label>
-                        <select name="ecog" class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
-                            <option value="">--</option>
-                            <option value="0">0 - Asintomático</option>
-                            <option value="1">1 - Sintomático leve</option>
-                            <option value="2">2 - En cama &lt;50%</option>
-                            <option value="3">3 - En cama &gt;50%</option>
-                            <option value="4">4 - En cama 100%</option>
-                        </select>
-                    </div>
-                </div>
-
-                <div>
-                        <label class="block text-xs font-medium text-slate-400 mb-1">Tratamiento actual</label>
-                    <input type="text" name="treatment" placeholder="por ejemplo, abiraterona + terapia de privación androgénica"
-                        class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
-                </div>
-
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-xs font-medium text-slate-400 mb-1">Toxicidad según los Criterios Comunes de Terminología para Eventos Adversos</label>
-                        <div class="space-y-1">
-                            <label class="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" name="tox_fatigue" class="rounded bg-slate-700 border-slate-600"> Fatiga</label>
-                            <label class="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" name="tox_nausea" class="rounded bg-slate-700 border-slate-600"> Náusea</label>
-                            <label class="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" name="tox_rash" class="rounded bg-slate-700 border-slate-600"> Rash</label>
-                            <label class="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" name="tox_hta" class="rounded bg-slate-700 border-slate-600"> Hipertensión</label>
-                            <label class="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" name="tox_neuropathy" class="rounded bg-slate-700 border-slate-600"> Neuropatía</label>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {% for field in section.fields %}
+                        <div class="{{ 'md:col-span-2' if field.field_type in ['textarea', 'multi_select'] else '' }}">
+                            <label class="block text-xs font-medium text-slate-400 mb-1">
+                                {{ field.label }}
+                                {% if field.unit %}<span class="text-slate-500">({{ field.unit }})</span>{% endif %}
+                            </label>
+                            {% if field.field_type == 'select' %}
+                            <select
+                                name="{{ field.name }}"
+                                data-field-type="select"
+                                class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
+                                <option value="">--</option>
+                                {% for option in field.options %}
+                                <option value="{{ option }}" {{ 'selected' if field.default == option else '' }}>{{ option }}</option>
+                                {% endfor %}
+                            </select>
+                            {% elif field.field_type == 'textarea' %}
+                            <textarea
+                                name="{{ field.name }}"
+                                data-field-type="textarea"
+                                rows="3"
+                                class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2"></textarea>
+                            {% elif field.field_type == 'checkbox' %}
+                            <label class="flex items-center gap-2 text-sm text-slate-300">
+                                <input type="checkbox" name="{{ field.name }}" data-field-type="checkbox" class="rounded bg-slate-700 border-slate-600">
+                                Sí
+                            </label>
+                            {% elif field.field_type == 'multi_select' %}
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-2 rounded border border-slate-700 bg-slate-900/40 p-3">
+                                {% for option in field.options %}
+                                <label class="flex items-center gap-2 text-sm text-slate-300">
+                                    <input type="checkbox" name="{{ field.name }}" value="{{ option }}" data-field-type="multi_select" class="rounded bg-slate-700 border-slate-600">
+                                    {{ option }}
+                                </label>
+                                {% endfor %}
+                            </div>
+                            {% else %}
+                            <input
+                                type="{{ 'number' if field.field_type == 'number' else 'date' if field.field_type == 'date' else 'text' }}"
+                                {% if field.field_type == 'number' %}step="0.01"{% endif %}
+                                name="{{ field.name }}"
+                                data-field-type="{{ field.field_type }}"
+                                {% if field.required %}required{% endif %}
+                                class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
+                            {% endif %}
                         </div>
-                    </div>
-                    <div>
-                        <label class="block text-xs font-medium text-slate-400 mb-1">Eventos esqueléticos relacionados</label>
-                        <div class="space-y-1">
-                            <label class="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" name="sre_fracture" class="rounded bg-slate-700 border-slate-600"> Fractura</label>
-                            <label class="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" name="sre_cord" class="rounded bg-slate-700 border-slate-600"> Compresión</label>
-                            <label class="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" name="sre_rad" class="rounded bg-slate-700 border-slate-600"> Radioterapia</label>
-                        </div>
+                        {% endfor %}
                     </div>
                 </div>
+                {% endfor %}
 
                 <div class="flex justify-end gap-3 mt-6">
                     <button type="button" onclick="closeVisitModal()" class="pn-btn pn-btn-secondary px-4 py-2">Cancelar</button>
-                    <button type="submit" class="pn-btn pn-btn-primary px-4 py-2">Guardar Visita</button>
+                    <button type="submit" class="pn-btn pn-btn-primary px-4 py-2">Guardar visita por etapa</button>
                 </div>
             </form>
         </div>
@@ -1067,6 +1807,40 @@
                 <div class="flex justify-end gap-3 mt-4">
                     <button type="button" onclick="closeProModal()" class="pn-btn pn-btn-secondary px-4 py-2">Cancelar</button>
                     <button type="submit" class="pn-btn pn-btn-primary px-4 py-2">Guardar resultados reportados por el paciente</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="documentVerifyModal" class="fixed inset-0 bg-black/80 hidden items-center justify-center z-50 backdrop-blur-sm">
+        <div class="pn-modal-shell max-w-3xl w-full mx-4 p-6 max-h-[90vh] overflow-y-auto">
+            <div class="flex items-start justify-between gap-4">
+                <div>
+                    <h2 class="text-xl font-bold text-white">Verificación humana de documento clínico</h2>
+                    <p id="documentVerifySubtitle" class="mt-1 text-sm text-slate-400">Revise, corrija y confirme antes de alimentar el longitudinal.</p>
+                </div>
+                <button type="button" onclick="closeDocumentVerifyModal()" class="pn-btn pn-btn-secondary px-3 py-2 text-xs">Cerrar</button>
+            </div>
+            <div class="mt-4 rounded-xl border border-slate-700 bg-slate-950/40 p-4">
+                <div class="text-xs uppercase tracking-wider text-slate-500">Extracto privado local</div>
+                <pre id="documentPreviewExcerpt" class="mt-3 whitespace-pre-wrap text-xs text-slate-300"></pre>
+            </div>
+            <form id="documentVerifyForm" class="mt-4 space-y-4">
+                <input type="hidden" id="documentVerifyId" name="document_id">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Verificado por</label>
+                        <input type="text" id="documentVerifiedBy" name="verified_by" value="clinico" class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Fecha fuente</label>
+                        <input type="date" id="documentSourceDate" name="source_date" class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
+                    </div>
+                </div>
+                <div id="documentFactEditor" class="space-y-3"></div>
+                <div class="flex justify-end gap-3 pt-2">
+                    <button type="button" onclick="closeDocumentVerifyModal()" class="pn-btn pn-btn-secondary px-4 py-2">Cancelar</button>
+                    <button type="submit" class="pn-btn pn-btn-primary px-4 py-2">Verificar y comprometer facts</button>
                 </div>
             </form>
         </div>
@@ -1301,7 +2075,11 @@
         {% endif %}
 
         // ── Modal Logic ───────────────────────────────────────────────────────
-        function openVisitModal() {
+        function openVisitModal(agendaId = null) {
+            const agendaInput = document.getElementById('agendaIdsInput');
+            if (agendaInput) {
+                agendaInput.value = agendaId ? JSON.stringify([agendaId]) : '[]';
+            }
             document.getElementById('addVisitModal').classList.remove('hidden');
             document.getElementById('addVisitModal').classList.add('flex');
         }
@@ -1310,46 +2088,90 @@
             document.getElementById('addVisitModal').classList.remove('flex');
         }
 
-        document.getElementById('visitForm').addEventListener('submit', async function(e) {
-            e.preventDefault();
-            const fd = new FormData(e.target);
-            const data = {
-                patient_id: fd.get('patient_id'),
-                psa: parseFloat(fd.get('psa')),
-                testosterone: parseFloat(fd.get('testosterone') || 0),
-                alp: parseFloat(fd.get('alp') || 0),
-                ldh: parseFloat(fd.get('ldh') || 0),
-                hemoglobin: parseFloat(fd.get('hemoglobin') || 0),
-                albumin: parseFloat(fd.get('albumin') || 0),
-                pain: parseInt(fd.get('pain') || 0),
-                ecog: parseInt(fd.get('ecog') || 0),
-                treatment: fd.get('treatment'),
-                toxicity: {
-                    fatigue: fd.get('tox_fatigue') === 'on',
-                    nausea: fd.get('tox_nausea') === 'on',
-                    rash: fd.get('tox_rash') === 'on',
-                    hta: fd.get('tox_hta') === 'on',
-                    neuropathy: fd.get('tox_neuropathy') === 'on',
-                },
-                skeletal: {
-                    fracture: fd.get('sre_fracture') === 'on',
-                    cord: fd.get('sre_cord') === 'on',
-                    radiation: fd.get('sre_rad') === 'on',
-                },
-                status: 'Seguimiento'
-            };
+        function collectVisitFormData(form) {
+            const data = {};
+            const elements = [...form.querySelectorAll('[name]')];
+            const multiNames = [...new Set(elements.filter(el => el.dataset.fieldType === 'multi_select').map(el => el.name))];
+
+            for (const name of multiNames) {
+                data[name] = elements.filter(el => el.name === name && el.checked).map(el => el.value);
+            }
+
+            for (const element of elements) {
+                if (!element.name || element.dataset.fieldType === 'multi_select') continue;
+                const fieldType = element.dataset.fieldType || element.type;
+                if (fieldType === 'checkbox') {
+                    data[element.name] = element.checked ? 1 : 0;
+                    continue;
+                }
+                if (fieldType === 'number') {
+                    data[element.name] = element.value === '' ? '' : Number(element.value);
+                    continue;
+                }
+                data[element.name] = element.value;
+            }
 
             try {
-                const resp = await fetch('/api/add_followup', {
+                data.agenda_ids = JSON.parse(document.getElementById('agendaIdsInput')?.value || '[]');
+            } catch (e) {
+                data.agenda_ids = [];
+            }
+            return data;
+        }
+
+        async function completeAgendaItem(agendaId) {
+            try {
+                const resp = await fetch(`/api/patients/{{ patient.identity.id }}/agenda/${agendaId}/complete`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data)
+                    body: JSON.stringify({})
                 });
                 const result = await resp.json();
-                if (result.success) { location.reload(); }
-                else { alert('Error: ' + result.error); }
-            } catch (err) { alert('Error de conexión'); }
-        });
+                if (result.success) {
+                    location.reload();
+                    return;
+                }
+                alert('Error: ' + (result.error || 'No fue posible completar el item.'));
+            } catch (err) {
+                alert('Error de conexión');
+            }
+        }
+
+        async function confirmTransitionProposal(proposalId) {
+            try {
+                const resp = await fetch(`/api/patients/{{ patient.identity.id }}/state-transition/${proposalId}/confirm`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ confirmed_by: 'clinico' })
+                });
+                const result = await resp.json();
+                if (result.success) {
+                    location.reload();
+                    return;
+                }
+                alert('Error: ' + (result.error || 'No fue posible confirmar la transición.'));
+            } catch (err) {
+                alert('Error de conexión');
+            }
+        }
+
+        const visitForm = document.getElementById('visitForm');
+        if (visitForm) {
+            visitForm.addEventListener('submit', async function(e) {
+                e.preventDefault();
+                const data = collectVisitFormData(e.target);
+                try {
+                    const resp = await fetch(`/api/patients/{{ patient.identity.id }}/visits`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(data)
+                    });
+                    const result = await resp.json();
+                    if (result.success) { location.reload(); }
+                    else { alert('Error: ' + result.error); }
+                } catch (err) { alert('Error de conexión'); }
+            });
+        }
 
         // ── Alert Acknowledge ────────────────────────────────────────────────
         async function acknowledgeAlert(alertId, btn) {
@@ -1386,7 +2208,7 @@
                 const resp = await fetch('/api/pivotal_match/' + encodeURIComponent(_patientKey));
                 const data = await resp.json();
                 if (data.success) {
-                    alert(`Evaluación completada: ${data.eligible_count} de ${data.total_studies_evaluated} estudios elegibles. Recarga la página para ver resultados.`);
+                    alert(`Evaluación completada. Elegibles: ${data.eligible_count}. Parciales: ${data.partial_count || 0}. No elegibles: ${data.ineligible_count || 0}. El perfil se recargará para mostrar primero los elegibles.`);
                     location.reload();
                 } else {
                     alert('Error: ' + (data.error || 'Error desconocido'));
@@ -1430,6 +2252,190 @@
                 else { alert('Error: ' + result.error); }
             } catch (err) { alert('Error de conexión'); }
         });
+
+        const documentUploadForm = document.getElementById('documentUploadForm');
+        if (documentUploadForm) {
+            documentUploadForm.addEventListener('submit', async function(e) {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                try {
+                    const resp = await fetch(`/api/patients/{{ patient.identity.id }}/documents`, {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const result = await resp.json();
+                    if (result.success) {
+                        location.reload();
+                        return;
+                    }
+                    alert('Error: ' + (result.error || 'No fue posible subir el documento.'));
+                } catch (err) {
+                    alert('Error de conexión');
+                }
+            });
+        }
+
+        async function extractDocument(documentId) {
+            try {
+                const resp = await fetch(`/api/patients/{{ patient.identity.id }}/documents/${documentId}/extract`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                });
+                const result = await resp.json();
+                if (result.success) {
+                    location.reload();
+                    return;
+                }
+                alert('Error: ' + (result.error || 'No fue posible extraer candidatos.'));
+            } catch (err) {
+                alert('Error de conexión');
+            }
+        }
+
+        function closeDocumentVerifyModal() {
+            document.getElementById('documentVerifyModal').classList.add('hidden');
+            document.getElementById('documentVerifyModal').classList.remove('flex');
+            document.getElementById('documentFactEditor').innerHTML = '';
+        }
+
+        function inferDocumentFieldType(item) {
+            if (item.field_type) return item.field_type;
+            if (typeof item.value === 'boolean') return 'checkbox';
+            if (typeof item.value === 'number') return 'number';
+            if (Array.isArray(item.value) || (item.value && typeof item.value === 'object')) return 'textarea';
+            return 'text';
+        }
+
+        function documentValueToInput(value, fieldType) {
+            if (fieldType === 'checkbox') return value === true || value === 1 || String(value).toLowerCase() === 'true';
+            if (Array.isArray(value) || (value && typeof value === 'object')) return JSON.stringify(value, null, 2);
+            return value ?? '';
+        }
+
+        function renderDocumentFactEditor(bundle) {
+            const editor = document.getElementById('documentFactEditor');
+            editor.innerHTML = '';
+            const candidates = (bundle.candidates || []).length ? bundle.candidates : (bundle.manual_template || []);
+            if (!candidates.length) {
+                editor.innerHTML = '<div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4 text-sm text-slate-300">No hubo extracción automática. Capture manualmente el resultado con un documento más estructurado o un tipo documental específico.</div>';
+                return;
+            }
+            candidates.forEach((item, index) => {
+                const wrapper = document.createElement('div');
+                wrapper.className = 'document-fact-row rounded-xl border border-slate-700 bg-slate-900/50 p-4 space-y-3';
+                wrapper.dataset.fieldName = item.field_name || '';
+                wrapper.dataset.factGroup = item.fact_group || '';
+                wrapper.dataset.targetResultType = item.target_result_type || '';
+                const fieldType = inferDocumentFieldType(item);
+                wrapper.dataset.fieldType = fieldType;
+                const label = item.label || item.field_name || `Fact ${index + 1}`;
+                const detailBits = [];
+                if (item.page_ref) detailBits.push(item.page_ref);
+                if (item.confidence !== undefined && item.confidence !== null && item.confidence !== '') detailBits.push(`Confianza ${Math.round((Number(item.confidence) || 0) * 100)}%`);
+                const detail = detailBits.join(' · ');
+                const inputId = `document-fact-${index}`;
+                const baseHtml = `
+                    <div class="flex items-start justify-between gap-3">
+                        <div>
+                            <div class="text-sm font-semibold text-white">${label}</div>
+                            ${detail ? `<div class="mt-1 text-xs text-slate-400">${detail}</div>` : ''}
+                            ${item.evidence_excerpt ? `<div class="mt-2 text-xs text-slate-500">${item.evidence_excerpt}</div>` : ''}
+                        </div>
+                        <span class="text-[11px] uppercase tracking-[0.18em] text-slate-500">${item.target_result_type || item.fact_group || 'fact'}</span>
+                    </div>
+                `;
+                wrapper.innerHTML = baseHtml;
+                if (fieldType === 'textarea') {
+                    const textarea = document.createElement('textarea');
+                    textarea.id = inputId;
+                    textarea.rows = 3;
+                    textarea.className = 'document-fact-input w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2 text-sm';
+                    textarea.value = documentValueToInput(item.value, fieldType);
+                    wrapper.appendChild(textarea);
+                } else if (fieldType === 'checkbox') {
+                    const labelEl = document.createElement('label');
+                    labelEl.className = 'flex items-center gap-2 text-sm text-slate-300';
+                    labelEl.innerHTML = `<input id="${inputId}" type="checkbox" class="document-fact-input rounded bg-slate-700 border-slate-600"> Confirmado`;
+                    wrapper.appendChild(labelEl);
+                    labelEl.querySelector('input').checked = documentValueToInput(item.value, fieldType);
+                } else {
+                    const input = document.createElement('input');
+                    input.id = inputId;
+                    input.type = fieldType === 'number' ? 'number' : fieldType === 'date' ? 'date' : 'text';
+                    if (fieldType === 'number') input.step = '0.01';
+                    input.className = 'document-fact-input w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2 text-sm';
+                    input.value = documentValueToInput(item.value, fieldType);
+                    wrapper.appendChild(input);
+                }
+                editor.appendChild(wrapper);
+            });
+        }
+
+        async function openDocumentVerifyModal(documentId) {
+            try {
+                const resp = await fetch(`/api/patients/{{ patient.identity.id }}/documents/${documentId}/facts`);
+                const result = await resp.json();
+                if (!result.success) {
+                    alert('Error: ' + (result.error || 'No fue posible abrir el documento.'));
+                    return;
+                }
+                document.getElementById('documentVerifyId').value = documentId;
+                document.getElementById('documentVerifySubtitle').textContent = `${result.document.title || result.document.file_name} · ${result.document.document_type}`;
+                document.getElementById('documentPreviewExcerpt').textContent = result.preview_excerpt || 'Sin texto extraído automático.';
+                document.getElementById('documentSourceDate').value = result.document.source_date || '';
+                renderDocumentFactEditor(result);
+                document.getElementById('documentVerifyModal').classList.remove('hidden');
+                document.getElementById('documentVerifyModal').classList.add('flex');
+            } catch (err) {
+                alert('Error de conexión');
+            }
+        }
+
+        function collectDocumentFacts() {
+            const rows = [...document.querySelectorAll('.document-fact-row')];
+            return rows.map((row) => {
+                const input = row.querySelector('.document-fact-input');
+                const fieldType = row.dataset.fieldType;
+                let value = '';
+                if (fieldType === 'checkbox') value = input.checked;
+                else value = input.value;
+                return {
+                    field_name: row.dataset.fieldName,
+                    fact_group: row.dataset.factGroup,
+                    target_result_type: row.dataset.targetResultType,
+                    value,
+                };
+            }).filter((item) => item.field_name && item.value !== '');
+        }
+
+        const documentVerifyForm = document.getElementById('documentVerifyForm');
+        if (documentVerifyForm) {
+            documentVerifyForm.addEventListener('submit', async function(e) {
+                e.preventDefault();
+                const documentId = document.getElementById('documentVerifyId').value;
+                const payload = {
+                    verified_by: document.getElementById('documentVerifiedBy').value || 'clinico',
+                    source_date: document.getElementById('documentSourceDate').value,
+                    facts: collectDocumentFacts(),
+                };
+                try {
+                    const resp = await fetch(`/api/patients/{{ patient.identity.id }}/documents/${documentId}/verify`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    const result = await resp.json();
+                    if (result.success) {
+                        location.reload();
+                        return;
+                    }
+                    alert('Error: ' + (result.error || 'No fue posible verificar el documento.'));
+                } catch (err) {
+                    alert('Error de conexión');
+                }
+            });
+        }
 
         // ── Export ────────────────────────────────────────────────────────────
         async function exportData() {

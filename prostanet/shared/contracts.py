@@ -168,6 +168,277 @@ class PromBattery:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class AgendaItem:
+    agenda_key: str
+    item_type: str
+    title: str
+    state: str
+    management_track: str
+    due_at: str = ""
+    window_start: str = ""
+    window_end: str = ""
+    status: str = "scheduled"
+    priority: str = "routine"
+    summary: str = ""
+    required_inputs: list[str] = field(default_factory=list)
+    completion_rule: dict[str, Any] = field(default_factory=dict)
+    evidence_basis: list[str] = field(default_factory=list)
+    comparator_basis: list[str] = field(default_factory=list)
+    generated_from_event: str = ""
+    action_label: str = ""
+    blockers: list[str] = field(default_factory=list)
+    reasoning: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class StageProtocolDefinition:
+    state: str
+    management_track: str
+    title: str
+    cadence_summary: str
+    purpose: str
+    evidence_basis: list[str] = field(default_factory=list)
+    comparator_basis: list[str] = field(default_factory=list)
+    agenda_defaults: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class VisitBundle:
+    state: str
+    management_track: str
+    visit_type: str = "stage_followup"
+    visit_date: str = ""
+    sections: list[dict[str, Any]] = field(default_factory=list)
+    payload: dict[str, Any] = field(default_factory=dict)
+    provenance: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class TherapyCheckpoint:
+    key: str
+    title: str
+    status: str
+    rationale: str
+    action: str = ""
+    evidence_basis: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class InstitutionalComparator:
+    label: str
+    mode: str
+    title: str
+    cadence_summary: str
+    source_label: str = ""
+    source_url: str = ""
+    notes: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class DataFreshnessFact:
+    label: str
+    value: str
+    date: str
+    freshness_status: str = "unknown"
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class ProvenanceFact:
+    field_name: str
+    source_type: str
+    source_date: str = ""
+    source_document_id: str = ""
+    verified_by: str = ""
+    entered_manually: bool = False
+    stage_context: str = ""
+    value: Any = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class PatientEvent:
+    patient_id: int
+    event_type: str
+    event_date: str
+    state_context: str = ""
+    management_track: str = ""
+    source_type: str = ""
+    source_record_id: int | None = None
+    status: str = "recorded"
+    payload: dict[str, Any] = field(default_factory=dict)
+    mcode_focus: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class ClinicalSignalSet:
+    state: str
+    management_track: str
+    ready_to_restage: bool = False
+    signals: list[dict[str, Any]] = field(default_factory=list)
+    critical_missing: list[str] = field(default_factory=list)
+    awaiting_review: list[str] = field(default_factory=list)
+    active_safety: list[str] = field(default_factory=list)
+    mcode_projection: dict[str, Any] = field(default_factory=dict)
+    evidence_basis: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class StateTransitionProposal:
+    proposal_key: str
+    from_state: str
+    target_state: str
+    rationale: str
+    from_management_track: str = ""
+    target_management_track: str = ""
+    priority: str = "routine"
+    proposal_status: str = "open"
+    requires_confirmation: bool = True
+    trigger_signals: list[str] = field(default_factory=list)
+    next_actions: list[str] = field(default_factory=list)
+    evidence_basis: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class NextBestAction:
+    title: str
+    recommendation_family: str
+    rationale: str
+    immediate_actions: list[str] = field(default_factory=list)
+    data_that_could_change_course: list[str] = field(default_factory=list)
+    contraindication_modifiers: list[str] = field(default_factory=list)
+    evidence_basis: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class RecommendationAudit:
+    patient_id: int
+    recommendation_family: str
+    recommended_option: str
+    selected_option: str = ""
+    discordance_reason: str = ""
+    assessment_id: int | None = None
+    event_id: int | None = None
+    outcome_snapshot: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class SourceDocument:
+    patient_id: int
+    document_key: str
+    document_type: str
+    title: str = ""
+    file_name: str = ""
+    mime_type: str = ""
+    sha256: str = ""
+    storage_path: str = ""
+    private_index_path: str = ""
+    source_date: str = ""
+    classification_status: str = "pending"
+    extraction_status: str = "pending"
+    verification_status: str = "draft"
+    preview_excerpt: str = ""
+    page_count: int = 0
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class DocumentExtractionCandidate:
+    candidate_key: str
+    field_name: str
+    fact_group: str
+    value: Any
+    value_display: str = ""
+    target_result_type: str = ""
+    confidence: float = 0.0
+    status: str = "draft"
+    extraction_method: str = ""
+    evidence_excerpt: str = ""
+    page_ref: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class VerificationTask:
+    task_key: str
+    task_status: str = "open"
+    assigned_to: str = ""
+    verified_by: str = ""
+    verified_at: str = ""
+    summary: dict[str, Any] = field(default_factory=dict)
+    pending_fields: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class VerifiedFact:
+    field_name: str
+    fact_group: str
+    value: Any
+    value_display: str = ""
+    target_result_type: str = ""
+    source_date: str = ""
+    status: str = "verified"
+    correction_note: str = ""
+    verified_by: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class VerifiedFactBundle:
+    verified_by: str
+    facts: list[dict[str, Any]] = field(default_factory=list)
+    committed_result_types: list[str] = field(default_factory=list)
+    what_changed: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 def module_schema(
     module_id: str,
     title: str,

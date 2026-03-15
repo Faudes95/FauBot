@@ -416,6 +416,9 @@ def patient_profile(nss):
         data = tracking_db.get_patient_history(nss)
         if not data:
             return "Paciente no encontrado", 404
+        tracking_db.refresh_followup_agenda(data)
+        tracking_db.refresh_longitudinal_intelligence(nss, force_recompute=False)
+        data = tracking_db.get_patient_history(nss)
             
         # Calcular edad
         dob_str = data['identity'].get('dob')
@@ -433,16 +436,25 @@ def patient_profile(nss):
         latest_assessment = {}
         state_timeline = []
         care_overlays = []
+        profile_view = {}
         if data.get("latest_assessment"):
             from prostanet.shared.presentation_text import (
                 humanize_assessment,
                 humanize_care_overlays,
                 humanize_state_timeline,
             )
+            from prostanet.domains.patient_tracking.profile_compass import build_patient_profile_view_model
 
             latest_assessment = humanize_assessment(data["latest_assessment"])
             state_timeline = humanize_state_timeline(data.get("state_timeline", []))
             care_overlays = humanize_care_overlays(data.get("care_overlays", []))
+            profile_view = build_patient_profile_view_model(
+                patient=data,
+                latest_assessment_raw=data.get("latest_assessment"),
+                latest_assessment=latest_assessment,
+                state_timeline=state_timeline,
+                care_overlays=care_overlays,
+            )
         else:
             # Fallback legado solo cuando todavía no existe evaluación modular persistida.
             current_context = dict(data.get('baseline') or {})
@@ -462,11 +474,45 @@ def patient_profile(nss):
 
             try:
                 from precision_medicine import evaluate_patient_for_mhspc
+                from prostanet.domains.patient_tracking.profile_compass import build_patient_profile_view_model
 
                 recs = evaluate_patient_for_mhspc(current_context)
+                profile_view = build_patient_profile_view_model(
+                    patient=data,
+                    latest_assessment_raw={},
+                    latest_assessment={},
+                    state_timeline=[],
+                    care_overlays=[],
+                    recommendations=recs,
+                )
             except Exception as e:
                 logger.warning(f"Error generando recomendaciones: {e}")
                 recs = {"info": "Recomendaciones no disponibles para este perfil"}
+                profile_view = {
+                    "diagnostic_state": False,
+                    "management_track": "",
+                    "clinical_compass": {},
+                    "stage_specific_panels": [],
+                    "algorithm_panels": [],
+                    "pivotal_panel": {"eligible_matches": [], "partial_matches": [], "ineligible_matches": [], "hidden_ineligible_count": 0, "eligible_count": 0, "partial_count": 0, "ineligible_count": 0, "last_evaluated_at": "", "has_results": False},
+                    "longitudinal_sections": [],
+                    "supportive_evidence_context": [],
+                    "source_citations": [],
+                    "care_overlays": [],
+                    "agenda_board": {},
+                    "next_due_items": [],
+                    "overdue_items": [],
+                    "visit_schema": {},
+                    "therapy_checkpoints": [],
+                    "protocol_comparators": [],
+                    "data_provenance": [],
+                    "clinical_signals": {},
+                    "next_best_action": {},
+                    "transition_proposals": [],
+                    "recommendation_audit": [],
+                    "document_board": {},
+                    "recommendations": recs,
+                }
 
         page_chrome = build_page_chrome(
             "patients",
@@ -484,6 +530,7 @@ def patient_profile(nss):
             latest_assessment=latest_assessment,
             state_timeline=state_timeline,
             care_overlays=care_overlays,
+            profile_view=profile_view,
             page_chrome=page_chrome,
         )
     except Exception as e:
@@ -500,7 +547,15 @@ def add_followup():
         data["patient_id"] = int(float(data["patient_id"]))
         success, msg = tracking_db.add_followup_visit(data)
         if success:
-            return jsonify({"success": True, "id": msg})
+            return jsonify(
+                {
+                    "success": True,
+                    "id": msg["followup_id"] if isinstance(msg, dict) else msg,
+                    "visit_record_id": msg.get("visit_record_id") if isinstance(msg, dict) else None,
+                    "agenda": msg.get("agenda") if isinstance(msg, dict) else None,
+                    "intelligence": msg.get("intelligence") if isinstance(msg, dict) else None,
+                }
+            )
         if msg == "Paciente no encontrado":
             return error_response(msg, 404)
         return error_response(msg, 400)
@@ -511,10 +566,278 @@ def add_followup():
         return error_response(str(e), 500)
 
 
+@app.route('/api/patients/<nss>/agenda', methods=['GET'])
+def api_patient_agenda(nss):
+    import tracking_db
+    try:
+        agenda = tracking_db.get_patient_agenda(nss)
+        if agenda is None:
+            return error_response("Paciente no encontrado", 404)
+        return jsonify({"success": True, "agenda": agenda})
+    except Exception as e:
+        logger.error(f"Error getting patient agenda: {e}")
+        return error_response(str(e), 500)
+
+
+@app.route('/api/patients/<int:patient_id>/visits', methods=['POST'])
+def api_save_stage_visit(patient_id):
+    import tracking_db
+    try:
+        data = parse_json_body()
+        success, payload = tracking_db.save_stage_visit_bundle(patient_id, data)
+        if success:
+            return jsonify({"success": True, **payload})
+        if payload == "Paciente no encontrado":
+            return error_response(payload, 404)
+        return error_response(payload, 400)
+    except ValueError as e:
+        return error_response(str(e), 400)
+    except Exception as e:
+        logger.error(f"Error saving stage visit: {e}")
+        return error_response(str(e), 500)
+
+
+@app.route('/api/patients/<int:patient_id>/documents', methods=['POST'])
+def api_upload_source_document(patient_id):
+    import tracking_db
+    try:
+        file_storage = request.files.get("file")
+        payload = {
+            "document_type": request.form.get("document_type", "auto"),
+            "title": request.form.get("title", ""),
+            "source_date": request.form.get("source_date", ""),
+            "uploaded_by": request.form.get("uploaded_by", "clinico"),
+        }
+        success, result = tracking_db.save_source_document(patient_id, file_storage, payload)
+        if not success:
+            if result == "Paciente no encontrado":
+                return error_response(result, 404)
+            return error_response(result, 400)
+        return jsonify({"success": True, **result})
+    except Exception as e:
+        logger.error(f"Error uploading source document: {e}")
+        return error_response(str(e), 500)
+
+
+@app.route('/api/patients/<int:patient_id>/documents', methods=['GET'])
+def api_list_source_documents(patient_id):
+    import tracking_db
+    try:
+        documents = tracking_db.list_source_documents(patient_id)
+        if documents is None:
+            return error_response("Paciente no encontrado", 404)
+        return jsonify({"success": True, "documents": documents})
+    except Exception as e:
+        logger.error(f"Error listing source documents: {e}")
+        return error_response(str(e), 500)
+
+
+@app.route('/api/patients/<int:patient_id>/documents/<int:document_id>/extract', methods=['POST'])
+def api_extract_source_document(patient_id, document_id):
+    import tracking_db
+    try:
+        body = request.get_json(silent=True) or {}
+        success, result = tracking_db.extract_source_document(
+            patient_id,
+            document_id,
+            document_type=body.get("document_type", ""),
+        )
+        if not success:
+            return error_response(result, 400 if result != "Documento no encontrado" else 404)
+        return jsonify({"success": True, **result})
+    except Exception as e:
+        logger.error(f"Error extracting source document: {e}")
+        return error_response(str(e), 500)
+
+
+@app.route('/api/patients/<int:patient_id>/documents/<int:document_id>/verify', methods=['POST'])
+def api_verify_source_document(patient_id, document_id):
+    import tracking_db
+    try:
+        data = parse_json_body()
+        success, result = tracking_db.verify_source_document(patient_id, document_id, data)
+        if not success:
+            return error_response(result, 400 if result not in {"Paciente no encontrado", "Documento no encontrado"} else 404)
+        return jsonify({"success": True, **result})
+    except ValueError as e:
+        return error_response(str(e), 400)
+    except Exception as e:
+        logger.error(f"Error verifying source document: {e}")
+        return error_response(str(e), 500)
+
+
+@app.route('/api/patients/<int:patient_id>/documents/<int:document_id>/facts', methods=['GET'])
+def api_get_source_document_facts(patient_id, document_id):
+    import tracking_db
+    try:
+        bundle = tracking_db.get_document_facts(patient_id, document_id)
+        if bundle is None:
+            return error_response("Documento no encontrado", 404)
+        return jsonify({"success": True, **bundle})
+    except Exception as e:
+        logger.error(f"Error fetching source document facts: {e}")
+        return error_response(str(e), 500)
+
+
+@app.route('/api/patients/<int:patient_id>/agenda/<int:agenda_id>/complete', methods=['POST'])
+def api_complete_agenda_item(patient_id, agenda_id):
+    import tracking_db
+    try:
+        body = request.get_json(silent=True) or {}
+        success = tracking_db.complete_followup_agenda_item(
+            patient_id,
+            agenda_id,
+            visit_record_id=body.get("visit_record_id"),
+        )
+        if not success:
+            return error_response("No fue posible completar el item de agenda", 400)
+        identity = tracking_db.get_patient_history(patient_id)
+        agenda = tracking_db.get_patient_agenda(identity["identity"]["nss"] if identity else patient_id)
+        return jsonify({"success": True, "agenda": agenda})
+    except Exception as e:
+        logger.error(f"Error completing agenda item: {e}")
+        return error_response(str(e), 500)
+
+
+@app.route('/api/patients/<int:patient_id>/visit-schema', methods=['GET'])
+def api_visit_schema(patient_id):
+    import tracking_db
+    try:
+        patient = tracking_db.get_patient_full_record(patient_id)
+        if not patient:
+            return error_response("Paciente no encontrado", 404)
+        from prostanet.domains.patient_tracking.followup_agenda import build_visit_schema, infer_management_track
+
+        state = request.args.get("state") or (patient.get("latest_assessment") or {}).get("state") or (patient.get("prior_history") or {}).get("current_state") or "diagnostic_workup"
+        track = request.args.get("track") or infer_management_track(patient, state, patient.get("latest_assessment"))
+        return jsonify({"success": True, "state": state, "management_track": track, "visit_schema": build_visit_schema(state, track)})
+    except Exception as e:
+        logger.error(f"Error getting visit schema: {e}")
+        return error_response(str(e), 500)
+
+
+@app.route('/api/patients/<int:patient_id>/protocol-comparison', methods=['GET'])
+def api_protocol_comparison(patient_id):
+    import tracking_db
+    try:
+        patient = tracking_db.get_patient_full_record(patient_id)
+        if not patient:
+            return error_response("Paciente no encontrado", 404)
+        from prostanet.domains.patient_tracking.followup_agenda import build_protocol_comparators, infer_management_track
+
+        state = (patient.get("latest_assessment") or {}).get("state") or (patient.get("prior_history") or {}).get("current_state") or "diagnostic_workup"
+        track = infer_management_track(patient, state, patient.get("latest_assessment"))
+        return jsonify({"success": True, "comparators": build_protocol_comparators(state, track), "state": state, "management_track": track})
+    except Exception as e:
+        logger.error(f"Error getting protocol comparison: {e}")
+        return error_response(str(e), 500)
+
+
+@app.route('/api/patients/<int:patient_id>/events', methods=['POST'])
+def api_record_patient_event(patient_id):
+    import tracking_db
+    try:
+        data = parse_json_body()
+        event_type = str(data.get("event_type", "")).strip()
+        if not event_type:
+            return error_response("Se requiere event_type", 400)
+        event_id = tracking_db.record_patient_event(
+            patient_id,
+            event_type=event_type,
+            event_date=data.get("event_date"),
+            state_context=data.get("state_context", ""),
+            management_track=data.get("management_track", ""),
+            source_type=data.get("source_type", "manual_event"),
+            source_record_id=data.get("source_record_id"),
+            status=data.get("status", "recorded"),
+            payload=data.get("payload") or {},
+            mcode_focus=data.get("mcode_focus") or {},
+        )
+        if event_id is None:
+            return error_response("No fue posible registrar el evento", 400)
+        bundle = tracking_db.refresh_longitudinal_intelligence(patient_id, event_id=event_id, force_recompute=True)
+        agenda = tracking_db.get_patient_agenda(patient_id)
+        return jsonify({"success": True, "event_id": event_id, "agenda": agenda, **bundle})
+    except ValueError as e:
+        return error_response(str(e), 400)
+    except Exception as e:
+        logger.error(f"Error recording patient event: {e}")
+        return error_response(str(e), 500)
+
+
+@app.route('/api/patients/<int:patient_id>/results', methods=['POST'])
+def api_save_patient_result(patient_id):
+    import tracking_db
+    try:
+        data = parse_json_body()
+        success, payload = tracking_db.save_structured_result(patient_id, data)
+        if success:
+            return jsonify({"success": True, **payload})
+        return error_response(payload, 400 if payload != "Paciente no encontrado" else 404)
+    except ValueError as e:
+        return error_response(str(e), 400)
+    except Exception as e:
+        logger.error(f"Error saving structured result: {e}")
+        return error_response(str(e), 500)
+
+
+@app.route('/api/patients/<int:patient_id>/state-transition/<int:proposal_id>/confirm', methods=['POST'])
+def api_confirm_state_transition(patient_id, proposal_id):
+    import tracking_db
+    try:
+        body = request.get_json(silent=True) or {}
+        success, payload = tracking_db.confirm_state_transition_proposal(
+            patient_id,
+            proposal_id,
+            confirmed_by=body.get("confirmed_by", "system"),
+        )
+        if success:
+            return jsonify({"success": True, **payload})
+        return error_response(payload, 400)
+    except Exception as e:
+        logger.error(f"Error confirming transition proposal: {e}")
+        return error_response(str(e), 500)
+
+
+@app.route('/api/patients/<int:patient_id>/next-best-action', methods=['GET'])
+def api_next_best_action(patient_id):
+    import tracking_db
+    try:
+        action = tracking_db.get_patient_next_best_action(patient_id)
+        if action is None:
+            return error_response("Paciente no encontrado", 404)
+        return jsonify({"success": True, "next_best_action": action})
+    except Exception as e:
+        logger.error(f"Error getting next best action: {e}")
+        return error_response(str(e), 500)
+
+
+@app.route('/api/patients/<int:patient_id>/signals', methods=['GET'])
+def api_patient_signals(patient_id):
+    import tracking_db
+    try:
+        signals = tracking_db.get_patient_signals(patient_id)
+        if signals is None:
+            return error_response("Paciente no encontrado", 404)
+        bundle = tracking_db.refresh_longitudinal_intelligence(patient_id, force_recompute=False)
+        return jsonify(
+            {
+                "success": True,
+                "signals": signals,
+                "transition_proposals": bundle.get("transition_proposals", []),
+                "next_best_action": bundle.get("next_best_action", {}),
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error getting patient signals: {e}")
+        return error_response(str(e), 500)
+
+
 @app.route("/api/register_patient", methods=["POST"])
 def register_patient():
     logger.info("Recibida petición POST /api/register_patient")
     try:
+        import tracking_db
         data = parse_json_body()
         data["nss"] = str(data.get("nss", "")).strip()
         data["full_name"] = str(data.get("full_name", "")).strip()
@@ -589,6 +912,7 @@ def register_patient():
                 data,
                 full_record,
             )
+            loop_payload = tracking_db.refresh_longitudinal_intelligence(patient_id, force_recompute=True)
 
             response = {
                 "success": True, 
@@ -598,6 +922,7 @@ def register_patient():
                 "recommendation_mode": "guideline_modular" if assessment else "exploratory_legacy_only",
                 "exploratory_benchmark": exploratory_benchmark,
                 "processing_summary": processing_summary,
+                "longitudinal_intelligence": loop_payload,
                 "msg": msg,
                 "assessment_id": assessment_id,
                 "next_routes": {
@@ -1148,6 +1473,11 @@ def api_pivotal_match(nss):
                 'match_score': m.get('match_score', 0),
                 'criteria_met': m.get('criteria_met', []),
                 'criteria_failed': m.get('criteria_failed', []),
+                'eligibility_details': {
+                    'match_score': m.get('match_score', 0),
+                    'criteria_met': m.get('criteria_met', []),
+                    'criteria_failed': m.get('criteria_failed', []),
+                },
                 'expected_outcome': study.get('key_result', ''),
                 'applicability': study.get('mexican_applicability', ''),
             }
@@ -1157,12 +1487,21 @@ def api_pivotal_match(nss):
             except Exception:
                 pass
 
+        eligible_matches = [m for m in matches_clean if m.get("eligible")]
+        partial_matches = [m for m in matches_clean if not m.get("eligible") and float(m.get("match_score", 0) or 0) >= 0.7]
+        ineligible_matches = [m for m in matches_clean if m not in eligible_matches and m not in partial_matches]
+
         return jsonify({
             "success": True,
             "matches": matches_clean,
+            "eligible_matches": eligible_matches,
+            "partial_matches": partial_matches,
+            "ineligible_matches": ineligible_matches,
             "report": report,
             "total_studies_evaluated": len(matches_clean),
-            "eligible_count": sum(1 for m in matches_clean if m.get('eligible')),
+            "eligible_count": len(eligible_matches),
+            "partial_count": len(partial_matches),
+            "ineligible_count": len(ineligible_matches),
         })
     except Exception as e:
         logger.exception(f"Error en pivotal matching: {e}")

@@ -1023,6 +1023,8 @@ def test_clinical_assessment_draft_and_patient_registration_flow(app_client):
     profile_html = client.get("/patient_profile/11111111111").get_data(as_text=True)
     assert "Última evaluación clínica modular" in profile_html
     assert "Línea de estados clínicos persistidos" in profile_html
+    assert "Agenda clínica por etapa" in profile_html
+    assert "Siguiente mejor acción" in profile_html
     assert "Motor de Decisión Clínica" not in profile_html
 
 
