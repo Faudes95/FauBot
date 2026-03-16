@@ -1,7 +1,7 @@
 
 # -*- coding: utf-8 -*-
 """
-Generador de Reportes Clínicos Narrativos para ProstaNet Advanced Calculator.
+Generador de Reportes Clínicos Narrativos para ProstaMed.
 Integra datos del paciente, historial PSA, biopsia y scores validados (NCCN, CAPRA, Briganti).
 """
 import datetime
@@ -240,10 +240,10 @@ def generate_narrative_report(patient: dict[str, Any], scores: dict[str, Any], p
         ipss_sev = 'Leve' if ipss <= 7 else ('Moderado' if ipss <= 19 else 'Severo')
         reporte.append(f"*   **IPSS**: {ipss} ({ipss_sev}) — Síntomas del tracto urinario inferior")
 
-    # ── 14. Score Integrado ProstaNet (NUEVO v3.0) ────────────────────────
+    # ── 14. Score Integrado ProstaMed ──────────────────────────────────
     ps = scores.get('prostanet_score', {})
     if ps:
-        reporte.append(f"\n**SCORE INTEGRADO PROSTANET:**")
+        reporte.append(f"\n**SCORE INTEGRADO PROSTAMED:**")
         reporte.append(f"Puntuación compuesta: **{ps.get('score', '?')} / 100** (Riesgo **{ps.get('risk_group', '?')}**)")
         reporte.append(f"Integra: NCCN (30%), CAPRA (25%), Briganti (15%), Kattan (15%), Cinética PSA (15%)")
 
@@ -257,8 +257,8 @@ def generate_narrative_report(patient: dict[str, Any], scores: dict[str, Any], p
         else:
             reporte.append(f"*   PSAD <0.15: Factor favorable para vigilancia activa en contextos seleccionados")
 
-    reporte.append(f"\n---\n*Generado por ProstaNet v3.0 — {datetime.date.today().strftime('%d/%m/%Y')}*")
-    reporte.append(f"*Algoritmos: NCCN 2026 | CAPRA | CAPRA-S | Briganti 2017 | Kattan/MSK | Partin 2017 | ProstaNet Score*")
+    reporte.append(f"\n---\n*Generado por ProstaMed v3.0 — {datetime.date.today().strftime('%d/%m/%Y')}*")
+    reporte.append(f"*Algoritmos: NCCN 2026 | CAPRA | CAPRA-S | Briganti 2017 | Kattan/MSK | Partin 2017 | ProstaMed Score*")
 
     return "\n".join(reporte)
 

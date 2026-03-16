@@ -104,6 +104,58 @@ class M1CrpcService:
                         "notes": self._note_for(legacy, "Pembrolizumab") or "Vía inmunológica habilitada por MSI-H/dMMR o carga mutacional tumoral alta.",
                     }
                 )
+            # ── AR-V7: preferir quimioterapia sobre ARPI (PROPHECY / Antonarakis 2014) ──
+            if nccn["ar_v7_positive"] and nccn["prior_arpi"]:
+                if nccn["docetaxel_fit"] and not nccn["prior_docetaxel"]:
+                    treatments.append({
+                        "name": "Docetaxel (AR-V7 dirigido)",
+                        "priority": "preferred",
+                        "notes": "AR-V7 positivo predice resistencia a ARPI. PROPHECY (Armstrong 2019) y Antonarakis NEJM 2014 respaldan preferir taxanos sobre secuenciar otro ARPI.",
+                    })
+                not_recommended.append("No secuenciar otro ARPI cuando AR-V7 es positivo — la resistencia está documentada (PROPHECY, Antonarakis 2014).")
+            # ── TP53 + RB1 loss → sospecha NEPC / lineage plasticity (Beltran 2016) ──
+            if nccn["nepc_suspected"]:
+                treatments.append({
+                    "name": "Carboplatino + Etopósido",
+                    "priority": "preferred",
+                    "notes": (
+                        f"Sospecha de transformación neuroendocrina (score NEPC: {nccn['nepc_suspicion_score']}/7). "
+                        "TP53/RB1 loss + marcadores clínicos sugieren lineage plasticity. "
+                        "Beltran 2016 y Aggarwal 2018 respaldan esquema platinum-based."
+                    ),
+                })
+                not_recommended.append("No continuar ARPI como línea principal si existe sospecha fuerte de transformación neuroendocrina (NEPC).")
+            elif nccn["lineage_plasticity_risk"]:
+                treatments.append({
+                    "name": "Monitoreo intensivo NEPC",
+                    "priority": "eligible",
+                    "notes": "TP53 + RB1 loss documentados — riesgo de lineage plasticity. Monitorear NSE, LDH, cromogranina A y PSA discordante bajo. Considerar biopsia si progresa.",
+                })
+            # ── PTEN loss → inhibidores AKT (IPATential150 / CAPItello-281) ──
+            if nccn["pten_loss"]:
+                treatments.append({
+                    "name": "Ipatasertib + Abiraterona",
+                    "priority": "eligible",
+                    "notes": "PTEN loss documentado. IPATential150 (de Bono 2020) mostró beneficio en rPFS en subgrupo PTEN-loss. Considerar si no hay contraindicación a abiraterona.",
+                })
+                supportive_context.append("PTEN loss activa la vía PI3K/AKT y se asocia a peor pronóstico bajo ARPI estándar (Jamaspishvili 2018).")
+            # ── CDK12 biallelic → alta carga neoantigénica → IO (Wu 2018) ──
+            if nccn["cdk12_biallelic"] and not (nccn["msi_high"] or nccn["tmb_high"]):
+                treatments.append({
+                    "name": "Pembrolizumab (CDK12-dirigido)",
+                    "priority": "eligible",
+                    "notes": "CDK12 bialélico genera alta carga neoantigénica independiente de MSI-H. Wu 2018 y Antonarakis 2020 respaldan inmunoterapia en este contexto.",
+                })
+            # ── TMB zona gris (6-10 mut/Mb) → monitoreo ──
+            if nccn["tmb_zone"] == "gray" and not nccn["msi_high"]:
+                treatments.append({
+                    "name": "Monitoreo TMB zona gris",
+                    "priority": "eligible",
+                    "notes": f"TMB {nccn['tmb_value']:.0f} mut/Mb en zona gris (6-10). No alcanza umbral para IO, pero monitorear si sube en siguiente biopsia líquida.",
+                })
+            # ── ctDNA rising → señal de resistencia temprana (Wyatt 2021) ──
+            if nccn["ctdna_rising"]:
+                not_recommended.append("ctDNA en ascenso sugiere resistencia emergente — anticipar cambio de línea antes de progresión radiográfica (Wyatt 2021, Chi 2022).")
             if vision_eligible:
                 treatments.append(
                     {
@@ -190,6 +242,9 @@ class M1CrpcService:
                 {"trial": "TALAPRO-2", "match": nccn["line_context"] == "first_line_mcrpc" and nccn["hrr_positive"] and biomarker_traceable and not nccn["prior_enza_class"]},
                 {"trial": "MAGNITUDE", "match": nccn["line_context"] == "first_line_mcrpc" and nccn["brca_pathway"] and biomarker_traceable and not nccn["prior_abiraterone"]},
                 {"trial": "KEYNOTE-158", "match": nccn["msi_high"] or nccn["tmb_high"]},
+                {"trial": "PROPHECY", "match": nccn["ar_v7_positive"]},
+                {"trial": "IPATential150", "match": nccn["pten_loss"]},
+                {"trial": "CAPItello-281", "match": nccn["pten_loss"]},
             ],
             applicability_badge="guideline-consistent" if nccn["castrate_confirmed"] else "selected_candidate",
             report_sections={
@@ -211,6 +266,11 @@ class M1CrpcService:
                 {"label": "Elegibilidad radioligando documentada", "status": "complete" if vision_eligible or pre_taxane_pluvicto_candidate else "missing", "rationale": "Necesaria antes de lutecio-177 PSMA-617."},
                 {"label": "Secuencia post-docetaxel + ARPI documentada", "status": "complete" if card_applicable else "incomplete", "rationale": "Aclara si aplica la priorización de cabazitaxel tipo CARD."},
                 {"label": "Contexto de línea mCRPC documentado", "status": "complete" if nccn["line_context"] else "missing", "rationale": "Ordena el uso conservador de TALAPRO-2, MAGNITUDE y PSMAfore."},
+                {"label": "AR-V7 documentado", "status": "complete" if nccn["ar_v7_positive"] else "incomplete", "rationale": "AR-V7+ redirige de ARPI a quimioterapia (PROPHECY)."},
+                {"label": "Panel TP53/RB1/PTEN", "status": "complete" if any([nccn["tp53_altered"], nccn["rb1_loss"], nccn["pten_loss"]]) else "incomplete", "rationale": "Detecta lineage plasticity (NEPC) y candidatura AKT."},
+                {"label": "CDK12 evaluado", "status": "complete" if nccn["cdk12_biallelic"] else "incomplete", "rationale": "CDK12 bialélico abre IO independiente de MSI."},
+                {"label": "ctDNA monitoreado", "status": "complete" if nccn["ctdna_detected"] or nccn["ctdna_rising"] else "incomplete", "rationale": "Sensor de resistencia emergente pre-radiográfica."},
+                {"label": "Score NEPC evaluado", "status": "complete" if nccn["nepc_suspicion_score"] > 0 else "incomplete", "rationale": "Detecta transformación neuroendocrina temprana."},
             ],
         )
         return enrich_evaluation_result(
@@ -223,6 +283,11 @@ class M1CrpcService:
                 "La carga mutacional tumoral alta también puede abrir inmunoterapia cuando existe trazabilidad molecular suficiente.",
                 "La exposición previa a inhibidores de la vía del receptor androgénico y taxanos determina qué clases siguen activas y cuáles ya están agotadas.",
                 "La presencia de metástasis óseas sintomáticas sin compromiso visceral abre opciones óseo-dirigidas específicas.",
+                "AR-V7 positivo redirige la secuencia de ARPI a quimioterapia basándose en resistencia documentada al receptor androgénico.",
+                "TP53 + RB1 loss activan vigilancia de lineage plasticity y transformación neuroendocrina, cambiando el esquema a platinum-based cuando se confirma.",
+                "PTEN loss abre la vía PI3K/AKT como alternativa terapéutica con inhibidores AKT combinados.",
+                "CDK12 bialélico genera carga neoantigénica alta e independiza la candidatura a inmunoterapia de MSI-H.",
+                "ctDNA en ascenso anticipa resistencia terapéutica semanas antes que PSA, permitiendo cambio de línea proactivo.",
             ],
             alternatives=[
                 "Olaparib o inmunoterapia cuando el perfil molecular lo respalda.",

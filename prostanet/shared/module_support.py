@@ -529,13 +529,72 @@ def support_bundle_for_module(module_id: str, payload: dict[str, Any], result: d
                 ),
             ]
         )
+        # ── Overlays de oncología de precisión expandida ──
+        ar_v7_val = str(payload.get("ar_v7_status", "")).lower()
+        if ar_v7_val.startswith("pos") or ar_v7_val in {"detected", "detectado"}:
+            overlays.append(care_overlay(
+                "precision_ar_v7",
+                "AR-V7 positivo — Redirigir secuencia",
+                "activo",
+                ["AR-V7 positivo predice resistencia a ARPI (PROPHECY, Antonarakis 2014)."],
+                ["Preferir taxanos sobre ARPI. No secuenciar enzalutamida/abiraterona como siguiente línea."],
+            ))
+        tp53_val = str(payload.get("tp53_status", "")).lower()
+        rb1_val = str(payload.get("rb1_status", "")).lower()
+        _tp53_pos = tp53_val.startswith("pos") or tp53_val in {"mutado", "loss", "detected"}
+        _rb1_pos = rb1_val.startswith("pos") or rb1_val in {"loss", "perdida", "detected"}
+        if _tp53_pos and _rb1_pos:
+            overlays.append(care_overlay(
+                "precision_nepc_vigilance",
+                "Vigilancia de lineage plasticity / NEPC",
+                "activo",
+                ["TP53 + RB1 loss presentes — riesgo de transformación neuroendocrina (Beltran 2016)."],
+                [
+                    "Monitorear NSE, LDH, cromogranina A cada 2-3 meses.",
+                    "Si PSA cae con enfermedad progresando → biopsia para descartar NEPC.",
+                    "Considerar carboplatino + etopósido si se confirma transformación.",
+                ],
+            ))
+        pten_val = str(payload.get("pten_loss", payload.get("pten_status", ""))).lower()
+        if pten_val.startswith("pos") or pten_val in {"loss", "perdida", "detected"}:
+            overlays.append(care_overlay(
+                "precision_pten",
+                "PTEN loss — Vía PI3K/AKT activa",
+                "activo",
+                ["PTEN loss activa señalización PI3K/AKT y reduce duración de respuesta ARPI (Jamaspishvili 2018)."],
+                ["Considerar inhibidores AKT (ipatasertib/capivasertib) + abiraterona.", "Monitorear respuesta con mayor frecuencia."],
+            ))
+        cdk12_val = str(payload.get("cdk12_status", "")).lower()
+        if cdk12_val in {"biallelic", "bialélico", "positivo", "pos", "detected", "detectado"}:
+            overlays.append(care_overlay(
+                "precision_cdk12",
+                "CDK12 bialélico — Candidato IO",
+                "activo",
+                ["CDK12 bialélico genera alta carga neoantigénica independiente de MSI (Wu 2018)."],
+                ["Considerar pembrolizumab incluso sin MSI-H.", "Verificar TMB complementario."],
+            ))
+        if _is_true(payload.get("ctdna_rising")):
+            overlays.append(care_overlay(
+                "precision_ctdna",
+                "ctDNA en ascenso — Resistencia emergente",
+                "activo",
+                ["ctDNA rising anticipa fracaso terapéutico antes que PSA (Wyatt 2021, Chi 2022)."],
+                ["Anticipar cambio de línea.", "Repetir biopsia líquida en 4-6 semanas.", "No esperar progresión radiográfica para actuar."],
+            ))
+        # ── Benchmarking flags de precisión expandida ──
+        benchmarking_flags.extend([
+            benchmark_flag("AR-V7 documentado", "complete" if ar_v7_val.startswith("pos") or ar_v7_val in {"detected", "detectado", "negativo", "negative", "neg"} else "incomplete", "Informa si ARPI sigue siendo viable o si debe redirigirse a taxanos."),
+            benchmark_flag("Panel TP53/RB1", "complete" if (_tp53_pos or tp53_val in {"negativo", "negative", "wt", "wild_type"}) and (_rb1_pos or rb1_val in {"negativo", "negative", "wt", "wild_type", "intact"}) else "incomplete", "Detecta riesgo de lineage plasticity y NEPC."),
+            benchmark_flag("PTEN evaluado", "complete" if pten_val not in {"", "desconocido"} else "incomplete", "Identifica candidatos a inhibidores AKT."),
+            benchmark_flag("ctDNA monitoreado", "complete" if _is_true(payload.get("ctdna_detected")) or _is_true(payload.get("ctdna_rising")) or str(payload.get("ctdna_vaf", "")) not in {"", "0"} else "incomplete", "Sensor de resistencia emergente pre-radiográfica."),
+        ])
     else:
         monitoring = monitoring_plan(
             "Plan longitudinal estructurado",
             "Seguimiento adaptado al estado clínico vigente.",
             ["Conservar trazabilidad entre módulo, evaluación y perfil longitudinal."],
             ["Reevaluar al cambiar síntomas, biomarcadores o imagen."],
-            ["ProstaNet 2026"],
+            ["ProstaMed 2026"],
         )
         transitions = []
 

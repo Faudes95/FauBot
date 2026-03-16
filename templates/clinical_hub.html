@@ -4,11 +4,11 @@
 {% block content %}
     <div class="space-y-8">
         <section class="grid gap-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
-            {% call surface_card("Selección rápida del módulo clínico", "Clasificación clínica", "Use este clasificador para no mezclar enfermedad localizada, seguimiento posoperatorio, recurrencia bioquímica y enfermedad avanzada en una sola salida.") %}
+            {% call surface_card("Selección rápida del módulo clínico", "Clasificación clínica", "Defina el escenario real y abra el asistente correcto.") %}
                 <form id="stateForm" class="grid gap-4 md:grid-cols-2">
                     <div class="md:col-span-2">
                         <p class="text-xs uppercase tracking-[0.2em] text-cyan-300">1. Confirmación diagnóstica</p>
-                        <p class="mt-1 text-sm text-slate-400">Primero defina si ya existe cáncer de próstata confirmado o si el caso sigue en triage diagnóstico.</p>
+                        <p class="mt-1 text-sm text-slate-400">Primero separe triage diagnóstico de cáncer ya confirmado.</p>
                     </div>
                     <label class="text-sm">
                         <span class="mb-1 block text-slate-300">Diagnóstico confirmado de cáncer de próstata</span>
@@ -27,7 +27,7 @@
 
                     <div id="localRecurrenceStageHeader" class="hidden md:col-span-2">
                         <p class="text-xs uppercase tracking-[0.2em] text-cyan-300">2. Tratamiento local previo y recurrencia</p>
-                        <p class="mt-1 text-sm text-slate-400">Este bloque solo aplica cuando ya hubo cáncer de próstata confirmado y tratamiento local previo por ese cáncer.</p>
+                        <p class="mt-1 text-sm text-slate-400">Solo aplica si ya hubo tratamiento local por cáncer de próstata.</p>
                     </div>
                     <div id="priorProstatectomyWrapper" class="hidden text-sm">
                         <span class="mb-1 block text-slate-300">Prostatectomía radical previa por cáncer de próstata</span>
@@ -54,7 +54,7 @@
 
                     <div id="metastaticStageHeader" class="hidden md:col-span-2">
                         <p class="text-xs uppercase tracking-[0.2em] text-cyan-300">3. Enfermedad metastásica conocida</p>
-                        <p class="mt-1 text-sm text-slate-400">Use este bloque solo si el paciente ya tiene cáncer confirmado y una estadificación que demuestre enfermedad metastásica a distancia.</p>
+                        <p class="mt-1 text-sm text-slate-400">Use este bloque solo con estadificación metastásica ya documentada.</p>
                     </div>
                     <div id="metastasisSiteWrapper" class="hidden text-sm">
                         <span class="mb-1 block text-slate-300">Sitio de metástasis conocida</span>
@@ -87,7 +87,7 @@
 
                     <div id="systemicStageHeader" class="hidden md:col-span-2">
                         <p class="text-xs uppercase tracking-[0.2em] text-cyan-300">4. Progresión bajo ADT / CRPC</p>
-                        <p class="mt-1 text-sm text-slate-400">BCR/BCR2 y CRPC solo existen si ya hubo cáncer confirmado; CRPC además requiere progresión y castración adecuada documentada.</p>
+                        <p class="mt-1 text-sm text-slate-400">CRPC solo existe con progresión y castración adecuada documentadas.</p>
                     </div>
                     <div id="systemicContextWrapper" class="hidden text-sm md:col-span-2">
                         <span class="mb-1 block text-slate-300">Contexto de progresión sistémica</span>
@@ -141,15 +141,14 @@
                         </div>
                     </div>
                 </form>
-                <div class="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-sm text-slate-300">
-                    <p class="font-medium text-white">Qué corrige este clasificador</p>
-                    <ul class="mt-2 space-y-1 text-slate-400">
+                <details class="pn-accordion mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-sm text-slate-300">
+                    <summary class="font-medium text-white">Qué corrige este clasificador</summary>
+                    <ul class="mt-3 space-y-1 text-slate-400">
                         <li>Separa estudio diagnóstico de cáncer confirmado.</li>
-                        <li>Diferencia biopsia benigna previa frente a sospecha inicial.</li>
-                        <li>Solo expone recurrencia bioquímica, metástasis y CRPC cuando el contexto clínico realmente lo permite.</li>
-                        <li>Mantiene separados sospecha diagnóstica, recurrencia tras tratamiento local, progresión bajo ADT y CRPC confirmado.</li>
+                        <li>No muestra recurrencia, metástasis o CRPC si el contexto aún no los permite.</li>
+                        <li>Evita mezclar sospecha diagnóstica, recurrencia local y progresión bajo ADT.</li>
                     </ul>
-                </div>
+                </details>
                 <div class="mt-5 flex flex-wrap items-center gap-3">
                     <button id="classifyButton" class="pn-btn pn-btn-primary">Clasificar estado</button>
                     <span id="classifierStatus" class="text-sm text-slate-400"></span>
@@ -157,19 +156,18 @@
                 <div id="classifierResult" class="mt-4 hidden rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-4"></div>
             {% endcall %}
 
-            {% call surface_card("Normativa activa", "Normativa", "Marco clínico y de producto que rige el centro principal y los asistentes clínicos por dominio.") %}
+            {% call surface_card("Normativa activa", "Normativa", "NCCN y EAU ordenan el centro clínico y los asistentes.") %}
                 <ul class="space-y-3 text-sm text-slate-300">
                     <li>La Red Nacional Integral del Cáncer (NCCN) versión 5.2026 decide la recomendación principal.</li>
                     <li>La Asociación Europea de Urología (EAU) 2026 se muestra en paralelo cuando exista diferencia clínica.</li>
-                    <li>La segunda recurrencia bioquímica, la enfermedad metastásica sensible a la castración y la enfermedad resistente a la castración ya no comparten un solo flujo.</li>
-                    <li>El puntaje postoperatorio CAPRA-S solo aparece en el módulo posterior a prostatectomía radical.</li>
-                    <li>Este centro clínico es la portada principal del producto.</li>
+                    <li>Recurrencia bioquímica, mHSPC y CRPC ya no comparten un solo flujo.</li>
+                    <li>CAPRA-S solo aparece después de prostatectomía radical.</li>
                 </ul>
             {% endcall %}
         </section>
 
         <section>
-            {{ section_header("Asistentes clínicos por dominio", "Módulos clínicos", "Cada asistente clínico usa contratos uniformes, evidencia trazable y el mismo shell visual del centro clínico.") }}
+            {{ section_header("Asistentes clínicos por dominio", "Módulos clínicos", "Abra el asistente que corresponde al punto real del recorrido del paciente.") }}
             <div class="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {% for module in modules %}
                 <article class="pn-surface flex h-full flex-col">
@@ -178,22 +176,30 @@
                         {{ badge(module.module, "muted", "font-mono normal-case") }}
                     </div>
                     <h3 class="mt-4 text-lg font-semibold text-white">{{ module.title }}</h3>
-                    <div class="mt-4">
-                        <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Paneles de la Red Nacional Integral del Cáncer (NCCN)</p>
-                        <p class="mt-1 text-sm text-slate-300">{{ module.nccn_panels | join(', ') }}</p>
-                    </div>
-                    <div class="mt-3">
-                        <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Estudios pivotales</p>
-                        <p class="mt-1 text-sm text-slate-300">{{ module.pivotal_trials | join(', ') }}</p>
-                    </div>
-                    <div class="mt-3 flex-1">
-                        <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Preguntas clínicas centrales</p>
-                        <ul class="mt-1 space-y-1 text-sm text-slate-300">
-                            {% for question in module.core_questions[:2] %}
-                            <li>{{ question }}</li>
-                            {% endfor %}
-                        </ul>
-                    </div>
+                    <p class="mt-3 text-sm text-slate-300">{{ module.core_questions[0] if module.core_questions else 'Ruta clínica estructurada por etapa.' }}</p>
+                    <div class="mt-3 text-xs uppercase tracking-[0.2em] text-slate-500">Aplica cuando</div>
+                    <div class="mt-1 text-sm text-slate-400">{{ module.nccn_panels[0] if module.nccn_panels else 'Hay duda clínica en este escenario.' }}</div>
+                    <details class="pn-accordion mt-4 rounded-xl border border-slate-800 bg-slate-950/40 p-3 text-sm text-slate-300">
+                        <summary class="font-medium text-slate-200">Ver evidencia y preguntas</summary>
+                        <div class="mt-3 space-y-3">
+                            <div>
+                                <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Paneles NCCN</p>
+                                <p class="mt-1 text-sm text-slate-300">{{ module.nccn_panels | join(', ') }}</p>
+                            </div>
+                            <div>
+                                <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Estudios pivotales</p>
+                                <p class="mt-1 text-sm text-slate-300">{{ module.pivotal_trials | join(', ') }}</p>
+                            </div>
+                            <div>
+                                <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Preguntas clínicas</p>
+                                <ul class="mt-1 space-y-1 text-sm text-slate-300">
+                                    {% for question in module.core_questions[:3] %}
+                                    <li>{{ question }}</li>
+                                    {% endfor %}
+                                </ul>
+                            </div>
+                        </div>
+                    </details>
                     <a href="/wizard/{{ module.module }}" class="mt-5 inline-flex w-fit rounded-full border border-cyan-400/40 px-4 py-2 text-sm font-medium text-cyan-300 transition-colors hover:border-cyan-300 hover:text-cyan-200">Abrir asistente clínico</a>
                 </article>
                 {% endfor %}

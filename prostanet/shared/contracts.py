@@ -11,7 +11,7 @@ class FieldSpec:
     field_type: str
     required: bool = False
     help_text: str = ""
-    options: list[str] = field(default_factory=list)
+    options: list[Any] = field(default_factory=list)
     default: Any = None
     group: str = ""
     group_order: int = 0
@@ -189,6 +189,10 @@ class AgendaItem:
     action_label: str = ""
     blockers: list[str] = field(default_factory=list)
     reasoning: list[str] = field(default_factory=list)
+    decision_targets: list[str] = field(default_factory=list)
+    panel_targets: list[str] = field(default_factory=list)
+    write_targets: list[str] = field(default_factory=list)
+    form_scope: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -231,6 +235,13 @@ class TherapyCheckpoint:
     rationale: str
     action: str = ""
     evidence_basis: list[str] = field(default_factory=list)
+    decision_supported: str = ""
+    why_it_matters_now: str = ""
+    inputs_required: list[str] = field(default_factory=list)
+    blocking_if_missing: bool = False
+    last_input_source: str = ""
+    last_input_date: str = ""
+    changes_recommendation_if_resolved: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

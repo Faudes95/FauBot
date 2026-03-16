@@ -77,18 +77,41 @@
     {% set supportive_evidence_context = profile.supportive_evidence_context if profile else [] %}
     {% set profile_sources = profile.source_citations if profile else [] %}
     {% set longitudinal_sections = profile.longitudinal_sections if profile else [] %}
-    {% set agenda_board = profile.agenda_board if profile else {} %}
+    {% set agenda_board = profile.agenda_board if profile and profile.agenda_board is defined else {} %}
     {% set next_due_items = profile.next_due_items if profile else [] %}
     {% set overdue_items = profile.overdue_items if profile else [] %}
-    {% set visit_schema = profile.visit_schema if profile else {} %}
+    {% set visit_schema = visit_schema if visit_schema is defined and visit_schema else (profile.visit_schema if profile and profile.visit_schema is defined else {}) %}
+    {% set agenda_item_form_context = agenda_item_form_context if agenda_item_form_context is defined and agenda_item_form_context else (profile.agenda_item_form_context if profile and profile.agenda_item_form_context is defined else {}) %}
     {% set therapy_checkpoints = profile.therapy_checkpoints if profile else [] %}
     {% set protocol_comparators = profile.protocol_comparators if profile else [] %}
+    {% set protocol_trace = profile.protocol_trace if profile else {} %}
     {% set data_provenance = profile.data_provenance if profile else [] %}
     {% set clinical_signals = profile.clinical_signals if profile else {} %}
     {% set next_best_action = profile.next_best_action if profile else {} %}
     {% set transition_proposals = profile.transition_proposals if profile else [] %}
     {% set recommendation_audit = profile.recommendation_audit if profile else [] %}
     {% set document_board = profile.document_board if profile else {} %}
+    {% set advanced_panel_context = profile.advanced_panel_context if profile else {} %}
+    {% set missing_inputs_by_panel = profile.missing_inputs_by_panel if profile else {} %}
+    {% set evidence_applicability = profile.evidence_applicability if profile else {} %}
+    {% set active_agenda_items = profile.active_agenda_items if profile else [] %}
+    {% set archived_agenda_items = profile.archived_agenda_items if profile else [] %}
+    {% set patient_kpis = profile.patient_kpis if profile else [] %}
+    {% set module_data_contracts = profile.module_data_contracts if profile else [] %}
+    {% set cohort_completeness = profile.cohort_completeness if profile else {} %}
+    {% set research_readiness = profile.research_readiness if profile else {} %}
+    {% set endpoint_readiness = profile.endpoint_readiness if profile else {} %}
+    {% set state_conflict_flag = profile.state_conflict_flag if profile else false %}
+    {% set state_conflict_reason = profile.state_conflict_reason if profile else '' %}
+    {% set missing_input_actions = profile.missing_input_actions if profile else [] %}
+    {% set followup_completion_block = profile.followup_completion_block if profile else {} %}
+    {% set intake_completion_block = profile.intake_completion_block if profile else {} %}
+    {% set clinical_journey_events = profile.clinical_journey_events if profile else [] %}
+    {% set psa_observability = profile.psa_observability if profile else {} %}
+    {% set agenda_resolution_trace = profile.agenda_resolution_trace if profile else [] %}
+    {% set assessment_display = latest_assessment.display_result if latest_assessment and latest_assessment.display_result else {} %}
+    {% set assessment_nccn = assessment_display.get('nccn_primary', {}) if assessment_display else {} %}
+    {% set assessment_report = assessment_display.get('report_sections', {}) if assessment_display else {} %}
     <div class="space-y-6">
 
         <!-- ═══════════════════════════════════════════════════════════════════ -->
@@ -178,6 +201,36 @@
             {% endif %}
         </header>
 
+        {% if state_conflict_flag %}
+        <section class="pn-surface border border-amber-500/30 bg-amber-950/10">
+            <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+                <div>
+                    <div class="text-xs uppercase tracking-[0.2em] text-amber-300">Estado por confirmar</div>
+                    <div class="mt-2 text-sm font-semibold text-white">
+                        El longitudinal reconciliado sugiere {{ clinical_compass.current_stage_label }} y no {{ clinical_compass.explicit_stage_label or 'el estado persistido actual' }}.
+                    </div>
+                    <p class="mt-2 text-sm text-slate-300">{{ state_conflict_reason }}</p>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4 lg:max-w-sm">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Qué cambia</div>
+                    <div class="mt-2 text-sm text-slate-200">Agenda, paneles, evidencia y siguiente acción ya se muestran con el estado reconciliado.</div>
+                </div>
+            </div>
+        </section>
+        {% endif %}
+
+        {% if patient_kpis %}
+        <section class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
+            {% for kpi in patient_kpis %}
+            <div class="pn-surface">
+                <div class="text-xs uppercase tracking-wider text-slate-500">{{ kpi.label }}</div>
+                <div class="mt-2 text-sm font-semibold {{ 'text-emerald-300' if kpi.tone == 'good' else 'text-amber-200' if kpi.tone == 'warning' else 'text-rose-200' }}">{{ kpi.value }}</div>
+                <div class="mt-2 text-xs text-slate-400">{{ kpi.detail }}</div>
+            </div>
+            {% endfor %}
+        </section>
+        {% endif %}
+
         {% if next_best_action.title or transition_proposals or clinical_signals.critical_missing or clinical_signals.active_safety %}
         <section class="pn-surface border border-cyan-700/30 bg-cyan-950/10">
             <div class="grid grid-cols-1 xl:grid-cols-4 gap-4">
@@ -255,14 +308,48 @@
         </section>
         {% endif %}
 
-        {% if latest_assessment %}
+        {% if missing_input_actions %}
+        <section class="pn-surface border border-amber-500/30 bg-amber-950/10">
+            <div class="flex items-start justify-between gap-4 mb-4">
+                <div>
+                    <div class="text-xs uppercase tracking-[0.2em] text-amber-300">Captura clínica obligada</div>
+                    <h2 class="mt-2 text-lg font-bold text-white">Inputs faltantes que deben completarse para que el motor clínico decida con datos reales</h2>
+                </div>
+            </div>
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                {% for action in missing_input_actions %}
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="flex items-start justify-between gap-3">
+                        <div>
+                            <div class="text-sm font-semibold text-white">{{ action.title }}</div>
+                            <div class="mt-1 text-xs text-slate-500 uppercase tracking-wider">{{ action.capture_target }}</div>
+                        </div>
+                        <button type="button" class="pn-btn pn-btn-primary px-3 py-2 text-xs" onclick='openVisitModal({{ action.agenda_id if action.agenda_id else "null" }}, {{ action|tojson|safe }})'>
+                            {{ action.action_label }}
+                        </button>
+                    </div>
+                    <p class="mt-2 text-sm text-slate-300">{{ action.rationale }}</p>
+                    <div class="mt-2 text-xs text-slate-500">Impacta: {{ action.decision_affected or 'decisión clínica' }} · módulo {{ action.module_owner or 'copilot' }}</div>
+                    <div class="mt-3 text-xs uppercase tracking-wider text-slate-500">Variables a completar</div>
+                    <ul class="mt-2 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for field in action.fields %}
+                        <li>{{ field }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+        {% endif %}
+
+        {% if clinical_compass.current_diagnosis %}
         <section class="pn-surface border border-emerald-700/40 bg-emerald-950/10">
             <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-5">
                 <div class="max-w-4xl">
                     <div class="text-xs uppercase tracking-[0.2em] text-emerald-300">Brújula clínica actual</div>
                     <div class="sr-only">Última evaluación clínica modular</div>
                     <h2 class="mt-2 text-2xl font-bold text-white">{{ clinical_compass.current_diagnosis }}</h2>
-                    <p class="mt-2 text-sm text-slate-300">{{ latest_assessment.display_result.nccn_primary.resumen_del_caso or latest_assessment.display_result.report_sections.summary }}</p>
+                    <p class="mt-2 text-sm text-slate-300">{{ assessment_nccn.get('resumen_del_caso') or assessment_report.get('summary') or clinical_compass.recommended_direction }}</p>
                     <div class="mt-4 flex flex-wrap gap-2">
                         <span class="px-2.5 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border border-cyan-500/20 bg-cyan-500/10 text-cyan-200">{{ clinical_compass.current_stage_label }}</span>
                         <span class="px-2.5 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border border-amber-500/20 bg-amber-500/10 text-amber-200">{{ clinical_compass.management_intent_status }}</span>
@@ -272,7 +359,7 @@
                 </div>
                 <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 xl:max-w-sm">
                     <div class="text-xs uppercase tracking-wider text-slate-500">Dirección clínica recomendada</div>
-                    <div class="mt-2 text-sm font-semibold text-white">{{ latest_assessment.display_result.nccn_primary.titulo_clinico or latest_assessment.display_result.nccn_primary.label }}</div>
+                    <div class="mt-2 text-sm font-semibold text-white">{{ assessment_nccn.get('titulo_clinico') or assessment_nccn.get('label') or clinical_compass.current_stage_label }}</div>
                     <p class="mt-2 text-sm text-slate-300">{{ clinical_compass.recommended_direction }}</p>
                     <div class="mt-3 text-xs text-slate-500 uppercase tracking-wider">Familia recomendada</div>
                     <p class="mt-1 text-sm text-cyan-200">{{ clinical_compass.recommendation_family }}</p>
@@ -309,7 +396,7 @@
                     {% endif %}
                 </div>
                 <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
-                    <div class="text-xs uppercase tracking-wider text-slate-500">Siguiente mejor paso y vigilancia</div>
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Qué sigue</div>
                     <p class="mt-2 text-sm text-white">{{ clinical_compass.monitoring_cadence }}</p>
                     <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
                         {% for item in clinical_compass.next_actions %}
@@ -320,6 +407,29 @@
                     </ul>
                 </div>
             </div>
+            {% if clinical_compass.active_modifiers %}
+            <div class="mt-5">
+                <div class="text-xs uppercase tracking-wider text-slate-500 mb-3">Modificadores clínicos activos</div>
+                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                    {% for modifier in clinical_compass.active_modifiers %}
+                    <div class="rounded-xl border {{ 'border-rose-500/20 bg-rose-950/10' if modifier.tone == 'danger' else 'border-amber-500/20 bg-amber-950/10' if modifier.tone == 'warning' else 'border-emerald-500/20 bg-emerald-950/10' if modifier.tone == 'success' else 'border-slate-700 bg-slate-900/40' }} p-3">
+                        <div class="text-xs uppercase tracking-wider text-slate-500">{{ modifier.label }}</div>
+                        <div class="mt-2 text-sm font-medium text-white">{{ modifier.detail }}</div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+            {% if clinical_compass.safety_modifiers %}
+            <div class="mt-5 rounded-xl border border-slate-700 bg-slate-900/40 p-4">
+                <div class="text-xs uppercase tracking-wider text-slate-500">Riesgo / seguridad que modifica la selección</div>
+                <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                    {% for item in clinical_compass.safety_modifiers %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
             <div class="mt-5">
                 <div class="text-xs uppercase tracking-wider text-slate-500 mb-3">Freshness de datos decisores</div>
                 <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
@@ -334,6 +444,91 @@
             </div>
         </section>
 
+        {# ═══ TNM STAGING PANEL ═══ #}
+        {% set _tnm_copilot = (profile.copilot or {}) if profile else {} %}
+        {% if _tnm_copilot.tnm_staging and _tnm_copilot.tnm_staging.has_data %}
+        <section class="pn-surface">
+            <div class="mb-5">
+                <p class="text-[11px] uppercase tracking-[0.24em] text-slate-500">Clasificación Clínica</p>
+                <div class="flex items-center gap-4 mt-2">
+                    <h2 class="text-lg font-semibold text-white">Estadificación TNM</h2>
+                    {% set tnm = _tnm_copilot.tnm_staging %}
+                    {% set sev_map = {
+                        'low': 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
+                        'intermediate': 'border-amber-500/30 bg-amber-500/10 text-amber-300',
+                        'high': 'border-rose-500/30 bg-rose-500/10 text-rose-300',
+                        'very_high': 'border-red-600/30 bg-red-600/10 text-red-300',
+                    } %}
+                    <span class="tnm-composite {{ sev_map.get(tnm.overall_severity, sev_map['low']) }}">
+                        {{ tnm.tnm_composite }}
+                    </span>
+                </div>
+            </div>
+            {% set badge_colors = {'low': 'bg-emerald-500', 'intermediate': 'bg-amber-500', 'high': 'bg-rose-500', 'very_high': 'bg-red-600'} %}
+            <div class="tnm-grid">
+                {# ── T Stage ── #}
+                {% if tnm.t_data %}
+                {% set td = tnm.t_data %}
+                {% set t_sev = td.get('severity', 'low') %}
+                <div class="tnm-card tnm-severity-{{ t_sev }}">
+                    <div class="tnm-card-header">
+                        <span class="tnm-badge {{ badge_colors.get(t_sev, 'bg-emerald-500') }} text-slate-950">{{ td.label }}</span>
+                        <span class="text-sm font-semibold text-white">{{ td.short }}</span>
+                    </div>
+                    {% if td.get('image_src') or td.get('image') %}
+                    <div class="tnm-img-container">
+                        <img src="{{ td.get('image_src') or ('/static/img/tnm/' ~ td.image) }}" alt="{{ td.label }}" loading="lazy" />
+                    </div>
+                    {% endif %}
+                    <p class="text-xs text-slate-400 leading-relaxed mt-2">{{ td.desc }}</p>
+                    {% if td.get('summary') and td.get('summary') != td.get('desc') %}
+                    <p class="text-[11px] text-slate-500 leading-relaxed mt-2">{{ td.summary }}</p>
+                    {% endif %}
+                </div>
+                {% endif %}
+
+                {# ── N Stage ── #}
+                {% set nd = tnm.n_data %}
+                {% set n_sev = nd.get('severity', 'low') %}
+                <div class="tnm-card tnm-severity-{{ n_sev }}">
+                    <div class="tnm-card-header">
+                        <span class="tnm-badge {{ badge_colors.get(n_sev, 'bg-emerald-500') }} text-slate-950">{{ nd.label }}</span>
+                        <span class="text-sm font-semibold text-white">{{ nd.short }}</span>
+                    </div>
+                    {% if nd.get('image_src') or nd.get('image') %}
+                    <div class="tnm-img-container">
+                        <img src="{{ nd.get('image_src') or ('/static/img/tnm/' ~ nd.image) }}" alt="{{ nd.label }}" loading="lazy" />
+                    </div>
+                    {% endif %}
+                    <p class="text-xs text-slate-400 leading-relaxed mt-2">{{ nd.desc }}</p>
+                    {% if nd.get('summary') and nd.get('summary') != nd.get('desc') %}
+                    <p class="text-[11px] text-slate-500 leading-relaxed mt-2">{{ nd.summary }}</p>
+                    {% endif %}
+                </div>
+
+                {# ── M Stage ── #}
+                {% set md = tnm.m_data %}
+                {% set m_sev = md.get('severity', 'low') %}
+                <div class="tnm-card tnm-severity-{{ m_sev }}">
+                    <div class="tnm-card-header">
+                        <span class="tnm-badge {{ badge_colors.get(m_sev, 'bg-emerald-500') }} text-slate-950">{{ md.label }}</span>
+                        <span class="text-sm font-semibold text-white">{{ md.short }}</span>
+                    </div>
+                    {% if md.get('image_src') or md.get('image') %}
+                    <div class="tnm-img-container">
+                        <img src="{{ md.get('image_src') or ('/static/img/tnm/' ~ md.image) }}" alt="{{ md.label }}" loading="lazy" />
+                    </div>
+                    {% endif %}
+                    <p class="text-xs text-slate-400 leading-relaxed mt-2">{{ md.desc }}</p>
+                    {% if md.get('summary') and md.get('summary') != md.get('desc') %}
+                    <p class="text-[11px] text-slate-500 leading-relaxed mt-2">{{ md.summary }}</p>
+                    {% endif %}
+                </div>
+            </div>
+            <p class="mt-4 text-[11px] text-slate-600 italic">Referencia: AJCC Cancer Staging Manual 8th Ed. · NCCN 5.2026</p>
+        </section>
+        {% endif %}
+
         {% if stage_specific_panels %}
         <section class="pn-surface">
             <div class="flex items-center justify-between gap-3 mb-4">
@@ -345,17 +540,44 @@
                 <div class="rounded-2xl border border-slate-700 bg-slate-900/50 p-4">
                     <h3 class="text-sm font-semibold text-white">{{ panel.title }}</h3>
                     <p class="mt-1 text-sm text-slate-400">{{ panel.subtitle }}</p>
+                    {% if panel.updated_at or panel.sources %}
+                    <div class="mt-3 flex flex-wrap gap-2">
+                        {% if panel.updated_at %}
+                        <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border border-slate-700 bg-slate-950/50 text-slate-300">
+                            Actualizado {{ panel.updated_at }}
+                        </span>
+                        {% endif %}
+                        {% for source in panel.sources or [] %}
+                        <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border border-slate-700 bg-slate-950/50 text-slate-400">
+                            {{ source }}
+                        </span>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
                     {% if panel['items'] %}
                     <div class="mt-4 grid grid-cols-1 gap-3">
                         {% for item in panel['items'] %}
                         <div class="rounded-xl border border-slate-700/80 bg-slate-950/40 p-3">
-                            <div class="text-xs uppercase tracking-wider text-slate-500">{{ item.label }}</div>
+                            <div class="flex items-center justify-between gap-2">
+                                <div class="text-xs uppercase tracking-wider text-slate-500">{{ item.label }}</div>
+                                {% if item.evidence_status %}
+                                <span class="px-2 py-1 rounded-full text-[10px] uppercase tracking-[0.18em] border {{ 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200' if item.evidence_status == 'verified' else 'border-cyan-500/20 bg-cyan-500/10 text-cyan-200' if item.evidence_status == 'captured' else 'border-amber-500/20 bg-amber-500/10 text-amber-200' if item.evidence_status == 'inferred' else 'border-slate-700 bg-slate-950/50 text-slate-400' }}">
+                                    {{ item.evidence_status }}
+                                </span>
+                                {% endif %}
+                            </div>
                             <div class="mt-1 text-sm text-white">{{ item.value }}</div>
                             {% if item.detail %}
                             <div class="mt-1 text-xs text-slate-400">{{ item.detail }}</div>
                             {% endif %}
                         </div>
                         {% endfor %}
+                    </div>
+                    {% endif %}
+                    {% if panel.missing_inputs %}
+                    <div class="mt-4 rounded-xl border border-amber-500/20 bg-amber-950/10 p-3">
+                        <div class="text-xs uppercase tracking-wider text-slate-500">Faltan inputs que cambian conducta</div>
+                        <div class="mt-2 text-sm text-amber-200">{{ panel.missing_inputs|join(', ') }}</div>
                     </div>
                     {% endif %}
                     {% if panel.bullets %}
@@ -384,6 +606,16 @@
                         </span>
                     </div>
                     <p class="mt-2 text-sm text-slate-300">{{ algorithm.summary }}</p>
+                    <div class="mt-3 flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.18em]">
+                        <span class="px-2 py-1 rounded-full border {{ 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200' if algorithm.data_truth_status in ['captured', 'verified'] else 'border-amber-500/20 bg-amber-500/10 text-amber-200' if algorithm.data_truth_status in ['derived', 'defaulted'] else 'border-rose-500/20 bg-rose-500/10 text-rose-200' }}">
+                            {{ algorithm.data_truth_status }}
+                        </span>
+                        {% if algorithm.clinical_decision_supported %}
+                        <span class="px-2 py-1 rounded-full border border-cyan-500/20 bg-cyan-500/10 text-cyan-200 normal-case tracking-normal">
+                            {{ algorithm.clinical_decision_supported }}
+                        </span>
+                        {% endif %}
+                    </div>
                     {% if algorithm.primary_metric %}
                     <div class="mt-4 rounded-xl border border-slate-700/80 bg-slate-950/40 p-3">
                         <div class="text-xs uppercase tracking-wider text-slate-500">{{ algorithm.primary_metric.label }}</div>
@@ -441,6 +673,46 @@
                         {% endif %}
                     </div>
                     {% endif %}
+                    {% if algorithm.what_score_means or algorithm.risk_interpretation %}
+                    <div class="mt-4 rounded-xl border border-slate-700/80 bg-slate-950/40 p-3 space-y-2">
+                        {% if algorithm.what_score_means %}
+                        <div>
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Qué clasifica</div>
+                            <div class="mt-1 text-sm text-white">{{ algorithm.what_score_means }}</div>
+                        </div>
+                        {% endif %}
+                        {% if algorithm.risk_interpretation %}
+                        <div>
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Qué significa hoy</div>
+                            <div class="mt-1 text-sm text-slate-300">{{ algorithm.risk_interpretation }}</div>
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                    {% if algorithm.inputs_used or algorithm.missing_inputs %}
+                    <div class="mt-4 grid grid-cols-1 gap-3">
+                        {% if algorithm.inputs_used %}
+                        <div class="rounded-xl border border-slate-700/80 bg-slate-950/40 p-3">
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Inputs usados</div>
+                            <ul class="mt-2 space-y-1 text-sm text-slate-300 list-disc pl-5">
+                                {% for item in algorithm.inputs_used %}
+                                <li>{{ item }}</li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                        {% endif %}
+                        {% if algorithm.missing_inputs %}
+                        <div class="rounded-xl border border-amber-500/20 bg-amber-950/10 p-3">
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Inputs faltantes</div>
+                            <ul class="mt-2 space-y-1 text-sm text-amber-200 list-disc pl-5">
+                                {% for item in algorithm.missing_inputs %}
+                                <li>{{ item }}</li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endif %}
                     <div class="mt-4 text-xs uppercase tracking-wider text-slate-500">Utilidad clínica</div>
                     <p class="mt-1 text-sm text-slate-400">{{ algorithm.clinical_use }}</p>
                     {% if algorithm.evidence_note %}
@@ -488,17 +760,23 @@
                         <div class="mt-2 text-2xl font-semibold text-cyan-200">{{ next_due_items|length }}</div>
                         <div class="mt-1 text-xs text-slate-400">Dentro de la ventana esperada</div>
                     </div>
-                    <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
-                        <div class="text-xs uppercase tracking-wider text-slate-500">Cadencia primaria</div>
-                        <div class="mt-2 text-sm text-white">{{ agenda_board.stage_protocol.cadence_summary if agenda_board.stage_protocol else clinical_compass.monitoring_cadence }}</div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Cadencia primaria</div>
+                    <div class="mt-2 text-sm text-white">{{ agenda_board.stage_protocol.cadence_summary if agenda_board.stage_protocol else clinical_compass.monitoring_cadence }}</div>
+                    {% if protocol_trace.anchor_date %}
+                    <div class="mt-2 text-[11px] text-slate-500">
+                        Anclado a {{ protocol_trace.anchor_date }} · {{ protocol_trace.anchor_source or 'origen no documentado' }}
+                        {% if protocol_trace.anchor_is_fallback %} · fallback{% endif %}
                     </div>
+                    {% endif %}
                 </div>
+            </div>
 
                 <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
                     <div class="rounded-2xl border border-slate-700 bg-slate-900/50 p-4 xl:col-span-2">
                         <div class="text-xs uppercase tracking-wider text-slate-500">Items activos de agenda</div>
                         <div class="mt-4 space-y-3">
-                            {% for item in overdue_items + next_due_items %}
+                            {% for item in active_agenda_items[:6] %}
                             <div class="rounded-xl border {{ 'border-rose-500/20 bg-rose-950/10' if item.status == 'overdue' else 'border-cyan-500/20 bg-cyan-950/10' }} p-4">
                                 <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
                                     <div>
@@ -512,6 +790,12 @@
                                         <div class="mt-2 text-xs text-slate-400">Ventana {{ item.window_start }} a {{ item.window_end }}</div>
                                         {% if item.required_inputs %}
                                         <div class="mt-2 text-xs text-slate-500">Inputs esperados: {{ item.required_inputs|join(', ') }}</div>
+                                        {% endif %}
+                                        {% if item.decision_targets or item.panel_targets %}
+                                        <div class="mt-2 text-xs text-slate-500">
+                                            {% if item.decision_targets %}Decisión: {{ item.decision_targets|join(', ') }}{% endif %}
+                                            {% if item.panel_targets %}{% if item.decision_targets %} · {% endif %}Paneles: {{ item.panel_targets|join(', ') }}{% endif %}
+                                        </div>
                                         {% endif %}
                                     </div>
                                     <div class="flex gap-2 items-start">
@@ -534,6 +818,22 @@
                             </div>
                             {% endfor %}
                         </div>
+                        {% if archived_agenda_items %}
+                        <details class="pn-accordion mt-4 rounded-xl border border-slate-700 bg-slate-950/30 p-4">
+                            <summary class="text-xs uppercase tracking-wider text-slate-400">Historial de agenda archivado</summary>
+                            <div class="mt-4 space-y-3">
+                                {% for item in archived_agenda_items[:10] %}
+                                <div class="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+                                    <div class="flex items-center justify-between gap-3">
+                                        <div class="text-sm text-white">{{ item.title }}</div>
+                                        <span class="text-[11px] uppercase tracking-[0.18em] text-slate-500">{{ item.status }}</span>
+                                    </div>
+                                    <div class="mt-1 text-xs text-slate-500">{{ item.due_at }}{% if item.completed_at %} · completado {{ item.completed_at }}{% endif %}</div>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </details>
+                        {% endif %}
                     </div>
                     <div class="rounded-2xl border border-slate-700 bg-slate-900/50 p-4">
                         <div class="text-xs uppercase tracking-wider text-slate-500">Qué dato faltante cambia conducta</div>
@@ -570,8 +870,23 @@
                                 </span>
                             </div>
                             <p class="mt-2 text-sm text-slate-300">{{ checkpoint.rationale }}</p>
+                            {% if checkpoint.decision_supported %}
+                            <div class="mt-3 text-xs uppercase tracking-wider text-slate-500">Decisión que apoya</div>
+                            <div class="mt-1 text-sm text-cyan-200">{{ checkpoint.decision_supported }}</div>
+                            {% endif %}
+                            {% if checkpoint.why_it_matters_now %}
+                            <div class="mt-3 text-xs uppercase tracking-wider text-slate-500">Por qué importa hoy</div>
+                            <div class="mt-1 text-sm text-slate-300">{{ checkpoint.why_it_matters_now }}</div>
+                            {% endif %}
+                            {% if checkpoint.inputs_required %}
+                            <div class="mt-3 text-xs uppercase tracking-wider text-slate-500">Inputs requeridos</div>
+                            <div class="mt-1 text-xs text-slate-400">{{ checkpoint.inputs_required|join(', ') }}</div>
+                            {% endif %}
                             {% if checkpoint.action %}
                             <div class="mt-3 text-xs text-cyan-200">{{ checkpoint.action }}</div>
+                            {% endif %}
+                            {% if checkpoint.blocking_if_missing %}
+                            <div class="mt-3 text-xs text-rose-200">Bloquea la recomendación si falta información estructurada.</div>
                             {% endif %}
                         </div>
                         {% else %}
@@ -738,13 +1053,28 @@
                     <div class="mt-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
                         <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
                             <div class="text-xs uppercase tracking-wider text-slate-500">Qué cambió por el último documento</div>
-                            <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                            <div class="mt-3 space-y-3">
                                 {% for item in document_board.latest_changes or [] %}
-                                <li><span class="text-white">{{ item.document_title }}</span>: {{ item.change }}</li>
+                                <div class="rounded-lg border border-slate-700/80 bg-slate-950/40 p-3">
+                                    <div class="text-sm text-white">{{ item.document_title }}</div>
+                                    <div class="mt-1 text-sm text-slate-300">{{ item.change }}</div>
+                                    {% if item.updated_panels %}
+                                    <div class="mt-2 text-xs text-slate-400">Paneles: {{ item.updated_panels|join(', ') }}</div>
+                                    {% endif %}
+                                    {% if item.updated_decisions %}
+                                    <div class="mt-1 text-xs text-cyan-200">Decisiones: {{ item.updated_decisions|join(', ') }}</div>
+                                    {% endif %}
+                                    {% if item.created_or_closed_agenda_items %}
+                                    <div class="mt-1 text-xs text-slate-400">Agenda: {{ item.created_or_closed_agenda_items|join(', ') }}</div>
+                                    {% endif %}
+                                    <div class="mt-1 text-xs {{ 'text-emerald-200' if item.changed_recommendation else 'text-slate-500' }}">
+                                        {{ 'Sí cambió la recomendación clínica' if item.changed_recommendation else 'Sin cambio visible en la recomendación clínica' }}
+                                    </div>
+                                </div>
                                 {% else %}
-                                <li>Sin cambios estructurados recientes desde documentos verificados.</li>
+                                <div class="text-sm text-slate-300">Sin cambios estructurados recientes desde documentos verificados.</div>
                                 {% endfor %}
-                            </ul>
+                            </div>
                         </div>
                         <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
                             <div class="text-xs uppercase tracking-wider text-slate-500">Facts verificados recientes</div>
@@ -793,14 +1123,36 @@
                         <div class="text-sm text-slate-400">Sin anclas de evidencia estructuradas.</div>
                         {% endfor %}
                     </div>
-                    {% if supportive_evidence_context %}
-                    <div class="mt-4 text-xs uppercase tracking-wider text-slate-500">Contexto supportive</div>
-                    <ul class="mt-2 space-y-2 text-sm text-slate-300 list-disc pl-5">
-                        {% for item in supportive_evidence_context %}
-                        <li>{{ item }}</li>
-                        {% endfor %}
-                    </ul>
+                    {% if evidence_applicability %}
+                    <div class="mt-4 rounded-xl border border-cyan-500/20 bg-cyan-950/10 p-3">
+                        <div class="text-xs uppercase tracking-wider text-slate-500">Aplicabilidad de evidencia</div>
+                        <div class="mt-2 text-sm text-white">{{ evidence_applicability.recommendation_label }}</div>
+                        <div class="mt-2 text-sm text-slate-300">{{ evidence_applicability.summary }}</div>
+                        <div class="mt-3 text-xs text-cyan-200">Elegibles {{ evidence_applicability.eligible_count or 0 }} · Parciales {{ evidence_applicability.partial_count or 0 }}</div>
+                        {% if evidence_applicability.gaps %}
+                        <ul class="mt-3 space-y-1 text-xs text-amber-200 list-disc pl-5">
+                            {% for gap in evidence_applicability.gaps %}
+                            <li>{{ gap }}</li>
+                            {% endfor %}
+                        </ul>
+                        {% endif %}
+                    </div>
                     {% endif %}
+                    {% if supportive_evidence_context %}
+                    <details class="pn-accordion mt-4 rounded-xl border border-slate-700 bg-slate-950/30 p-3">
+                        <summary class="text-xs uppercase tracking-wider text-slate-400">Contexto supportive</summary>
+                        <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                            {% for item in supportive_evidence_context %}
+                            <li>{{ item }}</li>
+                            {% endfor %}
+                        </ul>
+                    </details>
+                    {% endif %}
+                    <div class="mt-4 rounded-xl border border-slate-700 bg-slate-950/40 p-3">
+                        <div class="text-xs uppercase tracking-wider text-slate-500">Research readiness</div>
+                        <div class="mt-2 text-sm font-semibold text-white">{{ research_readiness.score or 0 }}%</div>
+                        <div class="mt-1 text-xs text-slate-400">Cohorte {{ cohort_completeness.overall_pct or 0 }}% · endpoints {{ endpoint_readiness.overall_pct or 0 }}%</div>
+                    </div>
                 </div>
                 <div class="rounded-2xl border border-slate-700 bg-slate-900/50 p-4 xl:col-span-2">
                     <div class="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
@@ -821,6 +1173,50 @@
                             <div class="mt-2 text-sm font-semibold text-white">{{ pivotal_panel.last_evaluated_at or 'No evaluado' }}</div>
                         </div>
                     </div>
+                    {% if evidence_applicability and evidence_applicability.supporting_trials %}
+                    <div class="mb-4 rounded-xl border border-cyan-500/20 bg-cyan-950/10 p-4">
+                        <div class="text-xs uppercase tracking-wider text-slate-500 mb-3">Estudios que respaldan la recomendación activa</div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {% for item in evidence_applicability.supporting_trials %}
+                            <div class="rounded-xl border border-slate-700/80 bg-slate-950/40 p-3">
+                                <div class="flex justify-between items-start gap-3">
+                                    <span class="font-bold text-white text-sm">{{ item.study_name }}</span>
+                                    <span class="text-xs px-2 py-0.5 rounded {{ 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20' if item.status == 'Aplicable' else 'bg-amber-500/10 text-amber-300 border border-amber-500/20' }}">{{ item.status }}</span>
+                                </div>
+                                {% if item.decision_supported %}
+                                <div class="mt-2 text-xs uppercase tracking-wider text-slate-500">Decisión que respalda</div>
+                                <div class="mt-1 text-sm text-cyan-200">{{ item.decision_supported }}</div>
+                                {% endif %}
+                                {% if item.eligibility_rationale %}
+                                <div class="mt-2 text-sm text-slate-300">{{ item.eligibility_rationale }}</div>
+                                {% endif %}
+                                {% if item.expected_outcome %}
+                                <div class="mt-2 text-xs text-slate-400">{{ item.expected_outcome }}</div>
+                                {% endif %}
+                                {% if item.clinical_takeaway %}
+                                <div class="mt-2 text-xs text-amber-200">{{ item.clinical_takeaway }}</div>
+                                {% endif %}
+                                {% if item.criteria_met %}
+                                <div class="mt-3 text-xs uppercase tracking-wider text-slate-500">Cumple</div>
+                                <ul class="mt-2 space-y-1 text-sm text-slate-300 list-disc pl-5">
+                                    {% for criterion in item.criteria_met %}
+                                    <li>{{ criterion }}</li>
+                                    {% endfor %}
+                                </ul>
+                                {% endif %}
+                                {% if item.criteria_failed %}
+                                <div class="mt-3 text-xs uppercase tracking-wider text-slate-500">Límites / gaps</div>
+                                <ul class="mt-2 space-y-1 text-sm text-amber-200 list-disc pl-5">
+                                    {% for criterion in item.criteria_failed %}
+                                    <li>{{ criterion }}</li>
+                                    {% endfor %}
+                                </ul>
+                                {% endif %}
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
                     {% if pivotal_panel.has_results %}
                     <div>
                         <div class="text-xs uppercase tracking-wider text-slate-500 mb-3">Elegibles hoy</div>
@@ -832,6 +1228,9 @@
                                     <span class="text-xs px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">Elegible</span>
                                 </div>
                                 <div class="text-xs text-slate-400">{{ match.expected_outcome }}</div>
+                                {% if match.criteria_met %}
+                                <div class="mt-2 text-xs text-slate-300">Elegible porque cumple: {{ match.criteria_met[:3]|join(', ') }}</div>
+                                {% endif %}
                             </div>
                             {% else %}
                             <div class="col-span-full text-sm text-slate-400">No hay estudios pivotales elegibles todavía.</div>
@@ -900,54 +1299,47 @@
                     {% endfor %}
                 </div>
             </div>
-            <p class="text-sm text-slate-400">Toda la información previa sigue disponible debajo en acordeones clínicos. El cambio es de jerarquía visual, no de pérdida de datos.</p>
-        </section>
-
-        <details class="pn-accordion pn-surface" open>
-            <summary class="flex items-center justify-between gap-3">
-                <div>
-                    <h2 class="text-lg font-bold text-white">Línea de estados clínicos persistidos</h2>
-                    <p class="mt-1 text-sm text-slate-400">Secuencia de estados, eventos y estatus de manejo ya confirmados en el longitudinal.</p>
+            <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4 xl:col-span-2">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Observación longitudinal de PSA</div>
+                    <div class="mt-2 text-sm text-slate-300">Fuente principal: {{ psa_observability.source or 'missing' }}</div>
+                    <div class="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-3">
+                        <div class="rounded-lg border border-slate-700/80 bg-slate-950/40 p-3">
+                            <div class="text-xs text-slate-500 uppercase">Actual</div>
+                            <div class="mt-2 text-lg font-semibold text-white">{{ psa_observability.metrics.current_psa if psa_observability and psa_observability.metrics else 'N/D' }}</div>
+                        </div>
+                        <div class="rounded-lg border border-slate-700/80 bg-slate-950/40 p-3">
+                            <div class="text-xs text-slate-500 uppercase">Nadir</div>
+                            <div class="mt-2 text-lg font-semibold text-white">{{ psa_observability.metrics.nadir_psa if psa_observability and psa_observability.metrics else 'N/D' }}</div>
+                        </div>
+                        <div class="rounded-lg border border-slate-700/80 bg-slate-950/40 p-3">
+                            <div class="text-xs text-slate-500 uppercase">Velocidad</div>
+                            <div class="mt-2 text-lg font-semibold text-white">{{ psa_observability.metrics.psa_velocity if psa_observability and psa_observability.metrics else 'N/D' }}</div>
+                        </div>
+                        <div class="rounded-lg border border-slate-700/80 bg-slate-950/40 p-3">
+                            <div class="text-xs text-slate-500 uppercase">PSADT</div>
+                            <div class="mt-2 text-lg font-semibold text-white">{{ psa_observability.metrics.psadt if psa_observability and psa_observability.metrics else 'N/D' }}</div>
+                        </div>
+                    </div>
                 </div>
-            </summary>
-            <div class="mt-4 space-y-4">
-                {% for event in state_timeline %}
                 <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
-                    <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
-                        <div>
-                            <div class="text-sm font-semibold text-white">{{ event.state_label }}</div>
-                            <div class="mt-1 text-sm text-slate-300">{{ event.transition_reason or 'Sin motivo de transición estructurado.' }}</div>
-                            <div class="mt-3 flex flex-wrap gap-2">
-                                <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border border-cyan-500/20 bg-cyan-500/10 text-cyan-200">
-                                    {{ event.event_kind_label or 'Recomendación generada' }}
-                                </span>
-                                <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border
-                                    {{ 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200' if event.management_intent_status == 'completed' else
-                                       'border-teal-500/30 bg-teal-500/10 text-teal-200' if event.management_intent_status == 'delivered' else
-                                       'border-amber-500/30 bg-amber-500/10 text-amber-200' if event.management_intent_status in ['candidate', 'discussed', 'chosen'] else
-                                       'border-rose-500/30 bg-rose-500/10 text-rose-200' if event.management_intent_status == 'escalated' else
-                                       'border-slate-600 bg-slate-800/70 text-slate-300' }}">
-                                    {{ event.management_intent_status_label or 'Pendiente de confirmación' }}
-                                </span>
-                            </div>
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Trazabilidad de agenda</div>
+                    <div class="mt-3 space-y-3">
+                        {% for trace in agenda_resolution_trace %}
+                        <div class="rounded-lg border border-slate-700/80 bg-slate-950/40 p-3">
+                            <div class="text-sm text-white">{{ trace.title }}</div>
+                            <div class="mt-1 text-xs text-slate-500">{{ trace.status }} · {{ trace.resolved_at }}</div>
+                            {% if trace.summary %}
+                            <div class="mt-2 text-xs text-slate-300">{{ trace.summary }}</div>
+                            {% endif %}
                         </div>
-                        <div class="text-xs uppercase tracking-wider text-slate-500">
-                            {{ event.created_at }}
-                        </div>
+                        {% else %}
+                        <div class="text-sm text-slate-300">Aún no hay cierres estructurados de agenda.</div>
+                        {% endfor %}
                     </div>
-                    {% if event.monitoring_plan and event.monitoring_plan.cadence %}
-                    <div class="mt-3 text-sm text-slate-400">
-                        Monitoreo asociado: {{ event.monitoring_plan.cadence }}
-                    </div>
-                    {% endif %}
                 </div>
-                {% else %}
-                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4 text-sm text-slate-300">
-                    Sin eventos longitudinales persistidos para este paciente.
-                </div>
-                {% endfor %}
             </div>
-        </details>
+        </section>
 
         {% if benchmarking_flags %}
         <details class="pn-accordion pn-surface">
@@ -975,21 +1367,20 @@
         {% endif %}
 
         <!-- ═══════════════════════════════════════════════════════════════════ -->
-        <!-- 2. PSA CONTROL TOWER (Inspirado en Mayo Clinic)                   -->
+        <!-- 2. PSA CONTROL TOWER                                             -->
         <!-- ═══════════════════════════════════════════════════════════════════ -->
         {% if not diagnostic_state %}
         <details class="pn-accordion pn-surface">
             <summary class="flex items-center justify-between gap-3">
                 <div>
                     <h2 class="text-lg font-bold text-white">📊 Torre de control del antígeno prostático específico</h2>
-                    <p class="mt-1 text-sm text-slate-400">Vista completa de PSA, nadir, velocidad y tiempo de duplicación.</p>
+                    <p class="mt-1 text-sm text-slate-400">Vista observacional integrada de PSA, kinetics y bandas de tratamiento desde el longitudinal real.</p>
                 </div>
             </summary>
             <div class="mt-4">
             <div class="flex justify-between items-center mb-4">
                 <h2 class="text-lg font-bold text-white flex items-center gap-2">
                     📊 Torre de control del antígeno prostático específico
-                    <span class="text-xs bg-blue-900/30 text-blue-400 px-2 py-0.5 rounded">Referencia visual inspirada en la Clínica Mayo</span>
                 </h2>
                 <div class="flex gap-2">
                     <button onclick="openVisitModal()" class="pn-btn pn-btn-primary px-3 py-1.5 text-xs">
@@ -1003,23 +1394,23 @@
                 <div class="bg-slate-900/50 rounded-lg p-4 border border-slate-700/50">
                     <div class="text-xs text-slate-500 uppercase">Antígeno prostático específico actual</div>
                     <div class="text-2xl font-bold text-blue-400" id="currentPSA">
-                        {% if patient.follow_ups %}{{ patient.follow_ups[-1].psa_current }}{% else %}{{ patient.baseline.baseline_psa }}{% endif %}
+                        {{ psa_observability.metrics.current_psa if psa_observability and psa_observability.metrics else patient.baseline.baseline_psa }}
                     </div>
                     <div class="text-xs text-slate-500">ng/mL</div>
                 </div>
                 <div class="bg-slate-900/50 rounded-lg p-4 border border-slate-700/50">
                     <div class="text-xs text-slate-500 uppercase">Nadir del antígeno prostático específico</div>
-                    <div class="text-2xl font-bold text-green-400" id="nadirPSA">--</div>
+                    <div class="text-2xl font-bold text-green-400" id="nadirPSA">{{ psa_observability.metrics.nadir_psa if psa_observability and psa_observability.metrics and psa_observability.metrics.nadir_psa is not none else '--' }}</div>
                     <div class="text-xs text-slate-500">ng/mL</div>
                 </div>
                 <div class="bg-slate-900/50 rounded-lg p-4 border border-slate-700/50">
                     <div class="text-xs text-slate-500 uppercase">Velocidad del antígeno prostático específico</div>
-                    <div class="text-2xl font-bold text-yellow-400" id="psaVelocity">--</div>
+                    <div class="text-2xl font-bold text-yellow-400" id="psaVelocity">{{ psa_observability.metrics.psa_velocity if psa_observability and psa_observability.metrics and psa_observability.metrics.psa_velocity is not none else '--' }}</div>
                     <div class="text-xs text-slate-500">ng/mL/año</div>
                 </div>
                 <div class="bg-slate-900/50 rounded-lg p-4 border border-slate-700/50">
                     <div class="text-xs text-slate-500 uppercase">Tiempo de duplicación del antígeno prostático específico</div>
-                    <div class="text-2xl font-bold" id="psaDT">--</div>
+                    <div class="text-2xl font-bold" id="psaDT">{{ psa_observability.metrics.psadt if psa_observability and psa_observability.metrics and psa_observability.metrics.psadt is not none else '--' }}</div>
                     <div class="text-xs text-slate-500">meses</div>
                 </div>
             </div>
@@ -1028,6 +1419,41 @@
             <div class="h-72 w-full relative">
                 <canvas id="psaControlChart"></canvas>
             </div>
+            {% if psa_observability.line_segments %}
+            <div class="mt-4 grid grid-cols-1 xl:grid-cols-2 gap-3">
+                {% for segment in psa_observability.line_segments %}
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="flex items-start justify-between gap-3">
+                        <div>
+                            <div class="text-sm font-semibold text-white">{{ segment.label }}</div>
+                            <div class="mt-1 text-xs text-slate-500">{{ segment.start_date }}{% if segment.end_date %} → {{ segment.end_date }}{% endif %}</div>
+                        </div>
+                        <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] {{ 'bg-emerald-500/10 text-emerald-200 border border-emerald-500/20' if segment.psa50_achieved else 'bg-slate-800 text-slate-300 border border-slate-700' }}">
+                            {{ 'PSA50' if segment.psa50_achieved else 'Seguimiento' }}
+                        </span>
+                    </div>
+                    <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
+                        <div class="rounded-lg border border-slate-700/80 bg-slate-950/40 p-3">
+                            <div class="text-xs uppercase tracking-wider text-slate-500">PSA inicio de línea</div>
+                            <div class="mt-1 text-slate-200">{{ segment.baseline_psa if segment.baseline_psa is not none else 'N/D' }}</div>
+                        </div>
+                        <div class="rounded-lg border border-slate-700/80 bg-slate-950/40 p-3">
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Nadir de línea</div>
+                            <div class="mt-1 text-slate-200">{{ segment.nadir_psa if segment.nadir_psa is not none else 'N/D' }}</div>
+                        </div>
+                        <div class="rounded-lg border border-slate-700/80 bg-slate-950/40 p-3">
+                            <div class="text-xs uppercase tracking-wider text-slate-500">PSA actual de línea</div>
+                            <div class="mt-1 text-slate-200">{{ segment.current_psa if segment.current_psa is not none else 'N/D' }}</div>
+                        </div>
+                        <div class="rounded-lg border border-slate-700/80 bg-slate-950/40 p-3">
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Mejor cambio</div>
+                            <div class="mt-1 text-slate-200">{{ segment.best_pct_change ~ '%' if segment.best_pct_change is not none else 'N/D' }}</div>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
             </div>
         </details>
         {% endif %}
@@ -1040,86 +1466,44 @@
             <summary class="flex items-center justify-between gap-3">
                 <div>
                     <h2 class="text-lg font-bold text-white">🗺️ Trayectoria clínica del paciente</h2>
-                    <p class="mt-1 text-sm text-slate-400">Mapa longitudinal de hitos confirmados y trayectorias terapéuticas.</p>
+                    <p class="mt-1 text-sm text-slate-400">Timeline real de visitas, cambios terapéuticos, documentos verificados y decisiones que sí alimentan el longitudinal.</p>
                 </div>
             </summary>
             <div class="mt-4">
-
-            <!-- Timeline horizontal -->
-            <div class="relative">
-                <div class="absolute top-6 left-0 right-0 h-0.5 bg-slate-700"></div>
-                <div class="flex justify-between items-start relative z-10">
-                    <!-- Diagnóstico -->
-                    <div class="flex flex-col items-center max-w-[140px]">
-                        <div class="w-12 h-12 bg-blue-600 rounded-full flex items-center justify-center text-white text-lg shadow-lg shadow-blue-900/30">🔬</div>
-                        <div class="mt-2 text-center">
-                            <div class="text-xs font-bold text-blue-400">Diagnóstico</div>
-                            <div class="text-[10px] text-slate-500">{{ patient.identity.diagnosis_date }}</div>
-                        </div>
+                <div class="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-4">
+                    <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                        <div class="text-xs uppercase tracking-wider text-slate-500">Eventos longitudinales</div>
+                        <div class="mt-2 text-2xl font-semibold text-cyan-200">{{ clinical_journey_events|length }}</div>
                     </div>
-
-                    {% if patient.active_surveillance and patient.active_surveillance.enrollment_date %}
-                    <div class="flex flex-col items-center max-w-[140px]">
-                        <div class="w-12 h-12 bg-green-600 rounded-full flex items-center justify-center text-white text-lg shadow-lg shadow-green-900/30">👁️</div>
-                        <div class="mt-2 text-center">
-                            <div class="text-xs font-bold text-green-400">Vigilancia activa</div>
-                            <div class="text-[10px] text-slate-500">{{ patient.active_surveillance.enrollment_date }}</div>
-                        </div>
+                    <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                        <div class="text-xs uppercase tracking-wider text-slate-500">Visitas registradas</div>
+                        <div class="mt-2 text-2xl font-semibold text-white">{{ patient.follow_ups|length }}</div>
                     </div>
-                    {% endif %}
-
-                    {% if patient.surgery and patient.surgery.surgery_date %}
-                    <div class="flex flex-col items-center max-w-[140px]">
-                        <div class="w-12 h-12 bg-purple-600 rounded-full flex items-center justify-center text-white text-lg shadow-lg shadow-purple-900/30">🔪</div>
-                        <div class="mt-2 text-center">
-                            <div class="text-xs font-bold text-purple-400">Cirugía</div>
-                            <div class="text-[10px] text-slate-500">{{ patient.surgery.surgery_date }}</div>
-                            <div class="text-[10px] text-slate-400">{{ patient.surgery.surgery_type }}</div>
-                        </div>
-                    </div>
-                    {% endif %}
-
-                    {% for rt in patient.radiation %}
-                    <div class="flex flex-col items-center max-w-[140px]">
-                        <div class="w-12 h-12 bg-yellow-600 rounded-full flex items-center justify-center text-white text-lg shadow-lg shadow-yellow-900/30">☢️</div>
-                        <div class="mt-2 text-center">
-                            <div class="text-xs font-bold text-yellow-400">Radioterapia {{ rt.rt_context }}</div>
-                            <div class="text-[10px] text-slate-500">{{ rt.rt_date }}</div>
-                        </div>
-                    </div>
-                    {% endfor %}
-
-                    {% if patient.bcr and patient.bcr.bcr_detected %}
-                    <div class="flex flex-col items-center max-w-[140px]">
-                        <div class="w-12 h-12 bg-red-600 rounded-full flex items-center justify-center text-white text-lg shadow-lg shadow-red-900/30">📈</div>
-                        <div class="mt-2 text-center">
-                            <div class="text-xs font-bold text-red-400">Recurrencia bioquímica</div>
-                            <div class="text-[10px] text-slate-500">{{ patient.bcr.bcr_date }}</div>
-                        </div>
-                    </div>
-                    {% endif %}
-
-                    {% for tx in patient.treatments %}
-                    <div class="flex flex-col items-center max-w-[140px]">
-                        <div class="w-12 h-12 bg-amber-600 rounded-full flex items-center justify-center text-white text-lg shadow-lg shadow-amber-900/30">💊</div>
-                        <div class="mt-2 text-center">
-                            <div class="text-xs font-bold text-amber-400">Línea {{ tx.line_of_therapy }}</div>
-                            <div class="text-[10px] text-slate-500">{{ tx.start_date }}</div>
-                            <div class="text-[10px] text-slate-400">{{ tx.drug_scheme }}</div>
-                        </div>
-                    </div>
-                    {% endfor %}
-
-                    <!-- Current -->
-                    <div class="flex flex-col items-center max-w-[140px]">
-                        <div class="w-12 h-12 bg-slate-600 rounded-full flex items-center justify-center text-white text-lg border-2 border-slate-400">📍</div>
-                        <div class="mt-2 text-center">
-                            <div class="text-xs font-bold text-slate-300">Hoy</div>
-                            <div class="text-[10px] text-slate-500">{{ patient.follow_ups|length }} visitas</div>
-                        </div>
+                    <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                        <div class="text-xs uppercase tracking-wider text-slate-500">Resoluciones de agenda</div>
+                        <div class="mt-2 text-2xl font-semibold text-emerald-200">{{ agenda_resolution_trace|length }}</div>
                     </div>
                 </div>
-            </div>
+                <div class="space-y-3">
+                    {% for event in clinical_journey_events %}
+                    <div class="rounded-xl border border-slate-700/80 bg-slate-950/40 p-4">
+                        <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+                            <div>
+                                <div class="text-sm font-semibold text-white">{{ event.title }}</div>
+                                <div class="mt-1 text-xs text-slate-500">{{ event.origin }}</div>
+                                {% if event.decision %}
+                                <div class="mt-2 text-sm text-slate-300">{{ event.decision }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="text-xs text-slate-400">{{ event.date }}</div>
+                        </div>
+                    </div>
+                    {% else %}
+                    <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4 text-sm text-slate-300">
+                        Sin eventos longitudinales estructurados todavía.
+                    </div>
+                    {% endfor %}
+                </div>
             </div>
         </details>
         {% endif %}
@@ -1509,7 +1893,7 @@
                             </td>
                             <td class="px-4 py-3 text-xs max-w-[200px]">
                                 {% if visit.toxicity %}
-                                {{ visit.toxicity|tojson }}
+                                {{ visit.toxicity|default({}, true)|tojson }}
                                 {% else %}
                                 -
                                 {% endif %}
@@ -1548,7 +1932,7 @@
                     </div>
                     {% if visit.visit_bundle.payload %}
                     <div class="mt-3 text-xs text-slate-300 overflow-x-auto">
-                        <pre class="whitespace-pre-wrap">{{ visit.visit_bundle.payload|tojson(indent=2) }}</pre>
+                        <pre class="whitespace-pre-wrap">{{ visit.visit_bundle.payload|default({}, true)|tojson(indent=2) }}</pre>
                     </div>
                     {% endif %}
                 </div>
@@ -1721,7 +2105,10 @@
             <summary class="flex items-center justify-between gap-3">
                 <div>
                     <h2 class="text-lg font-bold text-white">Calendario de seguimiento programado</h2>
-                    <p class="mt-1 text-sm text-slate-400">{{ copilot.schedule|length }} evento(s) en los pr&oacute;ximos 12 meses</p>
+                    <p class="mt-1 text-sm text-slate-400">
+                        {{ copilot.schedule|length }} evento(s) persistidos para el track actual
+                        {% if copilot.schedule_anchor_date %} · anclado a {{ copilot.schedule_anchor_date }}{% endif %}
+                    </p>
                 </div>
             </summary>
             <div class="mt-4">
@@ -1732,6 +2119,7 @@
                                 <th class="text-left py-2 px-3">Fecha</th>
                                 <th class="text-left py-2 px-3">Evento</th>
                                 <th class="text-left py-2 px-3">Tipo</th>
+                                <th class="text-left py-2 px-3">Estado</th>
                                 <th class="text-left py-2 px-3">Gu&iacute;a</th>
                             </tr>
                         </thead>
@@ -1741,11 +2129,48 @@
                                 <td class="py-2 px-3 text-white font-mono text-xs">{{ ev.due_date }}</td>
                                 <td class="py-2 px-3 text-white">{{ ev.label }}</td>
                                 <td class="py-2 px-3 text-slate-400">{{ ev.event_type }}</td>
+                                <td class="py-2 px-3 text-xs {{ 'text-emerald-400' if ev.status == 'completed' else 'text-cyan-300' if ev.status == 'due_today' else 'text-rose-300' if ev.status == 'overdue' else 'text-amber-400' }}">
+                                    {{ 'Completado' if ev.status == 'completed' else 'Hoy' if ev.status == 'due_today' else 'Vencido' if ev.status == 'overdue' else 'Pendiente' }}
+                                </td>
                                 <td class="py-2 px-3 text-slate-500 text-xs">{{ ev.guideline }}</td>
                             </tr>
                             {% endfor %}
                         </tbody>
                     </table>
+                </div>
+                {% if copilot.schedule_anchor_source %}
+                <p class="mt-3 text-[11px] text-slate-500">Fuente de anclaje: {{ copilot.schedule_anchor_source }}</p>
+                {% endif %}
+            </div>
+        </details>
+        {% endif %}
+
+        {% if copilot.latest_response_assessment %}
+        <details class="pn-accordion pn-surface">
+            <summary class="flex items-center justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-bold text-white">Última evaluación de respuesta terapéutica</h2>
+                    <p class="mt-1 text-sm text-slate-400">
+                        {{ copilot.latest_response_assessment.assessment_date or copilot.latest_response_assessment.created_at or 'Sin fecha' }}
+                    </p>
+                </div>
+            </summary>
+            <div class="mt-4 grid grid-cols-1 md:grid-cols-4 gap-4 text-sm">
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-slate-400 text-xs uppercase">Respuesta global</div>
+                    <div class="mt-2 text-lg font-semibold text-white">{{ copilot.latest_response_assessment.overall_response or 'N/D' }}</div>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-slate-400 text-xs uppercase">RECIST</div>
+                    <div class="mt-2 text-lg font-semibold text-white">{{ copilot.latest_response_assessment.recist_category or 'N/D' }}</div>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-slate-400 text-xs uppercase">PCWG3</div>
+                    <div class="mt-2 text-lg font-semibold text-white">{{ copilot.latest_response_assessment.pcwg3_bone_status or 'N/D' }}</div>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-slate-400 text-xs uppercase">PSA</div>
+                    <div class="mt-2 text-lg font-semibold text-white">{{ copilot.latest_response_assessment.psa_response_category or 'N/D' }}</div>
                 </div>
             </div>
         </details>
@@ -1764,6 +2189,7 @@
                 {% set cci = copilot.comorbidity_scores.charlson %}
                 <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
                     <div class="text-xs uppercase tracking-wider text-slate-500 mb-2">Charlson Comorbidity Index</div>
+                    {% if cci.is_complete %}
                     <div class="flex items-baseline gap-2">
                         <span class="text-3xl font-bold {{ 'text-green-400' if cci.risk_category == 'LOW' else 'text-yellow-400' if cci.risk_category == 'MODERATE' else 'text-orange-400' if cci.risk_category == 'HIGH' else 'text-red-400' }}">
                             {{ cci.age_adjusted_score }}
@@ -1778,6 +2204,11 @@
                         {{ cci.conditions_present|join(', ') }}
                     </div>
                     {% endif %}
+                    {% else %}
+                    <div class="text-sm font-semibold text-amber-200">Incompleto</div>
+                    <div class="mt-2 text-sm text-slate-300">{{ cci.what_score_means }}</div>
+                    <div class="mt-2 text-xs text-slate-400">Faltan: {{ cci.missing_inputs|join(', ') }}</div>
+                    {% endif %}
                 </div>
                 {% endif %}
 
@@ -1785,14 +2216,20 @@
                 {% set g8 = copilot.comorbidity_scores.g8 %}
                 <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
                     <div class="text-xs uppercase tracking-wider text-slate-500 mb-2">G8 Geriatric Screening</div>
+                    {% if g8.is_complete %}
                     <div class="flex items-baseline gap-2">
-                        <span class="text-3xl font-bold {{ 'text-green-400' if g8.score > 14 else 'text-red-400' }}">
-                            {{ g8.score }}
+                        <span class="text-3xl font-bold {{ 'text-green-400' if g8.total_score > 14 else 'text-red-400' }}">
+                            {{ g8.total_score }}
                         </span>
                         <span class="text-sm text-slate-400">/ 17</span>
                     </div>
-                    <div class="mt-2 text-sm text-white">{{ g8.interpretation }}</div>
+                    <div class="mt-2 text-sm text-white">{{ g8.risk_interpretation }}</div>
                     <div class="mt-1 text-xs text-slate-400">{{ g8.fitness_for_treatment }}</div>
+                    {% else %}
+                    <div class="text-sm font-semibold text-amber-200">Incompleto</div>
+                    <div class="mt-2 text-sm text-slate-300">{{ g8.what_score_means }}</div>
+                    <div class="mt-2 text-xs text-slate-400">Faltan: {{ g8.missing_inputs|join(', ') }}</div>
+                    {% endif %}
                 </div>
                 {% endif %}
             </div>
@@ -1870,14 +2307,474 @@
                         <div class="text-white font-medium">{{ item.test }}</div>
                         <div class="text-slate-500 mt-1">{{ item.frequency }}</div>
                     </div>
-                    {% endfor %}
+                            {% endfor %}
+                        </div>
+                        {% if pivotal_panel.partial_matches or pivotal_panel.ineligible_matches %}
+                        <details class="pn-accordion mt-4 rounded-xl border border-slate-700 bg-slate-950/30 p-4">
+                            <summary class="text-xs uppercase tracking-wider text-slate-400">Parciales y no elegibles</summary>
+                            <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                                {% for match in (pivotal_panel.partial_matches or [])[:6] %}
+                                <div class="p-3 bg-slate-950/40 rounded-lg border border-slate-700/80">
+                                    <div class="flex justify-between items-start gap-3">
+                                        <span class="font-bold text-white text-sm">{{ match.study_name }}</span>
+                                        <span class="text-xs px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/20">Parcial</span>
+                                    </div>
+                                    <div class="mt-2 text-xs text-slate-400">{{ match.expected_outcome }}</div>
+                                </div>
+                                {% endfor %}
+                                {% for match in (pivotal_panel.ineligible_matches or [])[:6] %}
+                                <div class="p-3 bg-slate-950/40 rounded-lg border border-slate-700/80">
+                                    <div class="flex justify-between items-start gap-3">
+                                        <span class="font-bold text-white text-sm">{{ match.study_name }}</span>
+                                        <span class="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">No elegible</span>
+                                    </div>
+                                    <div class="mt-2 text-xs text-slate-400">{{ match.expected_outcome }}</div>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </details>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+        </details>
+        {% endif %}
+
+        <!-- ── 11e. Fitness Terapéutica Integrada ── -->
+        {% if copilot.therapeutic_fitness and copilot.therapeutic_fitness.has_data %}
+        {% set tfit = copilot.therapeutic_fitness %}
+        <details class="pn-accordion pn-surface">
+            <summary class="flex items-center justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-bold text-white">Fitness Terapéutica</h2>
+                    <p class="mt-1 text-sm text-slate-400">Función orgánica, fragilidad y aptitud para intensificación.
+                    {% if tfit.fit_score %}
+                    <span class="ml-2 px-2 py-0.5 rounded-full text-xs font-bold {{ 'bg-green-600' if tfit.fit_score.category == 'Fit' else ('bg-amber-600' if tfit.fit_score.category == 'Vulnerable' else 'bg-red-600') }} text-white">{{ tfit.fit_score.category }}</span>
+                    {% endif %}
+                    </p>
                 </div>
+            </summary>
+            <div class="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                <!-- eGFR -->
+                {% if tfit.egfr %}
+                <div class="rounded-lg p-3 border {{ 'border-red-700 bg-red-900/30' if tfit.egfr.egfr < 30 else ('border-amber-700 bg-amber-900/30' if tfit.egfr.egfr < 60 else 'border-green-700 bg-green-900/30') }}">
+                    <div class="flex items-center justify-between mb-1">
+                        <span class="text-sm font-semibold text-white">eGFR (CKD-EPI 2021)</span>
+                        <span class="text-lg font-bold {{ 'text-red-400' if tfit.egfr.egfr < 30 else ('text-amber-400' if tfit.egfr.egfr < 60 else 'text-green-400') }}">{{ tfit.egfr.egfr|round(1) }}</span>
+                    </div>
+                    <p class="text-xs text-slate-400">Estadio {{ tfit.egfr.stage }} — mL/min/1.73m²</p>
+                    {% if tfit.egfr.clinical_actions %}
+                    <div class="mt-2">
+                        {% for ca in tfit.egfr.clinical_actions %}
+                        <p class="text-xs text-red-300">{{ ca }}</p>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+                {% endif %}
+
+                <!-- Child-Pugh -->
+                {% if tfit.child_pugh %}
+                <div class="rounded-lg p-3 border {{ 'border-red-700 bg-red-900/30' if tfit.child_pugh.grade == 'C' else ('border-amber-700 bg-amber-900/30' if tfit.child_pugh.grade == 'B' else 'border-green-700 bg-green-900/30') }}">
+                    <div class="flex items-center justify-between mb-1">
+                        <span class="text-sm font-semibold text-white">Child-Pugh</span>
+                        <span class="text-lg font-bold {{ 'text-red-400' if tfit.child_pugh.grade == 'C' else ('text-amber-400' if tfit.child_pugh.grade == 'B' else 'text-green-400') }}">{{ tfit.child_pugh.grade }} ({{ tfit.child_pugh.score }})</span>
+                    </div>
+                    <p class="text-xs text-slate-400">Score: {{ tfit.child_pugh.score }}/15</p>
+                    {% if tfit.child_pugh.clinical_actions %}
+                    <div class="mt-2">
+                        {% for ca in tfit.child_pugh.clinical_actions %}
+                        <p class="text-xs text-amber-300">{{ ca }}</p>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+                {% endif %}
+
+                <!-- Frailty -->
+                {% if tfit.frailty %}
+                <div class="rounded-lg p-3 border {{ 'border-red-700 bg-red-900/30' if tfit.frailty.status in ['Frail', 'Incomplete'] else ('border-amber-700 bg-amber-900/30' if tfit.frailty.status == 'Pre-frail' else 'border-green-700 bg-green-900/30') }}">
+                    <div class="flex items-center justify-between mb-1">
+                        <span class="text-sm font-semibold text-white">Fragilidad (Fried)</span>
+                        <span class="text-lg font-bold {{ 'text-red-400' if tfit.frailty.status in ['Frail', 'Incomplete'] else ('text-amber-400' if tfit.frailty.status == 'Pre-frail' else 'text-green-400') }}">{{ tfit.frailty.status }}</span>
+                    </div>
+                    {% if tfit.frailty.is_complete %}
+                    <p class="text-xs text-slate-400">{{ tfit.frailty.criteria_met }}/{{ tfit.frailty.max_criteria }} criterios</p>
+                    {% else %}
+                    <p class="text-xs text-slate-400">Faltan: {{ tfit.frailty.missing_inputs|join(', ') }}</p>
+                    {% endif %}
+                    {% if tfit.frailty.clinical_actions %}
+                    <div class="mt-2">
+                        {% for ca in tfit.frailty.clinical_actions[:2] %}
+                        <p class="text-xs text-cyan-400">{{ ca }}</p>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+                {% endif %}
+
+                <!-- Competing Mortality -->
+                {% if tfit.competing_mortality %}
+                <div class="rounded-lg p-3 bg-slate-800/50 border border-slate-700">
+                    <div class="flex items-center justify-between mb-1">
+                        <span class="text-sm font-semibold text-white">Mortalidad competitiva</span>
+                    </div>
+                    <div class="grid grid-cols-2 gap-2 mt-2">
+                        <div>
+                            <p class="text-xs text-slate-500">5 años</p>
+                            <p class="text-sm font-bold {{ 'text-red-400' if tfit.competing_mortality.mortality_5yr_pct and tfit.competing_mortality.mortality_5yr_pct > 50 else 'text-slate-300' }}">{{ tfit.competing_mortality.mortality_5yr_pct|default('N/A') }}%</p>
+                        </div>
+                        <div>
+                            <p class="text-xs text-slate-500">10 años</p>
+                            <p class="text-sm font-bold text-slate-300">{{ tfit.competing_mortality.mortality_10yr_pct|default('N/A') }}%</p>
+                        </div>
+                    </div>
+                    {% if tfit.competing_mortality.recommendation %}
+                    <p class="mt-2 text-xs text-amber-300">{{ tfit.competing_mortality.recommendation }}</p>
+                    {% endif %}
+                </div>
+                {% endif %}
+
+                <!-- Treatment Fit Score -->
+                {% if tfit.fit_score %}
+                <div class="rounded-lg p-3 border {{ 'border-red-700 bg-red-900/30' if tfit.fit_score.category in ['Frail', 'Incomplete'] else ('border-amber-700 bg-amber-900/30' if tfit.fit_score.category == 'Vulnerable' else 'border-green-700 bg-green-900/30') }} md:col-span-2">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-sm font-semibold text-white">Treatment Fit Score</span>
+                        <span class="px-3 py-1 rounded-full text-sm font-bold {{ 'bg-green-600' if tfit.fit_score.category == 'Fit' else ('bg-amber-600' if tfit.fit_score.category == 'Vulnerable' else 'bg-red-600') }} text-white">{{ tfit.fit_score.category }}{% if tfit.fit_score.penalty_score is not none %} (penalty: {{ tfit.fit_score.penalty_score }}){% endif %}</span>
+                    </div>
+                    {% if tfit.fit_score.recommended_intensity %}
+                    <p class="mt-2 text-xs text-cyan-300 font-medium">{{ tfit.fit_score.recommended_intensity }}</p>
+                    {% endif %}
+                    {% if not tfit.fit_score.is_complete %}
+                    <p class="mt-2 text-xs text-slate-400">Faltan: {{ tfit.fit_score.missing_inputs|join(', ') }}</p>
+                    {% endif %}
+                </div>
+                {% endif %}
+            </div>
+        </details>
+        {% endif %}
+
+        <!-- ── 11f. PRO Intelligence ── -->
+        {% if copilot.pro_intelligence and copilot.pro_intelligence.has_data %}
+        {% set proi = copilot.pro_intelligence %}
+        <details class="pn-accordion pn-surface" open>
+            <summary class="flex items-center justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-bold text-white">PRO Intelligence — Alertas reportadas por paciente</h2>
+                    <p class="mt-1 text-sm text-slate-400">{{ proi.alert_count }} alerta(s)
+                    {% if proi.critical_count > 0 %}
+                    <span class="ml-2 px-2 py-0.5 rounded-full text-xs font-bold bg-red-600 text-white animate-pulse">{{ proi.critical_count }} CRITICA(S)</span>
+                    {% endif %}
+                    </p>
+                </div>
+            </summary>
+            <div class="mt-4 space-y-3">
+                {% for alert in proi.alerts %}
+                <div class="rounded-lg p-3 border {{ 'border-red-700 bg-red-900/30' if alert.severity == 'critical' else ('border-amber-700 bg-amber-900/30' if alert.severity == 'warning' else 'border-slate-700 bg-slate-800/50') }}">
+                    <div class="flex items-center justify-between mb-1">
+                        <span class="text-sm font-semibold text-white">{{ alert.title }}</span>
+                        <span class="px-2 py-0.5 rounded text-xs font-bold {{ 'bg-red-600 text-white' if alert.severity == 'critical' else ('bg-amber-600 text-white' if alert.severity == 'warning' else 'bg-slate-600 text-slate-300') }}">{{ alert.severity|upper }}</span>
+                    </div>
+                    <p class="text-xs text-slate-400">{{ alert.message }}</p>
+                    <p class="mt-1 text-xs text-cyan-300">{{ alert.recommended_action }}</p>
+                    {% if alert.reference %}
+                    <p class="mt-1 text-xs text-slate-500 italic">Ref: {{ alert.reference }}</p>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </details>
+        {% endif %}
+
+        <!-- ── 11g. Evaluación Oligometastásica ── -->
+        {% if copilot.oligomet_assessment and copilot.oligomet_assessment.has_data %}
+        {% set oligo = copilot.oligomet_assessment %}
+        <details class="pn-accordion pn-surface">
+            <summary class="flex items-center justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-bold text-white">Evaluación Oligometastásica</h2>
+                    <p class="mt-1 text-sm text-slate-400">{{ oligo.lesion_count }} lesión(es)
+                    {% if oligo.is_oligometastatic %}
+                    <span class="ml-2 px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-600 text-white">Oligometastásico</span>
+                    {% endif %}
+                    {% if oligo.sbrt_eligibility and oligo.sbrt_eligibility.eligible %}
+                    <span class="ml-1 px-2 py-0.5 rounded-full text-xs font-bold bg-cyan-600 text-white">SBRT elegible</span>
+                    {% endif %}
+                    </p>
+                </div>
+            </summary>
+            <div class="mt-4 space-y-4">
+                <!-- SBRT Eligibility -->
+                {% if oligo.sbrt_eligibility %}
+                <div class="rounded-lg p-3 border {{ 'border-green-700 bg-green-900/30' if oligo.sbrt_eligibility.eligible else 'border-red-700 bg-red-900/30' }}">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-sm font-semibold text-white">Candidatura SBRT</span>
+                        <span class="px-2 py-0.5 rounded text-xs font-bold {{ 'bg-green-600' if oligo.sbrt_eligibility.eligible else 'bg-red-600' }} text-white">{{ 'ELEGIBLE' if oligo.sbrt_eligibility.eligible else 'NO ELEGIBLE' }}</span>
+                    </div>
+                    {% for reason in oligo.sbrt_eligibility.reasons %}
+                    <p class="text-xs text-slate-400">{{ reason }}</p>
+                    {% endfor %}
+                    {% for dq in oligo.sbrt_eligibility.disqualifiers %}
+                    <p class="text-xs text-red-300">{{ dq }}</p>
+                    {% endfor %}
+                    <p class="mt-1 text-xs text-slate-500 italic">{{ oligo.sbrt_eligibility.trial_reference }}</p>
+                </div>
+                {% endif %}
+
+                <!-- MDT Decision -->
+                {% if oligo.mdt_decision %}
+                <div class="rounded-lg p-3 bg-slate-800/50 border border-slate-700">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-sm font-semibold text-white">Decisión MDT vs Sistémico</span>
+                        <span class="px-2 py-0.5 rounded text-xs font-bold {{ 'bg-cyan-600' if 'mdt' in (oligo.mdt_decision.decision or '') else 'bg-slate-600' }} text-white">{{ oligo.mdt_decision.decision|replace('_', ' ')|upper }}</span>
+                    </div>
+                    <p class="text-xs text-slate-400">{{ oligo.mdt_decision.rationale }}</p>
+                    {% if oligo.mdt_decision.reference %}
+                    <p class="mt-1 text-xs text-slate-500 italic">{{ oligo.mdt_decision.reference }}</p>
+                    {% endif %}
+                </div>
+                {% endif %}
+
+                <!-- Oligoprogression -->
+                {% if oligo.oligoprogression and oligo.oligoprogression.detected %}
+                <div class="rounded-lg p-3 border border-amber-700 bg-amber-900/30">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-sm font-semibold text-white">Oligoprogresión detectada</span>
+                        <span class="px-2 py-0.5 rounded text-xs font-bold bg-amber-600 text-white animate-pulse">ACTIVA</span>
+                    </div>
+                    <p class="text-xs text-slate-400">{{ oligo.oligoprogression.new_lesion_count }} nueva(s) + {{ oligo.oligoprogression.stable_lesion_count }} estable(s)</p>
+                    <p class="mt-1 text-xs text-cyan-300">{{ oligo.oligoprogression.recommendation }}</p>
+                </div>
+                {% endif %}
+
+                <!-- SBRT Doses per lesion -->
+                {% if oligo.sbrt_doses and oligo.sbrt_doses|length > 0 %}
+                <div>
+                    <div class="text-xs uppercase tracking-wider text-slate-500 mb-2">Dosis SBRT recomendadas por lesión</div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        {% for ld in oligo.sbrt_doses %}
+                        <div class="rounded-lg p-2 bg-slate-900/50 border border-slate-700/50">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs font-semibold text-white">{{ ld.location }}</span>
+                                <span class="text-xs text-cyan-400">{{ ld.dose.dose_primary }}</span>
+                            </div>
+                            <p class="text-xs text-slate-500 mt-1">Alt: {{ ld.dose.dose_alternative }} | {{ ld.dose.fractions }} fx</p>
+                            <p class="text-xs text-slate-500">OAR: {{ ld.dose.oar_constraints }}</p>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </details>
+        {% endif %}
+
+        <!-- ── 11h. Interacciones Farmacológicas + Formulario ── -->
+        {% if copilot.ddi_review %}
+        {% set ddi = copilot.ddi_review %}
+        {% if ddi.has_interactions or ddi.has_formulary %}
+        <details class="pn-accordion pn-surface" {{ 'open' if ddi.has_interactions else '' }}>
+            <summary class="flex items-center justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-bold text-white">Interacciones Farmacológicas + Formulario</h2>
+                    <p class="mt-1 text-sm text-slate-400">
+                    {% if ddi.interactions|length > 0 %}
+                    <span class="px-2 py-0.5 rounded-full text-xs font-bold bg-red-600 text-white">{{ ddi.interactions|length }} interacción(es)</span>
+                    {% endif %}
+                    {% if ddi.formulary|length > 0 %}
+                    <span class="ml-1 px-2 py-0.5 rounded-full text-xs font-bold bg-blue-600 text-white">{{ ddi.formulary|length }} fármaco(s) revisado(s)</span>
+                    {% endif %}
+                    </p>
+                </div>
+            </summary>
+            <div class="mt-4 space-y-4">
+                <!-- DDI Alerts -->
+                {% if ddi.interactions|length > 0 %}
+                <div>
+                    <div class="text-xs uppercase tracking-wider text-slate-500 mb-2">Interacciones detectadas</div>
+                    <div class="space-y-2">
+                        {% for ix in ddi.interactions %}
+                        <div class="rounded-lg p-3 border {{ 'border-red-700 bg-red-900/30' if ix.severity == 'contraindicated' else ('border-amber-700 bg-amber-900/30' if ix.severity == 'major' else 'border-yellow-700 bg-yellow-900/30') }}">
+                            <div class="flex items-center justify-between mb-1">
+                                <span class="text-sm font-semibold text-white">{{ ix.drug_a }} + {{ ix.drug_b }}</span>
+                                <span class="px-2 py-0.5 rounded text-xs font-bold {{ 'bg-red-600' if ix.severity == 'contraindicated' else ('bg-amber-600' if ix.severity == 'major' else 'bg-yellow-600') }} text-white">{{ ix.severity|upper }}</span>
+                            </div>
+                            <p class="text-xs text-slate-400">{{ ix.mechanism }} — {{ ix.clinical_impact }}</p>
+                            <p class="mt-1 text-xs text-cyan-300">{{ ix.recommended_action }}</p>
+                            {% if ix.alternative %}
+                            <p class="text-xs text-green-400">Alt: {{ ix.alternative }}</p>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Formulary -->
+                {% if ddi.formulary|length > 0 %}
+                <div>
+                    <div class="text-xs uppercase tracking-wider text-slate-500 mb-2">Disponibilidad en formulario</div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        {% for f in ddi.formulary %}
+                        <div class="rounded-lg p-2 border {{ 'border-green-700/50 bg-green-900/20' if f.available else 'border-red-700/50 bg-red-900/20' }}">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs font-semibold text-white">{{ f.drug }}</span>
+                                <span class="px-2 py-0.5 rounded text-xs {{ 'bg-green-700 text-green-200' if f.available else 'bg-red-700 text-red-200' }}">{{ 'Disponible' if f.available else 'No disponible' }}</span>
+                            </div>
+                            {% if f.generic_available %}
+                            <p class="text-xs text-slate-500 mt-1">Genérico disponible</p>
+                            {% endif %}
+                            {% if f.monthly_cost_mxn %}
+                            <p class="text-xs text-slate-500">Costo: ${{ f.monthly_cost_mxn|int }} MXN/mes</p>
+                            {% endif %}
+                            {% if f.exception_path and not f.available %}
+                            <p class="text-xs text-amber-400 mt-1">{{ f.exception_path }}</p>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </details>
+        {% endif %}
+        {% endif %}
+
+        <!-- ── 11i. Panel de Oncología de Precisión Expandida ── -->
+        {% if copilot.precision_genomics and copilot.precision_genomics.has_data %}
+        {% set pgx = copilot.precision_genomics %}
+        <details class="pn-accordion pn-surface" open>
+            <summary class="flex items-center justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-bold text-white">🧬 Panel de Precisión Genómica</h2>
+                    <p class="mt-1 text-sm text-slate-400">Biomarcadores expandidos con acción terapéutica directa.
+                    {% if pgx.actionable_count > 0 %}
+                    <span class="ml-2 px-2 py-0.5 rounded-full text-xs font-bold bg-amber-600 text-white">{{ pgx.actionable_count }} accionable(s)</span>
+                    {% endif %}
+                    </p>
+                </div>
+            </summary>
+            <div class="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                <!-- AR-V7 -->
+                <div class="rounded-lg p-3 {{ 'bg-red-900/30 border border-red-700' if pgx.ar_v7.positive else 'bg-slate-800/50 border border-slate-700' }}">
+                    <div class="flex items-center justify-between mb-1">
+                        <span class="text-sm font-semibold text-white">AR-V7</span>
+                        {% if pgx.ar_v7.positive %}
+                        <span class="px-2 py-0.5 rounded text-xs font-bold bg-red-600 text-white">POSITIVO</span>
+                        {% else %}
+                        <span class="px-2 py-0.5 rounded text-xs bg-slate-600 text-slate-300">{{ pgx.ar_v7.status }}</span>
+                        {% endif %}
+                    </div>
+                    {% if pgx.ar_v7.clinical_action %}
+                    <p class="text-xs text-red-300">⚡ {{ pgx.ar_v7.clinical_action }}</p>
+                    {% endif %}
+                </div>
+
+                <!-- TP53 / RB1 -->
+                <div class="rounded-lg p-3 {{ 'bg-orange-900/30 border border-orange-700' if pgx.tp53_rb1.lineage_plasticity else 'bg-slate-800/50 border border-slate-700' }}">
+                    <div class="flex items-center justify-between mb-1">
+                        <span class="text-sm font-semibold text-white">TP53 / RB1</span>
+                        {% if pgx.tp53_rb1.lineage_plasticity %}
+                        <span class="px-2 py-0.5 rounded text-xs font-bold bg-orange-600 text-white">RIESGO LP</span>
+                        {% endif %}
+                    </div>
+                    <p class="text-xs text-slate-400">TP53: {{ pgx.tp53_rb1.tp53 }} | RB1: {{ pgx.tp53_rb1.rb1 }}</p>
+                    {% if pgx.tp53_rb1.clinical_action %}
+                    <p class="text-xs text-orange-300 mt-1">⚡ {{ pgx.tp53_rb1.clinical_action }}</p>
+                    {% endif %}
+                </div>
+
+                <!-- PTEN -->
+                <div class="rounded-lg p-3 {{ 'bg-amber-900/30 border border-amber-700' if pgx.pten.loss else 'bg-slate-800/50 border border-slate-700' }}">
+                    <div class="flex items-center justify-between mb-1">
+                        <span class="text-sm font-semibold text-white">PTEN</span>
+                        {% if pgx.pten.loss %}
+                        <span class="px-2 py-0.5 rounded text-xs font-bold bg-amber-600 text-white">LOSS</span>
+                        {% else %}
+                        <span class="px-2 py-0.5 rounded text-xs bg-slate-600 text-slate-300">{{ pgx.pten.status }}</span>
+                        {% endif %}
+                    </div>
+                    {% if pgx.pten.clinical_action %}
+                    <p class="text-xs text-amber-300">⚡ {{ pgx.pten.clinical_action }}</p>
+                    {% endif %}
+                </div>
+
+                <!-- CDK12 -->
+                <div class="rounded-lg p-3 {{ 'bg-violet-900/30 border border-violet-700' if pgx.cdk12.biallelic else 'bg-slate-800/50 border border-slate-700' }}">
+                    <div class="flex items-center justify-between mb-1">
+                        <span class="text-sm font-semibold text-white">CDK12</span>
+                        {% if pgx.cdk12.biallelic %}
+                        <span class="px-2 py-0.5 rounded text-xs font-bold bg-violet-600 text-white">BIALÉLICO</span>
+                        {% else %}
+                        <span class="px-2 py-0.5 rounded text-xs bg-slate-600 text-slate-300">{{ pgx.cdk12.status }}</span>
+                        {% endif %}
+                    </div>
+                    {% if pgx.cdk12.clinical_action %}
+                    <p class="text-xs text-violet-300">⚡ {{ pgx.cdk12.clinical_action }}</p>
+                    {% endif %}
+                </div>
+
+                <!-- TMB -->
+                {% if pgx.tmb.value %}
+                <div class="rounded-lg p-3 {{ 'bg-emerald-900/30 border border-emerald-700' if pgx.tmb.zone == 'high' else ('bg-yellow-900/30 border border-yellow-700' if pgx.tmb.zone == 'gray' else 'bg-slate-800/50 border border-slate-700') }}">
+                    <div class="flex items-center justify-between mb-1">
+                        <span class="text-sm font-semibold text-white">TMB</span>
+                        <span class="px-2 py-0.5 rounded text-xs font-bold {{ 'bg-emerald-600 text-white' if pgx.tmb.zone == 'high' else ('bg-yellow-600 text-white' if pgx.tmb.zone == 'gray' else 'bg-slate-600 text-slate-300') }}">
+                            {{ pgx.tmb.value }} mut/Mb
+                        </span>
+                    </div>
+                    <p class="text-xs text-slate-400">
+                        {% if pgx.tmb.zone == 'high' %}Alto (>10) — Candidato IO
+                        {% elif pgx.tmb.zone == 'gray' %}Zona gris (6-10) — Monitorear
+                        {% else %}Bajo (<6){% endif %}
+                    </p>
+                </div>
+                {% endif %}
+
+                <!-- ctDNA -->
+                {% if pgx.ctdna.detected or pgx.ctdna.rising or pgx.ctdna.vaf %}
+                <div class="rounded-lg p-3 {{ 'bg-red-900/30 border border-red-700' if pgx.ctdna.rising else 'bg-slate-800/50 border border-slate-700' }}">
+                    <div class="flex items-center justify-between mb-1">
+                        <span class="text-sm font-semibold text-white">ctDNA</span>
+                        {% if pgx.ctdna.rising %}
+                        <span class="px-2 py-0.5 rounded text-xs font-bold bg-red-600 text-white animate-pulse">↑ ASCENSO</span>
+                        {% elif pgx.ctdna.detected %}
+                        <span class="px-2 py-0.5 rounded text-xs bg-amber-600 text-white">Detectado</span>
+                        {% endif %}
+                    </div>
+                    {% if pgx.ctdna.vaf %}
+                    <p class="text-xs text-slate-400">VAF: {{ pgx.ctdna.vaf }}%</p>
+                    {% endif %}
+                    {% if pgx.ctdna.clinical_action %}
+                    <p class="text-xs text-red-300">⚡ {{ pgx.ctdna.clinical_action }}</p>
+                    {% endif %}
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- NEPC suspicion bar -->
+            {% if pgx.nepc_suspicion.score > 0 %}
+            <div class="mt-4 p-3 rounded-lg {{ 'bg-red-900/40 border border-red-600' if pgx.nepc_suspicion.suspected else 'bg-slate-800/50 border border-slate-700' }}">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-sm font-semibold text-white">Score de sospecha NEPC</span>
+                    <span class="text-sm font-bold {{ 'text-red-400' if pgx.nepc_suspicion.suspected else 'text-amber-400' }}">
+                        {{ pgx.nepc_suspicion.score }}/7
+                    </span>
+                </div>
+                <div class="w-full bg-slate-700 rounded-full h-2">
+                    <div class="h-2 rounded-full {{ 'bg-red-500' if pgx.nepc_suspicion.suspected else 'bg-amber-500' }}"
+                         style="width: {{ (pgx.nepc_suspicion.score / 7 * 100)|round }}%"></div>
+                </div>
+                {% if pgx.nepc_suspicion.suspected %}
+                <p class="mt-2 text-xs text-red-300 font-semibold">⚠️ Sospecha fuerte de transformación neuroendocrina — considerar biopsia y esquema platinum-based</p>
+                {% else %}
+                <p class="mt-2 text-xs text-slate-400">Bajo umbral de sospecha (≥3 para activar alerta). Continuar monitoreo.</p>
+                {% endif %}
             </div>
             {% endif %}
         </details>
         {% endif %}
 
-        <!-- ── 11e. Visualización de respuesta terapéutica (Spider + Swimmer) ── -->
+        <!-- ── 11f. Visualización de respuesta terapéutica (Spider + Swimmer) ── -->
         {% if copilot.response_visualization %}
         {% set viz = copilot.response_visualization %}
 
@@ -1928,21 +2825,6 @@
         </details>
         {% endif %}
 
-        {% if viz.psa_trajectory.has_data %}
-        <details class="pn-accordion pn-surface">
-            <summary class="flex items-center justify-between gap-3">
-                <div>
-                    <h2 class="text-lg font-bold text-white">📈 Trayectoria de antígeno prostático específico con tratamientos</h2>
-                    <p class="mt-1 text-sm text-slate-400">Serie temporal de antígeno prostático específico con bandas de tratamiento superpuestas.</p>
-                </div>
-            </summary>
-            <div class="mt-4">
-                <div class="h-64 w-full">
-                    <canvas id="psaTrajectoryChart"></canvas>
-                </div>
-            </div>
-        </details>
-        {% endif %}
         {% endif %}
 
     </div>
@@ -1953,78 +2835,28 @@
     <div id="addVisitModal" class="fixed inset-0 bg-black/80 hidden items-center justify-center z-50 backdrop-blur-sm">
         <div class="pn-modal-shell max-w-lg w-full mx-4 p-6 max-h-[90vh] overflow-y-auto">
             <h2 class="text-xl font-bold text-white mb-2">Completar visita / estudio por etapa</h2>
-            <p class="text-sm text-slate-400 mb-4">
+            <p id="visitModalTrackLabel" class="text-sm text-slate-400 mb-4">
                 {{ agenda_board.management_track_label or clinical_compass.current_stage_label }}
             </p>
+            <div id="visitModalContext" class="hidden mb-4 rounded-xl border border-cyan-500/20 bg-cyan-950/10 p-4">
+                <div class="text-xs uppercase tracking-wider text-slate-500">Contexto de la visita</div>
+                <div id="visitModalContextTitle" class="mt-2 text-sm font-semibold text-white"></div>
+                <p id="visitModalContextSummary" class="mt-2 text-sm text-slate-300"></p>
+                <div id="visitModalContextTargets" class="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3 text-xs"></div>
+                <div id="visitModalContextReasoning" class="mt-3 text-xs text-amber-200 hidden"></div>
+            </div>
             <form id="visitForm" class="space-y-4">
                 <input type="hidden" name="patient_id" value="{{ patient.identity.id }}">
-                <input type="hidden" name="state" value="{{ latest_assessment.state if latest_assessment else patient.prior_history.current_state }}">
-                <input type="hidden" name="management_track" value="{{ agenda_board.management_track }}">
+                <input type="hidden" id="visitStateInput" name="state" value="{{ latest_assessment.state if latest_assessment else patient.prior_history.current_state }}">
+                <input type="hidden" id="visitTrackInput" name="management_track" value="{{ agenda_board.management_track }}">
                 <input type="hidden" id="agendaIdsInput" name="agenda_ids">
+                <input type="hidden" id="agendaSubmissionModeInput" name="agenda_submission_mode" value="full_track">
 
-                {% for section in visit_schema.sections or [] %}
-                <div class="pt-3 border-t border-slate-700 first:border-t-0 first:pt-0">
-                    <div class="mb-3">
-                        <div class="text-sm font-semibold text-white">{{ section.title }}</div>
-                        {% if section.subtitle %}
-                        <div class="mt-1 text-xs text-slate-400">{{ section.subtitle }}</div>
-                        {% endif %}
-                    </div>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {% for field in section.fields %}
-                        <div class="{{ 'md:col-span-2' if field.field_type in ['textarea', 'multi_select'] else '' }}">
-                            <label class="block text-xs font-medium text-slate-400 mb-1">
-                                {{ field.label }}
-                                {% if field.unit %}<span class="text-slate-500">({{ field.unit }})</span>{% endif %}
-                            </label>
-                            {% if field.field_type == 'select' %}
-                            <select
-                                name="{{ field.name }}"
-                                data-field-type="select"
-                                class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
-                                <option value="">--</option>
-                                {% for option in field.options %}
-                                <option value="{{ option }}" {{ 'selected' if field.default == option else '' }}>{{ option }}</option>
-                                {% endfor %}
-                            </select>
-                            {% elif field.field_type == 'textarea' %}
-                            <textarea
-                                name="{{ field.name }}"
-                                data-field-type="textarea"
-                                rows="3"
-                                class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2"></textarea>
-                            {% elif field.field_type == 'checkbox' %}
-                            <label class="flex items-center gap-2 text-sm text-slate-300">
-                                <input type="checkbox" name="{{ field.name }}" data-field-type="checkbox" class="rounded bg-slate-700 border-slate-600">
-                                Sí
-                            </label>
-                            {% elif field.field_type == 'multi_select' %}
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-2 rounded border border-slate-700 bg-slate-900/40 p-3">
-                                {% for option in field.options %}
-                                <label class="flex items-center gap-2 text-sm text-slate-300">
-                                    <input type="checkbox" name="{{ field.name }}" value="{{ option }}" data-field-type="multi_select" class="rounded bg-slate-700 border-slate-600">
-                                    {{ option }}
-                                </label>
-                                {% endfor %}
-                            </div>
-                            {% else %}
-                            <input
-                                type="{{ 'number' if field.field_type == 'number' else 'date' if field.field_type == 'date' else 'text' }}"
-                                {% if field.field_type == 'number' %}step="0.01"{% endif %}
-                                name="{{ field.name }}"
-                                data-field-type="{{ field.field_type }}"
-                                {% if field.required %}required{% endif %}
-                                class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
-                            {% endif %}
-                        </div>
-                        {% endfor %}
-                    </div>
-                </div>
-                {% endfor %}
+                <div id="visitSchemaSections" class="space-y-4"></div>
 
                 <div class="flex justify-end gap-3 mt-6">
                     <button type="button" onclick="closeVisitModal()" class="pn-btn pn-btn-secondary px-4 py-2">Cancelar</button>
-                    <button type="submit" class="pn-btn pn-btn-primary px-4 py-2">Guardar visita por etapa</button>
+                    <button id="visitSubmitButton" type="submit" class="pn-btn pn-btn-primary px-4 py-2">Guardar visita por etapa</button>
                 </div>
             </form>
         </div>
@@ -2148,14 +2980,13 @@
     {% set copilot = profile_view.copilot|default({}) if profile_view else {} %}
     <script>
         const humanizeClinicalText = window.clinicalPresentation?.humanize || ((value) => value);
-        // ── Datos del paciente ────────────────────────────────────────────────
-        const dates = ['{{ patient.identity.diagnosis_date }}'];
-        const psaValues = [{{ patient.baseline.baseline_psa or 0 }}];
+        // ── Datos longitudinales reales ──────────────────────────────────────
+        const psaObservability = {{ psa_observability|default({}, true)|tojson }};
+        const psaPoints = (psaObservability.points || []);
+        const dates = psaPoints.map((point) => point.date);
+        const psaValues = psaPoints.map((point) => point.psa);
         const testoValues = [{{ patient.baseline.testosterone_baseline or 0 }}];
-
         {% for visit in patient.follow_ups %}
-        dates.push('{{ visit.visit_date }}');
-        psaValues.push({{ visit.psa_current or 0 }});
         testoValues.push({{ visit.testosterone_current or 0 }});
         {% endfor %}
 
@@ -2188,6 +3019,30 @@
         const psaCanvas = document.getElementById('psaControlChart');
         if (psaCanvas) {
         const ctxPSA = psaCanvas.getContext('2d');
+        const controlAnnotations = {};
+        (psaObservability.treatment_bands || []).forEach((band, index) => {
+            controlAnnotations['tx' + index] = {
+                type: 'box',
+                xMin: band.start_date,
+                xMax: band.end_date,
+                backgroundColor: band.color,
+                borderWidth: 0,
+            };
+        });
+        controlAnnotations.bcrLine = {
+            type: 'line',
+            yMin: 0.2, yMax: 0.2,
+            borderColor: 'rgba(239, 68, 68, 0.5)',
+            borderWidth: 1,
+            borderDash: [5, 5],
+            label: {
+                display: true,
+                content: humanizeClinicalText('BCR (0.2)'),
+                position: 'end',
+                color: '#ef4444',
+                font: { size: 10 }
+            }
+        };
         new Chart(ctxPSA, {
             type: 'line',
             data: {
@@ -2223,24 +3078,7 @@
                 interaction: { mode: 'index', intersect: false },
                 plugins: {
                     legend: { labels: { color: '#94a3b8' } },
-                    annotation: {
-                        annotations: {
-                            bcrLine: {
-                                type: 'line',
-                                yMin: 0.2, yMax: 0.2,
-                                borderColor: 'rgba(239, 68, 68, 0.5)',
-                                borderWidth: 1,
-                                borderDash: [5, 5],
-                                label: {
-                                    display: true,
-                                    content: humanizeClinicalText('BCR (0.2)'),
-                                    position: 'end',
-                                    color: '#ef4444',
-                                    font: { size: 10 }
-                                }
-                            }
-                        }
-                    }
+                    annotation: { annotations: controlAnnotations }
                 },
                 scales: {
                     x: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
@@ -2271,7 +3109,7 @@
             const baselinePSA = {{ patient.baseline.baseline_psa or 10 }};
 
             {% for tx in patient.treatments %}
-            txLabels.push(humanizeClinicalText('{{ tx.drug_scheme }}'));
+            txLabels.push(humanizeClinicalText('{{ tx.drug_scheme_label or tx.drug_scheme }}'));
             const nadir = {{ tx.nadir_psa or 0 }};
             const change = nadir > 0 ? ((nadir - baselinePSA) / baselinePSA * 100) : -50;
             txChanges.push(change.toFixed(1));
@@ -2372,7 +3210,7 @@
         {% if copilot.response_visualization and copilot.response_visualization.swimmer|length > 0 %}
         const swimCtx = document.getElementById('swimmerChart')?.getContext('2d');
         if (swimCtx) {
-            const swimData = {{ copilot.response_visualization.swimmer | tojson }};
+            const swimData = {{ copilot.response_visualization.swimmer | default([], true) | tojson }};
             const swimLabels = swimData.map(d => humanizeClinicalText(d.label));
             const swimDatasets = [{
                 label: 'Duración (meses)',
@@ -2459,7 +3297,7 @@
         {% if copilot.response_visualization and copilot.response_visualization.spider.has_data %}
         const spiderCtx = document.getElementById('spiderChart')?.getContext('2d');
         if (spiderCtx) {
-            const spiderData = {{ copilot.response_visualization.spider | tojson }};
+            const spiderData = {{ copilot.response_visualization.spider | default({}, true) | tojson }};
             const spiderDatasets = spiderData.lines.map(line => ({
                 label: line.location,
                 data: line.points.map(p => ({ x: p.measurement_date, y: p.change_from_baseline_pct })),
@@ -2499,7 +3337,7 @@
         {% if copilot.response_visualization and copilot.response_visualization.psa_trajectory.has_data %}
         const trajCtx = document.getElementById('psaTrajectoryChart')?.getContext('2d');
         if (trajCtx) {
-            const trajData = {{ copilot.response_visualization.psa_trajectory | tojson }};
+            const trajData = {{ copilot.response_visualization.psa_trajectory | default({}, true) | tojson }};
             const annotations = {};
             (trajData.treatment_bands || []).forEach((band, i) => {
                 annotations['band' + i] = {
@@ -2548,10 +3386,217 @@
         {% endif %}
 
         // ── Modal Logic ───────────────────────────────────────────────────────
-        function openVisitModal(agendaId = null) {
+        const defaultVisitSchema = {{ visit_schema|default({}, true)|tojson }};
+        const defaultAgendaItemContext = {{ agenda_item_form_context|default({}, true)|tojson }};
+
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function normalizeFieldOption(option) {
+            if (option && typeof option === 'object' && !Array.isArray(option)) {
+                return {
+                    value: option.value ?? '',
+                    label: option.label ?? option.value ?? '',
+                    group: option.group ?? '',
+                };
+            }
+            return { value: option ?? '', label: option ?? '', group: '' };
+        }
+
+        function renderSelectOptions(options, selectedValue = '') {
+            const normalizedOptions = (options || []).map(normalizeFieldOption);
+            const grouped = new Map();
+            const ungrouped = [];
+            const hasExplicitEmpty = normalizedOptions.some((option) => option.value === '');
+            normalizedOptions.forEach((option) => {
+                if (option.group) {
+                    if (!grouped.has(option.group)) grouped.set(option.group, []);
+                    grouped.get(option.group).push(option);
+                    return;
+                }
+                ungrouped.push(option);
+            });
+            const parts = hasExplicitEmpty ? [] : ['<option value="">--</option>'];
+            ungrouped.forEach((option) => {
+                const selected = selectedValue === option.value ? 'selected' : '';
+                parts.push(`<option value="${escapeHtml(option.value)}" ${selected}>${escapeHtml(option.label)}</option>`);
+            });
+            grouped.forEach((groupOptions, groupLabel) => {
+                const optionHtml = groupOptions.map((option) => {
+                    const selected = selectedValue === option.value ? 'selected' : '';
+                    return `<option value="${escapeHtml(option.value)}" ${selected}>${escapeHtml(option.label)}</option>`;
+                }).join('');
+                parts.push(`<optgroup label="${escapeHtml(groupLabel)}">${optionHtml}</optgroup>`);
+            });
+            return parts.join('');
+        }
+
+        function renderVisitField(field) {
+            const required = field.required ? 'required' : '';
+            const label = `
+                <label class="block text-xs font-medium text-slate-400 mb-1">
+                    ${escapeHtml(field.label || '')}
+                    ${field.unit ? `<span class="text-slate-500">(${escapeHtml(field.unit)})</span>` : ''}
+                </label>
+            `;
+            let control = '';
+            if (field.field_type === 'select') {
+                const options = renderSelectOptions(field.options || [], field.default ?? '');
+                control = `<select name="${escapeHtml(field.name)}" data-field-type="select" class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">${options}</select>`;
+            } else if (field.field_type === 'textarea') {
+                control = `<textarea name="${escapeHtml(field.name)}" data-field-type="textarea" rows="3" class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2"></textarea>`;
+            } else if (field.field_type === 'checkbox') {
+                control = `
+                    <label class="flex items-center gap-2 text-sm text-slate-300">
+                        <input type="checkbox" name="${escapeHtml(field.name)}" data-field-type="checkbox" class="rounded bg-slate-700 border-slate-600">
+                        Sí
+                    </label>
+                `;
+            } else if (field.field_type === 'multi_select') {
+                control = `
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-2 rounded border border-slate-700 bg-slate-900/40 p-3">
+                        ${(field.options || []).map((option) => `
+                            <label class="flex items-center gap-2 text-sm text-slate-300">
+                                <input type="checkbox" name="${escapeHtml(field.name)}" value="${escapeHtml(option)}" data-field-type="multi_select" class="rounded bg-slate-700 border-slate-600">
+                                ${escapeHtml(option)}
+                            </label>
+                        `).join('')}
+                    </div>
+                `;
+            } else {
+                const inputType = field.field_type === 'number' ? 'number' : field.field_type === 'date' ? 'date' : 'text';
+                const step = field.field_type === 'number' ? 'step="0.01"' : '';
+                control = `<input type="${inputType}" ${step} name="${escapeHtml(field.name)}" data-field-type="${escapeHtml(field.field_type || 'text')}" ${required} class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">`;
+            }
+            const help = field.help_text ? `<div class="mt-1 text-[11px] text-slate-500">${escapeHtml(field.help_text)}</div>` : '';
+            return `
+                <div class="${['textarea', 'multi_select'].includes(field.field_type) ? 'md:col-span-2' : ''}">
+                    ${label}
+                    ${control}
+                    ${help}
+                </div>
+            `;
+        }
+
+        function renderVisitSchema(schema, agendaContext = null) {
+            const sectionsHost = document.getElementById('visitSchemaSections');
+            const stateInput = document.getElementById('visitStateInput');
+            const trackInput = document.getElementById('visitTrackInput');
+            const submitModeInput = document.getElementById('agendaSubmissionModeInput');
+            const trackLabel = document.getElementById('visitModalTrackLabel');
+            const contextBox = document.getElementById('visitModalContext');
+            const contextTitle = document.getElementById('visitModalContextTitle');
+            const contextSummary = document.getElementById('visitModalContextSummary');
+            const contextTargets = document.getElementById('visitModalContextTargets');
+            const contextReasoning = document.getElementById('visitModalContextReasoning');
+            const submitButton = document.getElementById('visitSubmitButton');
+
+            if (stateInput) stateInput.value = schema.state || '{{ latest_assessment.state if latest_assessment else patient.prior_history.current_state }}';
+            if (trackInput) trackInput.value = schema.management_track || '{{ agenda_board.management_track }}';
+            if (submitModeInput) submitModeInput.value = schema.submission_mode || 'full_track';
+            if (trackLabel) {
+                trackLabel.textContent = schema.submission_mode === 'item_scoped'
+                    ? 'Captura dirigida por item de agenda'
+                    : '{{ agenda_board.management_track_label or clinical_compass.current_stage_label }}';
+            }
+
+            const sections = (schema.sections || []).map((section, index) => `
+                <div class="pt-3 border-t border-slate-700 ${index === 0 ? 'first:border-t-0 first:pt-0' : ''}">
+                    <div class="mb-3">
+                        <div class="text-sm font-semibold text-white">${escapeHtml(section.title || '')}</div>
+                        ${section.subtitle ? `<div class="mt-1 text-xs text-slate-400">${escapeHtml(section.subtitle)}</div>` : ''}
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        ${(section.fields || []).map(renderVisitField).join('')}
+                    </div>
+                </div>
+            `).join('');
+            sectionsHost.innerHTML = sections || '<div class="rounded-xl border border-slate-700 bg-slate-950/40 p-4 text-sm text-slate-300">No hay variables configuradas para esta captura.</div>';
+
+            if (agendaContext && (agendaContext.mode === 'item_scoped' || agendaContext.mode === 'capture_block')) {
+                contextBox.classList.remove('hidden');
+                contextTitle.textContent = agendaContext.title || 'Item de agenda';
+                contextSummary.textContent = agendaContext.summary || 'Esta captura dirige una actualización clínica puntual.';
+                const targets = [];
+                if ((agendaContext.decision_targets || []).length) {
+                    targets.push(`<div class="rounded-lg border border-slate-700 bg-slate-950/40 p-3"><div class="text-slate-500 uppercase tracking-wider mb-1">Decisión</div><div class="text-slate-200">${escapeHtml((agendaContext.decision_targets || []).join(', '))}</div></div>`);
+                }
+                if ((agendaContext.panel_targets || []).length) {
+                    targets.push(`<div class="rounded-lg border border-slate-700 bg-slate-950/40 p-3"><div class="text-slate-500 uppercase tracking-wider mb-1">Paneles</div><div class="text-slate-200">${escapeHtml((agendaContext.panel_targets || []).join(', '))}</div></div>`);
+                }
+                if ((agendaContext.write_targets || []).length) {
+                    targets.push(`<div class="rounded-lg border border-slate-700 bg-slate-950/40 p-3"><div class="text-slate-500 uppercase tracking-wider mb-1">Persistencia</div><div class="text-slate-200">${escapeHtml((agendaContext.write_targets || []).join(', '))}</div></div>`);
+                }
+                contextTargets.innerHTML = targets.join('');
+                if ((agendaContext.reasoning || []).length || (agendaContext.required_inputs || []).length) {
+                    contextReasoning.classList.remove('hidden');
+                    contextReasoning.textContent = `Inputs esperados: ${(agendaContext.required_inputs || []).join(', ') || 'captura contextual'}${(agendaContext.reasoning || []).length ? ' · ' + (agendaContext.reasoning || []).join(' ') : ''}`;
+                } else {
+                    contextReasoning.classList.add('hidden');
+                    contextReasoning.textContent = '';
+                }
+                if (submitButton) submitButton.textContent = agendaContext.mode === 'capture_block' ? 'Guardar y completar flujo clínico' : 'Guardar y actualizar decisión clínica';
+            } else {
+                contextBox.classList.add('hidden');
+                contextTitle.textContent = '';
+                contextSummary.textContent = '';
+                contextTargets.innerHTML = '';
+                contextReasoning.classList.add('hidden');
+                contextReasoning.textContent = '';
+                if (submitButton) submitButton.textContent = 'Guardar visita por etapa';
+            }
+        }
+
+        function buildCaptureQuery(captureContext = null) {
+            if (!captureContext || !(captureContext.raw_fields || []).length) {
+                return '';
+            }
+            const params = new URLSearchParams();
+            params.set('fields', (captureContext.raw_fields || []).join(','));
+            params.set('capture_title', captureContext.title || 'Completar datos críticos');
+            params.set('capture_rationale', captureContext.rationale || 'Completa variables faltantes del flujo clínico.');
+            params.set('decision_affected', captureContext.decision_affected || '');
+            params.set('module_owner', captureContext.module_owner || '');
+            params.set('capture_group', captureContext.input_group || 'clinical_completion');
+            return `?${params.toString()}`;
+        }
+
+        async function loadVisitSchema(agendaId = null, captureContext = null) {
+            if (!agendaId && !captureContext) {
+                renderVisitSchema(defaultVisitSchema, defaultAgendaItemContext);
+                return;
+            }
+            const url = agendaId
+                ? `/api/patients/{{ patient.identity.id }}/visit-schema?agenda_id=${agendaId}`
+                : `/api/patients/{{ patient.identity.id }}/visit-schema${buildCaptureQuery(captureContext)}`;
+            const resp = await fetch(url);
+            const result = await resp.json();
+            if (!result.success) {
+                throw new Error(result.error || 'No fue posible cargar el schema del item.');
+            }
+            renderVisitSchema(result.visit_schema || {}, result.agenda_item_context || null);
+        }
+
+        async function openVisitModal(agendaId = null, captureContext = null) {
             const agendaInput = document.getElementById('agendaIdsInput');
             if (agendaInput) {
                 agendaInput.value = agendaId ? JSON.stringify([agendaId]) : '[]';
+            }
+            const submissionModeInput = document.getElementById('agendaSubmissionModeInput');
+            if (submissionModeInput) {
+                submissionModeInput.value = agendaId ? 'item_scoped' : 'full_track';
+            }
+            try {
+                await loadVisitSchema(agendaId, captureContext);
+            } catch (err) {
+                alert('Error: ' + err.message);
+                return;
             }
             document.getElementById('addVisitModal').classList.remove('hidden');
             document.getElementById('addVisitModal').classList.add('flex');
@@ -2630,6 +3675,7 @@
 
         const visitForm = document.getElementById('visitForm');
         if (visitForm) {
+            renderVisitSchema(defaultVisitSchema, defaultAgendaItemContext);
             visitForm.addEventListener('submit', async function(e) {
                 e.preventDefault();
                 const data = collectVisitFormData(e.target);

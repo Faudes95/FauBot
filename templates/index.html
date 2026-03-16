@@ -4,9 +4,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ProstaNet AI — Predicción Oncológica</title>
+    <title>ProstaMed — Predicción Oncológica de Precisión</title>
     <meta name="description"
-        content="Modelo de Deep Learning multi-output para evaluación de riesgo y pronóstico en cáncer de próstata.">
+        content="Plataforma de salud, diagnóstico y precisión para evaluación de riesgo y pronóstico en cáncer de próstata.">
+    <link rel="icon" href="{{ ui_assets.prostamed_favicon.src }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
         rel="stylesheet">
@@ -20,22 +21,20 @@
     <header class="hero">
         <div class="hero-bg"></div>
         <div class="hero-content">
-            <div class="logo">
-                <div class="logo-icon">
-                    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                        stroke-width="1.5">
-                        <path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z" />
-                        <path d="M12 6v6l4 2" />
-                        <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none" />
-                    </svg>
+            {% set wide_logo = not ui_assets.prostamed_logo.is_fallback %}
+            <div class="logo {{ 'logo-wide' if wide_logo else '' }}">
+                <div class="logo-icon {{ 'logo-icon-wide' if wide_logo else '' }}">
+                    <img src="{{ ui_assets.prostamed_logo.src }}" alt="{{ ui_assets.prostamed_logo.alt }}" />
                 </div>
+                {% if not wide_logo %}
                 <div>
-                    <h1>ProstaNet<span class="accent">AI</span></h1>
-                    <p class="subtitle">Modelo Multi-Output · Deep Learning · Herramientas Clínicas Validadas</p>
+                    <h1>Prosta<span class="accent">Med</span></h1>
+                    <p class="subtitle">Salud · Diagnóstico · Precisión</p>
                 </div>
+                {% endif %}
             </div>
             <p class="hero-desc">
-                Sistema de predicción oncológica con 17 variables clínicas, arquitectura residual,
+                Plataforma de predicción oncológica con 17 variables clínicas, arquitectura residual,
                 y <strong>4 herramientas clínicas validadas</strong> (CAPRA, NCCN, Kattan/MSK, Briganti).
                 <strong>Solo para fines educativos y de investigación.</strong>
             </p>
@@ -358,6 +357,36 @@
                 </div>
             </div>
 
+            <!-- ═══ TNM STAGING PANEL ═══ -->
+            <div id="tnmPanel" class="results hidden">
+                <h2 class="section-title">🔬 Estadificación TNM — Cáncer de Próstata</h2>
+                <section class="card" style="overflow: hidden;">
+                    <div class="card-header">
+                        <span class="card-icon">📋</span>
+                        <h2>Clasificación TNM del Paciente</h2>
+                    </div>
+                    <div id="tnmContent" style="display: flex; gap: 1.5rem; flex-wrap: wrap; align-items: flex-start;">
+                        <div id="tnmImageBox" style="flex: 0 0 220px; text-align: center;">
+                            <img id="tnmImage" src="" alt="TNM Stage" style="max-width: 200px; max-height: 180px; border-radius: 12px; object-fit: contain;" />
+                        </div>
+                        <div id="tnmInfo" style="flex: 1; min-width: 220px;">
+                            <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem;">
+                                <span id="tnmBadgeLabel" style="display: inline-flex; align-items: center; justify-content: center; min-width: 3.5rem; padding: 0.35rem 0.75rem; border-radius: 9999px; font-weight: 800; font-size: 1rem; color: #020617;"></span>
+                                <span id="tnmShortDesc" style="font-size: 1rem; font-weight: 600; color: #e8ecf4;"></span>
+                            </div>
+                            <p id="tnmLongDesc" style="font-size: 0.9rem; color: #8e99b0; line-height: 1.6; margin-bottom: 0.75rem;"></p>
+                            <div id="tnmComposite" style="margin-top: 0.5rem;">
+                                <span style="font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.15em; color: #5a6580;">Estadio compuesto:</span>
+                                <span id="tnmCompositeLabel" style="display: inline-flex; padding: 0.3rem 0.75rem; border-radius: 9999px; font-weight: 800; font-size: 0.95rem; border: 2px solid; margin-left: 0.5rem;"></span>
+                            </div>
+                        </div>
+                    </div>
+                    <p style="margin-top: 1rem; font-size: 0.7rem; color: #5a6580; font-style: italic;">
+                        Referencia: AJCC Cancer Staging Manual 8th Ed. · NCCN 5.2026
+                    </p>
+                </section>
+            </div>
+
             <!-- ═══ CLINICAL SUMMARY (NEW) ═══ -->
             <div id="clinicalSummary" class="results hidden">
                 <h2 class="section-title">📈 Análisis Clínico y Estadística Predictiva</h2>
@@ -506,7 +535,7 @@
     </main>
 
     <footer>
-        <p>ProstaNet AI · Herramientas Clínicas Validadas + Deep Learning · PyTorch · 2026</p>
+        <p>ProstaMed · Salud · Diagnóstico · Precisión · Herramientas Clínicas Validadas · 2026</p>
     </footer>
 
     <script>
@@ -703,6 +732,7 @@
                     if (json.clinical_scores) renderClinicalScores(json.clinical_scores);
                     if (json.clinical_summary) renderClinicalSummary(json.clinical_summary);
                     if (json.prediction) renderResults(json.prediction);
+                    renderTNMPanel(data);
                 } catch (err) {
                     errorMsg.textContent = '❌ Error de conexión: ' + err.message;
                     errorMsg.classList.remove('hidden');
@@ -865,6 +895,45 @@
                         circle.style.strokeDashoffset = circumference * (1 - pct / 100);
                     });
                 });
+            }
+
+            // ── TNM Panel Rendering ────────────────────────────────────────
+            const TNM_DATA = {
+                'T1c': { label: 'T1c', short: 'No palpable (PSA)', desc: 'Tumor detectado por biopsia por PSA elevado, no palpable al tacto rectal.', severity: 'low', image: '/static/img/tnm/t1.svg', color: '#10b981' },
+                'T2a': { label: 'T2a', short: '≤50% un lóbulo', desc: 'Tumor afecta la mitad o menos de un lóbulo prostático.', severity: 'low', image: '/static/img/tnm/t2a.svg', color: '#10b981' },
+                'T2b': { label: 'T2b', short: '>50% un lóbulo', desc: 'Tumor afecta más de la mitad de un lóbulo prostático.', severity: 'intermediate', image: '/static/img/tnm/t2b.svg', color: '#f59e0b' },
+                'T2c': { label: 'T2c', short: 'Ambos lóbulos', desc: 'Tumor afecta ambos lóbulos prostáticos.', severity: 'intermediate', image: '/static/img/tnm/t2c.svg', color: '#f59e0b' },
+                'T3a': { label: 'T3a', short: 'Extensión extracapsular', desc: 'Extensión extracapsular unilateral o bilateral sin invasión de vesículas seminales.', severity: 'high', image: '/static/img/tnm/t3.svg', color: '#f43f5e' },
+                'T3b': { label: 'T3b', short: 'Vesículas seminales', desc: 'Invasión de una o ambas vesículas seminales.', severity: 'high', image: '/static/img/tnm/t3.svg', color: '#f43f5e' },
+                'T4':  { label: 'T4', short: 'Órganos adyacentes', desc: 'Tumor fijado o que invade vejiga, recto, pared pélvica u otros órganos adyacentes.', severity: 'very_high', image: '/static/img/tnm/t4.svg', color: '#dc2626' },
+            };
+
+            function renderTNMPanel(formData) {
+                const panel = document.getElementById('tnmPanel');
+                const tstage = formData.clinical_tstage || 'T2a';
+                const info = TNM_DATA[tstage];
+                if (!info) { panel.classList.add('hidden'); return; }
+
+                const imgEl = document.getElementById('tnmImage');
+                imgEl.src = info.image;
+                imgEl.alt = info.label;
+                imgEl.onerror = function() { this.parentElement.style.display = 'none'; };
+
+                const badge = document.getElementById('tnmBadgeLabel');
+                badge.textContent = info.label;
+                badge.style.background = info.color;
+                badge.style.color = '#020617';
+
+                document.getElementById('tnmShortDesc').textContent = info.short;
+                document.getElementById('tnmLongDesc').textContent = info.desc;
+
+                const composite = document.getElementById('tnmCompositeLabel');
+                composite.textContent = `${info.label}N0M0`;
+                composite.style.borderColor = info.color;
+                composite.style.color = info.color;
+                composite.style.background = info.color + '15';
+
+                panel.classList.remove('hidden');
             }
         });
     </script>

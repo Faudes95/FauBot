@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
 from prostanet.domains.adt_progression_verification.service import AdtProgressionVerificationService
 from prostanet.domains.evidence_registry.service import EvidenceRegistryService
 from prostanet.domains.diagnostic_workup.service import DiagnosticWorkupService
@@ -41,10 +43,10 @@ class ModuleRegistry:
         return self.evidence_registry.list_modules()
 
     def get_module_schema(self, module_id: str) -> dict:
-        return self.services[module_id].schema()
+        return deepcopy(self.services[module_id].schema())
 
     def get_state_classifier_schema(self) -> dict:
-        return STATE_CLASSIFIER_SCHEMA
+        return deepcopy(STATE_CLASSIFIER_SCHEMA)
 
     def evaluate_module(self, module_id: str, payload: dict) -> dict:
         result = self.services[module_id].evaluate(payload)

@@ -1,2 +1,2 @@
-"""ProstaNet modular clinical engine."""
+"""ProstaMed modular clinical engine."""
 

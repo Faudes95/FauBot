@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import calendar
+from copy import deepcopy
 from datetime import date, datetime, timedelta
 from typing import Any
 
+from prostanet.domains.patient_tracking.therapy_catalog import therapy_select_options
 from prostanet.shared.contracts import (
     AgendaItem,
     FieldSpec,
@@ -11,6 +13,12 @@ from prostanet.shared.contracts import (
     StageProtocolDefinition,
     TherapyCheckpoint,
     VisitBundle,
+)
+from prostanet.shared.metastatic_profile import (
+    BONE_SITE_LABELS,
+    METASTATIC_PROFILE_FIELD_NAMES,
+    NONREGIONAL_NODAL_SITE_LABELS,
+    VISCERAL_SITE_LABELS,
 )
 
 
@@ -53,6 +61,29 @@ COMMON_IMAGING_LOCATIONS = [
     "Hígado",
     "Suprarrenal",
     "Otra visceral",
+]
+
+CANONICAL_SCHEDULE_EVENT_TYPES = {
+    "lab_panel": "labs",
+    "pro_assessment": "qol",
+    "toxicity_review": "toxicity",
+    "therapy_review": "therapy_review",
+    "supportive_care": "supportive_care",
+    "goals_of_care": "goals_of_care",
+}
+
+LINE_OF_THERAPY_NUMBER_OPTIONS = ["", "1", "2", "3", "4", "5", "6"]
+LINE_OF_THERAPY_CONTEXT_OPTIONS = [
+    "",
+    "mHSPC_initial",
+    "mHSPC_post_docetaxel",
+    "m0_CRPC_first_line",
+    "mCRPC_first_line",
+    "mCRPC_post_ARPI_pre_taxane",
+    "mCRPC_post_taxane",
+    "mCRPC_post_PARP",
+    "mCRPC_post_Lu177",
+    "later_line",
 ]
 
 
@@ -100,11 +131,66 @@ def _latest_by(items: list[dict[str, Any]], *keys: str) -> dict[str, Any]:
     return items[-1]
 
 
+def _latest_value_snapshot(patient: dict[str, Any], *fields: str) -> tuple[Any, str, str]:
+    followups = patient.get("follow_ups") or []
+    baseline = patient.get("baseline") or {}
+    prior = patient.get("prior_history") or {}
+    identity = patient.get("identity") or {}
+
+    latest_followup = _latest_by(followups, "visit_date")
+    for field in fields:
+        if _is_present(latest_followup.get(field)):
+            return latest_followup.get(field), "follow_up_visits", str(latest_followup.get("visit_date") or "")
+    for field in fields:
+        if _is_present(baseline.get(field)):
+            return baseline.get(field), "clinical_baseline", str(identity.get("diagnosis_date") or "")
+    for field in fields:
+        if _is_present(prior.get(field)):
+            return prior.get(field), "prior_clinical_history", str(identity.get("diagnosis_date") or "")
+    return "", "", ""
+
+
 def _first_nonempty(*values: Any) -> Any:
     for value in values:
         if _is_present(value):
             return value
     return ""
+
+
+def _metastatic_followup_fields() -> list[dict[str, Any]]:
+    fields = [
+        _field("nonregional_nodal_metastasis_present", "Ganglios no regionales presentes", "checkbox"),
+        _field("nonregional_nodal_count", "Número de ganglios no regionales", "number"),
+        _field("nonregional_nodal_other_label", "Otro sitio ganglionar no regional", "text"),
+    ]
+    for key, label in NONREGIONAL_NODAL_SITE_LABELS.items():
+        fields.append(_field(f"nonregional_nodal_{key}_count", f"{label}: número de lesiones", "number"))
+    fields.extend(
+        [
+            _field("bone_metastasis_present", "Metástasis óseas presentes", "checkbox"),
+            _field("bone_axial_count", "Número de lesiones en esqueleto axial", "number"),
+            _field("bone_appendicular_count", "Número de lesiones en esqueleto apendicular", "number"),
+        ]
+    )
+    for key, label in BONE_SITE_LABELS.items():
+        fields.append(_field(f"bone_{key}_count", f"{label}: número de lesiones", "number"))
+    fields.extend(
+        [
+            _field("visceral_metastasis_present", "Metástasis viscerales presentes", "checkbox"),
+            _field("visceral_lesion_count", "Número total de lesiones viscerales", "number"),
+            _field("visceral_other_label", "Otro órgano visceral", "text"),
+        ]
+    )
+    for key, label in VISCERAL_SITE_LABELS.items():
+        fields.append(_field(f"visceral_{key}_count", f"{label}: número de lesiones", "number"))
+    fields.extend(
+        [
+            _field("metastatic_total_lesion_count", "Número total de lesiones metastásicas", "number"),
+            _field("metastasis_assessment_date", "Fecha de evaluación metastásica", "date"),
+            _field("metastasis_document_source", "Fuente documental de la distribución metastásica", "text"),
+        ]
+    )
+    return fields
 
 
 def _treatment_text(patient: dict[str, Any]) -> str:
@@ -115,6 +201,105 @@ def _treatment_text(patient: dict[str, Any]) -> str:
     if follow_ups:
         return str((follow_ups[-1] or {}).get("current_treatment") or "")
     return ""
+
+
+def _assessment_anchor_date(raw_assessment: dict[str, Any] | None) -> tuple[date | None, str]:
+    if not raw_assessment:
+        return None, ""
+    for key in ("assessment_date", "created_at", "updated_at"):
+        parsed = _parse_date(raw_assessment.get(key))
+        if parsed:
+            return parsed, f"latest_assessment.{key}"
+    return None, ""
+
+
+def _treatment_track_tokens(management_track: str) -> tuple[str, ...]:
+    mapping = {
+        "on_arpi": ("apalutamide", "apalutamida", "enzalutamide", "enzalutamida", "darolutamide", "darolutamida", "abiraterone", "abiraterona", "bicalutamide", "bicalutamida", "arpi"),
+        "on_docetaxel": ("docetaxel", "cabazitaxel", "taxane", "taxano"),
+        "on_parp": ("olaparib", "talazoparib", "niraparib", "parp"),
+        "on_lu177": ("lutec", "lu177", "177lu", "pluvicto", "radioligand"),
+    }
+    return mapping.get(management_track, ())
+
+
+def _latest_treatment_anchor(patient: dict[str, Any], management_track: str) -> tuple[date | None, str]:
+    tokens = _treatment_track_tokens(management_track)
+    treatments = patient.get("treatments") or []
+    for treatment in reversed(treatments):
+        start = _parse_date(treatment.get("start_date"))
+        if not start:
+            continue
+        text_parts = [
+            treatment.get("drug_scheme"),
+            treatment.get("class_exhausted"),
+            treatment.get("discontinuation_reason"),
+            treatment.get("regimen_json"),
+        ]
+        haystack = " ".join(str(part or "") for part in text_parts).lower()
+        if not tokens or any(token in haystack for token in tokens):
+            return start, "treatment_history.start_date"
+    return None, ""
+
+
+def resolve_track_anchor(
+    patient: dict[str, Any],
+    state: str,
+    management_track: str,
+    raw_assessment: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Deriva la fecha real de anclaje del track activo para agenda y cadencia."""
+    identity = patient.get("identity") or {}
+    prior = patient.get("prior_history") or {}
+    active_surveillance = patient.get("active_surveillance") or {}
+    surgery = patient.get("surgery") or {}
+    bcr = patient.get("bcr") or {}
+    radiation = patient.get("radiation") or []
+    followups = patient.get("follow_ups") or []
+
+    latest_followup = _latest_by(followups, "visit_date")
+    last_visit_date = _parse_date(latest_followup.get("visit_date"))
+
+    anchor: date | None = None
+    source = ""
+
+    if management_track == "active_surveillance":
+        anchor = _parse_date(active_surveillance.get("enrollment_date"))
+        source = "active_surveillance.enrollment_date" if anchor else ""
+        if not anchor:
+            latest_biopsy = _latest_by(patient.get("biopsies") or [], "biopsy_date")
+            anchor = _parse_date(latest_biopsy.get("biopsy_date"))
+            source = "biopsy_details.biopsy_date" if anchor else ""
+    elif management_track == "pre_surgery":
+        anchor, source = _assessment_anchor_date(raw_assessment)
+    elif management_track == "post_rp":
+        anchor = _parse_date(_first_nonempty(surgery.get("surgery_date"), prior.get("rp_date"), prior.get("prostatectomy_date")))
+        source = "surgical_details.surgery_date" if surgery.get("surgery_date") else "prior_clinical_history.rp_date" if anchor else ""
+    elif management_track in {"post_rt", "salvage"}:
+        latest_rt = _latest_by(radiation, "rt_date")
+        anchor = _parse_date(_first_nonempty(latest_rt.get("rt_date"), bcr.get("salvage_date"), prior.get("rt_date"), prior.get("radiation_date")))
+        if latest_rt.get("rt_date"):
+            source = "radiation_details.rt_date"
+        elif bcr.get("salvage_date"):
+            source = "biochemical_recurrence.salvage_date"
+        elif anchor:
+            source = "prior_clinical_history.rt_date"
+    elif management_track in {"on_arpi", "on_docetaxel", "on_parp", "on_lu177"}:
+        anchor, source = _latest_treatment_anchor(patient, management_track)
+    if not anchor:
+        anchor, source = _assessment_anchor_date(raw_assessment)
+    if not anchor:
+        anchor = _parse_date(identity.get("diagnosis_date"))
+        source = "identity.diagnosis_date" if anchor else ""
+    if not anchor:
+        anchor = _parse_date(identity.get("created_at"))
+        source = "identity.created_at" if anchor else ""
+
+    return {
+        "anchor_date": _fmt_date(anchor),
+        "anchor_source": source or "unknown",
+        "last_visit_date": _fmt_date(last_visit_date),
+    }
 
 
 def infer_management_track(patient: dict[str, Any], state: str, raw_assessment: dict[str, Any] | None = None) -> str:
@@ -160,7 +345,12 @@ def _field(name: str, label: str, field_type: str, **kwargs: Any) -> dict[str, A
     return FieldSpec(name=name, label=label, field_type=field_type, **kwargs).to_dict()
 
 
-def build_visit_schema(state: str, management_track: str) -> dict[str, Any]:
+def _build_visit_sections(state: str, management_track: str) -> list[dict[str, Any]]:
+    therapy_options = therapy_select_options(
+        state=state,
+        management_track=management_track,
+        include_empty=True,
+    )
     sections = [
         {
             "title": "Contexto de la visita",
@@ -300,6 +490,55 @@ def build_visit_schema(state: str, management_track: str) -> dict[str, Any]:
                 "fields": [
                     _field("psa", "PSA actual", "number", unit="ng/mL"),
                     _field("testosterone", "Testosterona", "number", unit="ng/dL"),
+                    _field(
+                        "line_of_therapy_number",
+                        "Número de línea terapéutica",
+                        "select",
+                        options=LINE_OF_THERAPY_NUMBER_OPTIONS,
+                    ),
+                    _field(
+                        "line_of_therapy_context",
+                        "Contexto clínico de la línea",
+                        "select",
+                        options=LINE_OF_THERAPY_CONTEXT_OPTIONS,
+                    ),
+                    _field(
+                        "drug_scheme",
+                        "Esquema sistémico actual",
+                        "select",
+                        options=therapy_options,
+                        help_text="Seleccione el esquema canónico activo para dejar trazabilidad real del cambio de línea y del APE por esquema.",
+                    ),
+                    _field(
+                        "current_adt_context",
+                        "Contexto actual de ADT",
+                        "select",
+                        options=[
+                            "",
+                            "none",
+                            "medical_adt_continuous",
+                            "medical_adt_interrupted",
+                            "orchiectomy",
+                        ],
+                    ),
+                    _field(
+                        "castrate_testosterone_status",
+                        "Estado de castración",
+                        "select",
+                        options=["", "unknown", "confirmed_castrate", "not_castrate"],
+                    ),
+                    _field(
+                        "progression_pattern",
+                        "Patrón de progresión",
+                        "select",
+                        options=["", "none", "biochemical_only", "radiographic", "clinical", "mixed"],
+                    ),
+                    _field(
+                        "conventional_imaging_status",
+                        "Imagen convencional",
+                        "select",
+                        options=["", "NOT_RESTAGED", "M0", "M1"],
+                    ),
                     _field("creatinine", "Creatinina", "number", unit="mg/dL"),
                     _field("cystatin_c", "Cistatina C", "number", unit="mg/L"),
                     _field("alp", "ALP", "number", unit="UI/L"),
@@ -313,6 +552,13 @@ def build_visit_schema(state: str, management_track: str) -> dict[str, Any]:
                     _field("pain", "Dolor", "number", unit="0-10"),
                     _field("ecog", "ECOG", "select", options=["", "0", "1", "2", "3", "4"]),
                     _field("frailty_status", "Fragilidad", "select", options=["", "fit", "vulnerable", "frail"]),
+                    _field("systolic_bp", "PA sistólica", "number", unit="mmHg"),
+                    _field("diastolic_bp", "PA diastólica", "number", unit="mmHg"),
+                    _field("total_cholesterol", "Colesterol total", "number", unit="mg/dL"),
+                    _field("hdl_cholesterol", "HDL", "number", unit="mg/dL"),
+                    _field("triglycerides", "Triglicéridos", "number", unit="mg/dL"),
+                    _field("hba1c", "HbA1c", "number", unit="%"),
+                    _field("waist_circumference_cm", "Cintura abdominal", "number", unit="cm"),
                     _field("cv_risk_documented", "Riesgo CV documentado", "checkbox"),
                     _field("drug_interaction_reviewed", "Revisión de interacciones", "checkbox"),
                     _field("hepatic_risk_factors", "Riesgo hepático", "text"),
@@ -326,7 +572,50 @@ def build_visit_schema(state: str, management_track: str) -> dict[str, Any]:
                     _field("fatigue_score", "Brief Fatigue Inventory", "number"),
                     _field("seizure_history", "Antecedente convulsivo", "checkbox"),
                     _field("dermatitis_history", "Dermatitis / rash previo", "checkbox"),
+                    _field("dxa_t_score_lumbar", "DXA T-score lumbar", "number"),
+                    _field("dxa_t_score_hip", "DXA T-score cadera", "number"),
+                    _field("dxa_baseline_done", "DXA basal realizada", "checkbox"),
+                    _field("vitamin_d_level", "Vitamina D", "number", unit="ng/mL"),
+                    _field("calcium_vitd_started", "Calcio / vitamina D iniciados", "checkbox"),
+                    _field("bone_protection_started", "Protección ósea iniciada", "checkbox"),
+                    _field("prior_fragility_fracture", "Fractura previa por fragilidad", "checkbox"),
+                    _field("steroid_use", "Uso crónico de esteroides", "checkbox"),
                     _field("opioid_use", "Uso de opioides", "select", options=["", "No", "PRN", "Crónico"]),
+                ],
+            }
+        )
+        sections.append(
+            {
+                "title": "Fragilidad y fitness terapéutica",
+                "subtitle": "Completa los inputs mínimos para G8, Fried y aptitud terapéutica sin asumir defaults optimistas.",
+                "fields": [
+                    _field("g8_food_intake", "G8: ingesta de alimentos", "select", options=["", "0", "1", "2"]),
+                    _field("g8_weight_loss", "G8: pérdida de peso", "select", options=["", "0", "1", "2", "3"]),
+                    _field("g8_mobility", "G8: movilidad", "select", options=["", "0", "1", "2"]),
+                    _field("g8_neuropsych", "G8: estado neuropsicológico", "select", options=["", "0", "1", "2"]),
+                    _field("g8_bmi", "G8: categoría BMI", "select", options=["", "0", "1", "2", "3"]),
+                    _field("g8_medications", "G8: medicamentos diarios", "select", options=["", "0", "1"]),
+                    _field("g8_self_health", "G8: percepción de salud", "select", options=["", "0", "0.5", "1", "2"]),
+                    _field("low_activity", "Actividad física reducida", "checkbox"),
+                    _field("slow_gait", "Marcha lenta", "checkbox"),
+                    _field("weak_grip", "Fuerza de prensión baja", "checkbox"),
+                ],
+            }
+        )
+        sections.append(
+            {
+                "title": "Actualización biomolecular / PSMA",
+                "subtitle": "Datos que cambian elegibilidad a PARP, inmunoterapia y terapias dirigidas a PSMA.",
+                "fields": [
+                    _field("hrr_status", "Estado HRR", "select", options=["", "Positivo", "Negativo", "Desconocido"]),
+                    _field("hrr_gene", "Gen HRR dominante", "text"),
+                    _field("brca2_status", "BRCA2", "select", options=["", "Positivo", "Negativo", "Desconocido"]),
+                    _field("msi_status", "MSI", "select", options=["", "Inestable", "Estable", "Desconocido"]),
+                    _field("tmb_high", "TMB alto", "checkbox"),
+                    _field("biomarker_source", "Fuente del biomarcador", "text"),
+                    _field("molecular_assay_date", "Fecha del estudio molecular", "date"),
+                    _field("psma_positive", "PSMA positivo", "checkbox"),
+                    _field("psma_negative_dominant_lesions", "Lesiones dominantes PSMA negativas", "checkbox"),
                 ],
             }
         )
@@ -348,12 +637,242 @@ def build_visit_schema(state: str, management_track: str) -> dict[str, Any]:
                 ],
             }
         )
+        sections.append(
+            {
+                "title": "Distribución metastásica detallada",
+                "subtitle": "Subclasifica M1a / M1b / M1c con sitios y número de lesiones reales; el renderer TNM y la epidemiología usan estos datos.",
+                "fields": _metastatic_followup_fields(),
+            }
+        )
 
+    return sections
+
+
+def _clone_field(field: dict[str, Any]) -> dict[str, Any]:
+    return deepcopy(field)
+
+
+def _filter_fields(sections: list[dict[str, Any]], field_names: list[str], required_inputs: list[str]) -> list[dict[str, Any]]:
+    wanted = {name for name in field_names if name and not str(name).startswith("source_document:")}
+    required = {name for name in required_inputs if name and not str(name).startswith("source_document:")}
+    filtered_sections: list[dict[str, Any]] = []
+    for section in sections:
+        fields = []
+        for field in section.get("fields", []):
+            if field.get("name") not in wanted:
+                continue
+            cloned = _clone_field(field)
+            if cloned.get("name") in required:
+                cloned["required"] = True
+            fields.append(cloned)
+        if fields:
+            filtered_sections.append(
+                {
+                    "title": section.get("title"),
+                    "subtitle": section.get("subtitle"),
+                    "fields": fields,
+                }
+            )
+    return filtered_sections
+
+
+def _agenda_item_field_names(item: dict[str, Any]) -> list[str]:
+    item_type = str(item.get("item_type") or "")
+    agenda_key = str(item.get("agenda_key") or "")
+    base_fields = ["visit_date"]
+    by_type = {
+        "therapy_review": [
+            "disease_status",
+            "current_treatment",
+            "ecog",
+            "line_of_therapy_number",
+            "line_of_therapy_context",
+            "drug_scheme",
+            "current_adt_context",
+            "castrate_testosterone_status",
+            "progression_pattern",
+            "conventional_imaging_status",
+            "clinician_notes",
+        ],
+        "lab_panel": [
+            "psa",
+            "testosterone",
+            "castrate_testosterone_status",
+            "alp",
+            "ldh",
+            "hemoglobin",
+            "creatinine",
+            "cystatin_c",
+            "bilirubin",
+            "ast",
+            "alt",
+            "ggt",
+            "glucose",
+            "clinician_notes",
+        ],
+        "imaging": [
+            "imaging_modality",
+            "psma_suv_max",
+            "psma_suv_bucket",
+            "psma_total_lesions",
+            "psma_lesion_locations",
+            "psma_negative_dominant_lesions",
+            "bone_lesion_count",
+            "bone_distribution",
+            "ct_summary",
+            "ct_locations",
+            *METASTATIC_PROFILE_FIELD_NAMES,
+            "clinician_notes",
+        ],
+        "toxicity_review": [
+            "fatigue_score",
+            "mini_cog_score",
+            "seizure_history",
+            "dermatitis_history",
+            "opioid_use",
+            "iief5_score",
+            "eq5d_vas",
+            "clinician_notes",
+        ],
+        "pro_assessment": [
+            "ipss_total",
+            "iief5_score",
+            "eq5d_vas",
+            "fact_p_total",
+            "pad_usage",
+            "clinician_notes",
+        ],
+        "goals_of_care": ["pain", "opioid_use", "clinician_notes"],
+    }
+    if item_type == "supportive_care":
+        if "bone" in agenda_key:
+            base_fields.extend(
+                [
+                    "dxa_baseline_done",
+                    "dxa_t_score_lumbar",
+                    "dxa_t_score_hip",
+                    "vitamin_d_level",
+                    "calcium_vitd_started",
+                    "bone_protection_started",
+                    "prior_fragility_fracture",
+                    "exercise_status",
+                    "nutrition_status",
+                    "clinician_notes",
+                ]
+            )
+        elif "frailty" in agenda_key or "fitness" in agenda_key:
+            base_fields.extend(
+                [
+                    "ecog",
+                    "g8_food_intake",
+                    "g8_weight_loss",
+                    "g8_mobility",
+                    "g8_neuropsych",
+                    "g8_bmi",
+                    "g8_medications",
+                    "g8_self_health",
+                    "weight_kg",
+                    "bmi_current",
+                    "weight_loss_6m_pct",
+                    "fatigue_score",
+                    "low_activity",
+                    "slow_gait",
+                    "weak_grip",
+                    "mini_cog_score",
+                    "clinician_notes",
+                ]
+            )
+        elif "cv" in agenda_key:
+            base_fields.extend(
+                [
+                    "systolic_bp",
+                    "diastolic_bp",
+                    "total_cholesterol",
+                    "hdl_cholesterol",
+                    "triglycerides",
+                    "glucose",
+                    "hba1c",
+                    "waist_circumference_cm",
+                    "cv_risk_documented",
+                    "drug_interaction_reviewed",
+                    "clinician_notes",
+                ]
+            )
+        else:
+            base_fields.extend(
+                [
+                    "systolic_bp",
+                    "diastolic_bp",
+                    "glucose",
+                    "vitamin_d_level",
+                    "dxa_baseline_done",
+                    "calcium_vitd_started",
+                    "bone_protection_started",
+                    "exercise_status",
+                    "nutrition_status",
+                    "clinician_notes",
+                ]
+            )
+    else:
+        base_fields.extend(by_type.get(item_type, ["clinician_notes"]))
+    base_fields.extend(item.get("required_inputs") or [])
+    return list(dict.fromkeys(field for field in base_fields if field and not str(field).startswith("source_document:")))
+
+
+def _build_agenda_item_form_context(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "mode": "item_scoped",
+        "title": item.get("title"),
+        "summary": item.get("summary"),
+        "required_inputs": item.get("required_inputs", []),
+        "decision_targets": item.get("decision_targets", []),
+        "panel_targets": item.get("panel_targets", []),
+        "write_targets": item.get("write_targets", []),
+        "form_scope": item.get("form_scope", {}),
+        "reasoning": item.get("reasoning", []),
+        "blockers": item.get("blockers", []),
+    }
+
+
+def build_visit_schema(
+    state: str,
+    management_track: str,
+    agenda_item: dict[str, Any] | None = None,
+    field_scope: list[str] | None = None,
+    capture_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    sections = _build_visit_sections(state, management_track)
+    agenda_item_context = None
+    if agenda_item:
+        sections = _filter_fields(
+            sections,
+            _agenda_item_field_names(agenda_item),
+            agenda_item.get("required_inputs", []),
+        )
+        agenda_item_context = _build_agenda_item_form_context(agenda_item)
+    elif field_scope:
+        scoped_fields = list(dict.fromkeys(["visit_date", *field_scope, "clinician_notes"]))
+        sections = _filter_fields(sections, scoped_fields, field_scope)
+        agenda_item_context = {
+            "mode": "capture_block",
+            "title": capture_context.get("title") if capture_context else "Completar datos críticos",
+            "summary": capture_context.get("rationale") if capture_context else "Completa variables críticas del flujo clínico.",
+            "required_inputs": scoped_fields,
+            "decision_targets": [capture_context.get("decision_affected")] if capture_context and capture_context.get("decision_affected") else [],
+            "panel_targets": [capture_context.get("module_owner")] if capture_context and capture_context.get("module_owner") else [],
+            "write_targets": ["follow_up_visits", "stage_visit_records"],
+            "form_scope": capture_context.get("form_scope") if capture_context else {"mode": "capture_block"},
+            "reasoning": [capture_context.get("rationale")] if capture_context and capture_context.get("rationale") else [],
+            "blockers": [],
+        }
     return VisitBundle(
         state=state,
         management_track=management_track,
         sections=sections,
-    ).to_dict()
+    ).to_dict() | {
+        "agenda_item_context": agenda_item_context,
+        "submission_mode": "item_scoped" if agenda_item else "full_track",
+    }
 
 
 def _agenda_item(
@@ -374,6 +893,10 @@ def _agenda_item(
     generated_from_event: str = "",
     blockers: list[str] | None = None,
     reasoning: list[str] | None = None,
+    decision_targets: list[str] | None = None,
+    panel_targets: list[str] | None = None,
+    write_targets: list[str] | None = None,
+    form_scope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     today = date.today()
     due_at = (base_date or today) + timedelta(days=interval_days)
@@ -382,6 +905,8 @@ def _agenda_item(
     status = "scheduled"
     if blockers:
         status = "blocked"
+    elif due_at == today:
+        status = "due_today"
     elif due_at < today:
         status = "overdue"
     elif window_start <= today <= window_end:
@@ -411,7 +936,36 @@ def _agenda_item(
         action_label=action_label,
         blockers=blockers or [],
         reasoning=reasoning or [],
+        decision_targets=decision_targets or [],
+        panel_targets=panel_targets or [],
+        write_targets=write_targets or [],
+        form_scope=form_scope or {"mode": "full_track"},
     ).to_dict()
+
+
+def agenda_item_to_scheduled_event(item: dict[str, Any]) -> dict[str, Any]:
+    evidence_basis = item.get("evidence_basis") or []
+    guideline = " · ".join(str(entry) for entry in evidence_basis[:2]) if evidence_basis else ""
+    return {
+        "event_type": CANONICAL_SCHEDULE_EVENT_TYPES.get(item.get("item_type"), item.get("item_type")),
+        "label": item.get("title"),
+        "management_track": item.get("management_track"),
+        "due_date": item.get("due_at"),
+        "guideline": guideline,
+        "agenda_key": item.get("agenda_key"),
+        "summary": item.get("summary", ""),
+        "priority": item.get("priority", "routine"),
+        "required_inputs": item.get("required_inputs", []),
+        "status": item.get("status", "scheduled"),
+        "title": item.get("title"),
+        "decision_targets": item.get("decision_targets", []),
+        "panel_targets": item.get("panel_targets", []),
+        "write_targets": item.get("write_targets", []),
+        "form_scope": item.get("form_scope", {}),
+        "action_label": item.get("action_label", ""),
+        "reasoning": item.get("reasoning", []),
+        "blockers": item.get("blockers", []),
+    }
 
 
 def build_protocol_comparators(state: str, management_track: str) -> list[dict[str, Any]]:
@@ -467,6 +1021,29 @@ def build_protocol_comparators(state: str, management_track: str) -> list[dict[s
             ).to_dict()
         )
     return comparators
+
+
+def build_protocol_trace(
+    patient: dict[str, Any],
+    state: str,
+    management_track: str,
+    raw_assessment: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    anchor = resolve_track_anchor(patient, state, management_track, raw_assessment)
+    protocol = build_stage_protocol(state, management_track, patient)
+    comparators = build_protocol_comparators(state, management_track)
+    benchmarks = [item for item in comparators if item.get("mode") == "institutional_benchmark"]
+    local_center = next((item for item in comparators if item.get("mode") == "local_center_protocol"), {})
+    return {
+        "anchor_date": anchor.get("anchor_date", ""),
+        "anchor_source": anchor.get("anchor_source", ""),
+        "anchor_is_fallback": anchor.get("anchor_source", "").startswith("latest_assessment") or anchor.get("anchor_source", "") in {"identity.diagnosis_date", "identity.created_at"},
+        "last_visit_date": anchor.get("last_visit_date", ""),
+        "protocol_label": protocol.get("title", ""),
+        "guideline_primary": protocol.get("evidence_basis", []),
+        "institutional_benchmark": benchmarks,
+        "local_center_protocol": local_center,
+    }
 
 
 def build_stage_protocol(state: str, management_track: str, patient: dict[str, Any]) -> dict[str, Any]:
@@ -870,10 +1447,14 @@ def _advanced_agenda(patient: dict[str, Any], state: str, track: str) -> list[di
             interval_days,
             priority="high",
             summary="Revisar respuesta, toxicidad, síntomas y continuidad del backbone terapéutico.",
-            required_inputs=["disease_status", "current_treatment", "ecog"],
+            required_inputs=["disease_status", "current_treatment", "ecog", "line_of_therapy_number", "line_of_therapy_context", "drug_scheme"],
             completion_rule={"note": "Revisión clínica y terapéutica"},
             evidence_basis=["NCCN 2026", "EAU 2026 avanzada"],
             generated_from_event="followup_visit_recorded",
+            decision_targets=["disease_control", "line_continuation", "systemic_sequencing"],
+            panel_targets=["sequencing_context", "safety_support_context"],
+            write_targets=["follow_up_visits", "stage_visit_records", "treatment_history"],
+            form_scope={"mode": "item_scoped", "focus": "therapy_review"},
         ),
         _agenda_item(
             f"{state}:{track}:labs",
@@ -889,6 +1470,10 @@ def _advanced_agenda(patient: dict[str, Any], state: str, track: str) -> list[di
             completion_rule={"any_of": ["psa", "testosterone", "alp", "ldh", "hemoglobin"]},
             evidence_basis=["NCCN 2026", "EAU 2026 avanzada", "37.pdf", "40.pdf", "41.pdf"],
             generated_from_event="followup_visit_recorded",
+            decision_targets=["castration_status", "disease_control", "line_continuation"],
+            panel_targets=["sequencing_context", "safety_support_context"],
+            write_targets=["follow_up_visits", "stage_visit_records", "biomarker_longitudinal"],
+            form_scope={"mode": "item_scoped", "focus": "lab_panel"},
         ),
         _agenda_item(
             f"{state}:{track}:imaging",
@@ -903,6 +1488,10 @@ def _advanced_agenda(patient: dict[str, Any], state: str, track: str) -> list[di
             completion_rule={"requires_event_target": "imaging_studies"},
             evidence_basis=["NCCN 2026", "EAU 2026 avanzada"],
             generated_from_event="followup_visit_recorded",
+            decision_targets=["radiographic_restage", "psma_eligibility", "disease_burden"],
+            panel_targets=["sequencing_context", "biomarker_context"],
+            write_targets=["stage_visit_records", "imaging_studies"],
+            form_scope={"mode": "item_scoped", "focus": "imaging"},
         ),
     ]
     if track == "on_arpi":
@@ -921,6 +1510,10 @@ def _advanced_agenda(patient: dict[str, Any], state: str, track: str) -> list[di
                 completion_rule={"any_of": ["mini_cog_score", "fatigue_score", "cv_risk_documented", "drug_interaction_reviewed"]},
                 evidence_basis=["NCCN 2026", "EAU 2026 avanzada", "37.pdf", "40.pdf", "41.pdf"],
                 generated_from_event="followup_visit_recorded",
+                decision_targets=["arpi_safety", "supportive_care", "treatment_tolerability"],
+                panel_targets=["safety_support_context"],
+                write_targets=["follow_up_visits", "stage_visit_records", "data_provenance"],
+                form_scope={"mode": "item_scoped", "focus": "arpi_safety"},
             )
         )
     items.append(
@@ -937,8 +1530,146 @@ def _advanced_agenda(patient: dict[str, Any], state: str, track: str) -> list[di
             completion_rule={"note": "Completar bundle óseo y rehabilitación"},
             evidence_basis=["NCCN 2026", "EAU 2026 avanzada", "39.pdf"],
             generated_from_event="followup_visit_recorded",
+            decision_targets=["bone_safety", "supportive_care"],
+            panel_targets=["safety_support_context"],
+            write_targets=["follow_up_visits", "stage_visit_records", "clinical_baseline"],
+            form_scope={"mode": "item_scoped", "focus": "bone_support"},
         )
     )
+    items.append(
+        _agenda_item(
+            f"{state}:{track}:frailty_fitness",
+            "supportive_care",
+            "Fragilidad y fitness terapéutica",
+            state,
+            track,
+            base_date,
+            90,
+            priority="high",
+            summary="Completa G8, Fried y estado funcional para evitar clasificar al paciente como fit por ausencia de datos.",
+            required_inputs=[
+                "ecog",
+                "g8_food_intake",
+                "g8_weight_loss",
+                "g8_mobility",
+                "g8_neuropsych",
+                "g8_bmi",
+                "g8_medications",
+                "g8_self_health",
+                "weight_loss_6m_pct",
+                "fatigue_score",
+                "low_activity",
+                "slow_gait",
+                "weak_grip",
+            ],
+            completion_rule={"any_of": ["g8_food_intake", "g8_weight_loss", "weight_loss_6m_pct", "fatigue_score", "low_activity", "slow_gait", "weak_grip"]},
+            evidence_basis=["EAU 2026 avanzada", "NCCN 2026 survivorship"],
+            generated_from_event="missing_critical_inputs",
+            decision_targets=["frailty", "treatment_fitness", "treatment_intensity"],
+            panel_targets=["safety_support_context"],
+            write_targets=["stage_visit_records", "follow_up_visits", "patient_demographics", "data_provenance"],
+            form_scope={"mode": "item_scoped", "focus": "frailty_fitness"},
+        )
+    )
+    if track in {"on_arpi", "systemic_surveillance"} or (patient.get("prior_history") or {}).get("prior_adt"):
+        cv_value, cv_source, cv_date = _latest_value_snapshot(
+            patient,
+            "systolic_bp",
+            "total_cholesterol",
+            "hdl_cholesterol",
+            "triglycerides",
+            "glucose",
+            "hba1c",
+            "waist_circumference_cm",
+        )
+        cv_inputs = [
+            "systolic_bp",
+            "total_cholesterol",
+            "hdl_cholesterol",
+            "triglycerides",
+            "glucose",
+            "waist_circumference_cm",
+        ]
+        cv_reasoning = []
+        if cv_source:
+            cv_reasoning.append(f"Último input metabólico desde {cv_source} ({cv_date or 'sin fecha'}).")
+        items.append(
+            _agenda_item(
+                f"{state}:{track}:adt_cv_metabolic",
+                "supportive_care",
+                "Monitoreo CV y metabólico bajo ADT",
+                state,
+                track,
+                base_date,
+                28,
+                priority="high",
+                summary="Ayuda a prevenir eventos CV/metabólicos, sostener el tratamiento y elegir ARPI con mejor perfil de seguridad.",
+                required_inputs=cv_inputs,
+                completion_rule={"any_of": cv_inputs},
+                evidence_basis=["EAU 2026 avanzada", "NCCN 2026 survivorship"],
+                generated_from_event="followup_visit_recorded",
+                blockers=[] if cv_value else ["Falta perfil metabólico / PA basal reciente"],
+                reasoning=cv_reasoning,
+                decision_targets=["cv_safety", "arpi_safety", "supportive_care"],
+                panel_targets=["safety_support_context"],
+                write_targets=["follow_up_visits", "stage_visit_records", "data_provenance"],
+                form_scope={"mode": "item_scoped", "focus": "adt_cv_metabolic"},
+            )
+        )
+        bone_value, bone_source, bone_date = _latest_value_snapshot(
+            patient,
+            "dxa_t_score_lumbar",
+            "dxa_t_score_hip",
+            "dxa_baseline_done",
+            "vitamin_d_level",
+            "bone_protection_started",
+        )
+        bone_reasoning = []
+        if bone_source:
+            bone_reasoning.append(f"Último dato óseo desde {bone_source} ({bone_date or 'sin fecha'}).")
+        items.append(
+            _agenda_item(
+                f"{state}:{track}:adt_bone_monitor",
+                "supportive_care",
+                "Monitoreo óseo y vitamina D bajo ADT",
+                state,
+                track,
+                base_date,
+                42,
+                priority="high",
+                summary="Busca osteoporosis/fractura evitable y completa el bundle óseo durante la exposición a ADT.",
+                required_inputs=["dxa_baseline_done", "vitamin_d_level", "bone_protection_started"],
+                completion_rule={"any_of": ["dxa_baseline_done", "vitamin_d_level", "bone_protection_started"]},
+                evidence_basis=["EAU 2026 avanzada", "NCCN 2026 survivorship", "39.pdf"],
+                generated_from_event="followup_visit_recorded",
+                blockers=[] if bone_value else ["Falta DXA / vitamina D / protección ósea"],
+                reasoning=bone_reasoning,
+                decision_targets=["bone_safety", "supportive_care"],
+                panel_targets=["safety_support_context"],
+                write_targets=["follow_up_visits", "stage_visit_records", "clinical_baseline"],
+                form_scope={"mode": "item_scoped", "focus": "adt_bone_monitor"},
+            )
+        )
+        items.append(
+            _agenda_item(
+                f"{state}:{track}:adt_qol_fatigue",
+                "pro_assessment",
+                "Fatiga, sexualidad y calidad de vida bajo ADT",
+                state,
+                track,
+                base_date,
+                42,
+                summary="Sirve para detectar toxicidad funcional y cognitiva que modifica adherencia, seguridad y selección terapéutica.",
+                required_inputs=["fatigue_score", "iief5_score", "eq5d_vas"],
+                completion_rule={"any_of": ["fatigue_score", "iief5_score", "eq5d_vas"]},
+                evidence_basis=["NCCN 2026 survivorship", "EAU 2026 avanzada"],
+                generated_from_event="followup_visit_recorded",
+                decision_targets=["quality_of_life", "treatment_tolerability"],
+                panel_targets=["safety_support_context"],
+                write_targets=["follow_up_visits", "stage_visit_records", "patient_pros"],
+                form_scope={"mode": "item_scoped", "focus": "adt_qol_fatigue"},
+            )
+        )
     if track == "palliative_overlay":
         items.append(
             _agenda_item(
@@ -955,6 +1686,10 @@ def _advanced_agenda(patient: dict[str, Any], state: str, track: str) -> list[di
                 completion_rule={"note": "Registrar objetivos de cuidado y control sintomático"},
                 evidence_basis=["NCCN 2026 supportive care", "EAU 2026 avanzada"],
                 generated_from_event="followup_visit_recorded",
+                decision_targets=["goals_of_care", "symptom_control"],
+                panel_targets=["safety_support_context"],
+                write_targets=["follow_up_visits", "stage_visit_records", "care_overlays"],
+                form_scope={"mode": "item_scoped", "focus": "goals_of_care"},
             )
         )
     return items
@@ -1057,6 +1792,13 @@ def build_therapy_checkpoints(patient: dict[str, Any], state: str, management_tr
                 rationale="PI-RADS, patología, PROs y algoritmos prequirúrgicos deben alinearse antes de fijar cirugía, RT o vigilancia.",
                 action="Completar PROs y revisar panel de algoritmos contextuales.",
                 evidence_basis=["NCCN 2026", "EAU 2026 localized"],
+                decision_supported="Elección entre vigilancia activa, cirugía o radioterapia.",
+                why_it_matters_now="La decisión local cambia la trayectoria completa del paciente y requiere inputs anatómicos y funcionales consistentes.",
+                inputs_required=["psa", "pirads_score", "ipss_total", "iief5_score"],
+                blocking_if_missing=True,
+                last_input_source="follow_up_visits" if _is_present(followup.get("psa_current")) else "",
+                last_input_date=followup.get("visit_date", ""),
+                changes_recommendation_if_resolved=True,
             ).to_dict()
         )
         checkpoints.append(
@@ -1067,6 +1809,13 @@ def build_therapy_checkpoints(patient: dict[str, Any], state: str, management_tr
                 rationale="Decipher / Oncotype / Prolaris refinan casos limítrofes, pero no sustituyen la guía.",
                 action="Persistir resultado externo si ya existe.",
                 evidence_basis=["NCCN 2026", "EAU 2026 localized"],
+                decision_supported="Refinar riesgo local en casos limítrofes.",
+                why_it_matters_now="Puede reforzar o debilitar la preferencia por vigilancia activa o tratamiento local.",
+                inputs_required=["genomic_classifier", "genomic_classifier_result"],
+                blocking_if_missing=False,
+                last_input_source="genomic_profile" if genomics_ready else "",
+                last_input_date=genomics.get("test_date", ""),
+                changes_recommendation_if_resolved=False,
             ).to_dict()
         )
         return checkpoints
@@ -1080,6 +1829,13 @@ def build_therapy_checkpoints(patient: dict[str, Any], state: str, management_tr
                 rationale="PSA ultrasensible, PSADT, márgenes, Decipher e imagen definen la oportunidad de rescate.",
                 action="Actualizar PSA e imagen si la trayectoria clínica cambió.",
                 evidence_basis=["NCCN 2026", "EAU 2026 recurrencia", "FDA EMBARK"],
+                decision_supported="Ventana de rescate y necesidad de intensificación.",
+                why_it_matters_now="La oportunidad de rescate puede perderse si PSA cinético e imagen no están actualizados.",
+                inputs_required=["psa", "imaging_modality"],
+                blocking_if_missing=True,
+                last_input_source="follow_up_visits" if psa_present else "",
+                last_input_date=followup.get("visit_date", ""),
+                changes_recommendation_if_resolved=True,
             ).to_dict()
         )
         return checkpoints
@@ -1099,6 +1855,13 @@ def build_therapy_checkpoints(patient: dict[str, Any], state: str, management_tr
                     rationale="HRR/BRCA, MSI/TMB y trazabilidad molecular ordenan PARP e inmunoterapia.",
                     action="Documentar fuente y fecha molecular antes de intensificar.",
                     evidence_basis=["NCCN 2026", "EAU 2026 avanzada", "35.pdf"],
+                    decision_supported="PARP, inmunoterapia y pathway de precisión.",
+                    why_it_matters_now="Sin biomarcador verificable no debe intensificarse hacia rutas de precisión.",
+                    inputs_required=["hrr_status", "hrr_gene", "msi_status", "biomarker_source", "molecular_assay_date"],
+                    blocking_if_missing=True,
+                    last_input_source="genomic_profile" if hrr_ready else "",
+                    last_input_date=genomics.get("test_date", ""),
+                    changes_recommendation_if_resolved=True,
                 ).to_dict(),
                 TherapyCheckpoint(
                     key="psma_gate",
@@ -1107,6 +1870,13 @@ def build_therapy_checkpoints(patient: dict[str, Any], state: str, management_tr
                     rationale="Lutecio y rutas PSMA requieren imagen estructurada y descarte de lesiones dominantes PSMA negativas.",
                     action="Registrar PSMA-PET estructurado si la decisión terapéutica depende de ello.",
                     evidence_basis=["NCCN 2026", "EAU 2026 avanzada", "34.pdf"],
+                    decision_supported="Elegibilidad a terapias dirigidas a PSMA / Lu-177.",
+                    why_it_matters_now="La elegibilidad PSMA no puede sostenerse con texto libre o inferencias blandas.",
+                    inputs_required=["psma_positive", "psma_negative_dominant_lesions", "imaging_modality"],
+                    blocking_if_missing=True,
+                    last_input_source="imaging_studies" if psma_ready else "",
+                    last_input_date=_latest_by(patient.get("imaging", []), "study_date").get("study_date", ""),
+                    changes_recommendation_if_resolved=True,
                 ).to_dict(),
                 TherapyCheckpoint(
                     key="arpi_safety",
@@ -1115,6 +1885,13 @@ def build_therapy_checkpoints(patient: dict[str, Any], state: str, management_tr
                     rationale="Convulsiones, cognición, rash, CV, interacciones y riesgo hepático cambian el ARPI más seguro.",
                     action="Completar bundle de seguridad específico cuando el paciente use o sea candidato a ARPI.",
                     evidence_basis=["NCCN 2026", "EAU 2026 avanzada", "37.pdf", "40.pdf", "41.pdf"],
+                    decision_supported="Selección o continuación segura de ARPI.",
+                    why_it_matters_now="La toxicidad prevenible puede obligar suspensión o selección equivocada del agente.",
+                    inputs_required=["mini_cog_score", "fatigue_score", "cv_risk_documented", "drug_interaction_reviewed"],
+                    blocking_if_missing=management_track == "on_arpi",
+                    last_input_source="follow_up_visits" if arpi_safety_ready else "",
+                    last_input_date=followup.get("visit_date", ""),
+                    changes_recommendation_if_resolved=management_track == "on_arpi",
                 ).to_dict(),
             ]
         )
@@ -1127,6 +1904,13 @@ def build_therapy_checkpoints(patient: dict[str, Any], state: str, management_tr
                     rationale="CBC y estado funcional deben mantenerse vigentes en quimioterapia activa.",
                     action="Agregar laboratorio y ECOG en la siguiente visita.",
                     evidence_basis=["NCCN 2026", "EAU 2026 avanzada"],
+                    decision_supported="Continuidad segura de docetaxel.",
+                    why_it_matters_now="La toxicidad hematológica no monitorizada puede volver insegura la continuación del ciclo.",
+                    inputs_required=["hemoglobin", "ecog"],
+                    blocking_if_missing=True,
+                    last_input_source="follow_up_visits",
+                    last_input_date=followup.get("visit_date", ""),
+                    changes_recommendation_if_resolved=True,
                 ).to_dict()
             )
     return checkpoints
@@ -1135,17 +1919,21 @@ def build_therapy_checkpoints(patient: dict[str, Any], state: str, management_tr
 def build_agenda_board(patient: dict[str, Any], state: str, management_track: str, raw_assessment: dict[str, Any] | None = None) -> dict[str, Any]:
     items = build_agenda_items(patient, state, management_track)
     overdue = [item for item in items if item.get("status") == "overdue"]
-    due = [item for item in items if item.get("status") == "due"]
+    due = [item for item in items if item.get("status") in {"due", "due_today"}]
     protocol = build_stage_protocol(state, management_track, patient)
     therapy_checkpoints = build_therapy_checkpoints(patient, state, management_track)
+    protocol_trace = build_protocol_trace(patient, state, management_track, raw_assessment)
     return {
         "management_track": management_track,
         "management_track_label": MANAGEMENT_TRACK_LABELS.get(management_track, management_track),
         "stage_protocol": protocol,
+        "protocol_trace": protocol_trace,
         "items": items,
+        "active_items": items,
+        "archived_items": [],
         "next_due_items": due[:4],
         "overdue_items": overdue[:4],
-        "active_recommendations": [item for item in items if item.get("status") in {"due", "overdue"}][:5],
+        "active_recommendations": [item for item in items if item.get("status") in {"due", "due_today", "overdue"}][:5],
         "therapy_checkpoints": therapy_checkpoints,
         "protocol_comparators": build_protocol_comparators(state, management_track),
         "visit_schema": build_visit_schema(state, management_track),

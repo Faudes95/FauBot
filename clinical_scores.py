@@ -1510,7 +1510,7 @@ def calculate_all_scores(patient: dict[str, Any]) -> dict[str, Any]:
     if post_op_context:
         scores['capra_s'] = calculate_capra_s(patient)
 
-    # ProstaNet Integrated Score (needs other scores first)
+    # ProstaMed Integrated Score (needs other scores first)
     scores['prostanet_score'] = prostanet_integrated_score(patient, scores)
 
     return scores
@@ -1686,6 +1686,48 @@ def generate_comprehensive_summary(scores: dict, ml_prediction: dict, patient: d
 #   Actualización Quan H et al. Med Care 2011; 49(6):626-33
 # ============================================================================
 
+def _score_input_present(value: Any) -> bool:
+    return value not in (None, "")
+
+
+def _normalize_boolish(value: Any) -> bool | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(int(value))
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"si", "sí", "yes", "true", "1", "on"}:
+            return True
+        if normalized in {"no", "false", "0", "off"}:
+            return False
+    return None
+
+
+def _incomplete_score_payload(
+    *,
+    score_name: str,
+    missing_inputs: list[str],
+    what_score_means: str,
+    clinical_decision_supported: str,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = {
+        "score_name": score_name,
+        "is_complete": False,
+        "data_truth_status": "incomplete",
+        "missing_inputs": missing_inputs,
+        "what_score_means": what_score_means,
+        "clinical_decision_supported": clinical_decision_supported,
+        "risk_category": "INCOMPLETE",
+        "risk_interpretation": "Faltan inputs críticos; el score no debe usarse como si fuera un resultado clínico confirmado.",
+    }
+    if extra:
+        payload.update(extra)
+    return payload
+
 def charlson_comorbidity_index(patient: dict[str, Any]) -> dict[str, Any]:
     """
     Calcula el Índice de Comorbilidad de Charlson.
@@ -1718,16 +1760,6 @@ def charlson_comorbidity_index(patient: dict[str, Any]) -> dict[str, Any]:
         - estimated_10y_survival_pct: supervivencia estimada a 10 años
         - conditions: lista de condiciones presentes
     """
-    def _flag(key):
-        v = patient.get(key)
-        if isinstance(v, bool):
-            return v
-        if isinstance(v, (int, float)):
-            return v >= 1
-        if isinstance(v, str):
-            return v.strip().lower() in ("si", "sí", "yes", "true", "1", "on")
-        return False
-
     # Pesos estándar
     weights = [
         ("myocardial_infarction", 1),
@@ -1750,15 +1782,47 @@ def charlson_comorbidity_index(patient: dict[str, Any]) -> dict[str, Any]:
         ("aids_hiv", 6),
     ]
 
+    missing_inputs = []
+    age = patient.get("age")
+    if not isinstance(age, (int, float)):
+        try:
+            age = float(age)
+        except (TypeError, ValueError):
+            age = None
+    if age is None:
+        missing_inputs.append("age")
+
+    for key, _ in weights:
+        if _normalize_boolish(patient.get(key)) is None:
+            missing_inputs.append(key)
+
+    if missing_inputs:
+        return _incomplete_score_payload(
+            score_name="Charlson Comorbidity Index",
+            missing_inputs=missing_inputs,
+            what_score_means="Resume la carga de comorbilidad basal y mortalidad competitiva a mediano-largo plazo.",
+            clinical_decision_supported="Ayuda a calibrar intensidad terapéutica, beneficio competitivo y tolerabilidad global.",
+            extra={
+                "score": None,
+                "raw_score": None,
+                "age_adjusted_score": None,
+                "adjusted_score": None,
+                "age_points": None,
+                "estimated_10y_survival_pct": None,
+                "estimated_10y_survival": "No calculable",
+                "conditions": [],
+                "conditions_present": [],
+            },
+        )
+
     score = 0
     conditions = []
     for key, weight in weights:
-        if _flag(key):
+        if _normalize_boolish(patient.get(key)) is True:
             score += weight
             conditions.append(key)
 
     # Ajuste por edad (Charlson age-adjusted)
-    age = patient.get("age", 0)
     age_points = 0
     if isinstance(age, (int, float)) and age >= 50:
         age_points = max(0, (int(age) - 40) // 10)
@@ -1783,11 +1847,21 @@ def charlson_comorbidity_index(patient: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "score": score,
+        "raw_score": score,
         "age_adjusted_score": age_adjusted,
+        "adjusted_score": age_adjusted,
         "age_points": age_points,
         "risk_category": category,
         "estimated_10y_survival_pct": survival_10y,
+        "estimated_10y_survival": f"{survival_10y}%",
         "conditions": conditions,
+        "conditions_present": conditions,
+        "is_complete": True,
+        "data_truth_status": "captured",
+        "missing_inputs": [],
+        "what_score_means": "Resume la carga de comorbilidad basal y mortalidad competitiva a mediano-largo plazo.",
+        "risk_interpretation": f"Categoría {category}: mayor puntaje implica mayor riesgo de mortalidad competitiva no oncológica.",
+        "clinical_decision_supported": "Ayuda a calibrar intensidad terapéutica, beneficio competitivo y tolerabilidad global.",
     }
 
 
@@ -1816,38 +1890,61 @@ def g8_geriatric_assessment(patient: dict[str, Any]) -> dict[str, Any]:
         - fit_for_aggressive_treatment: True si score >14
         - interpretation: texto descriptivo
     """
+    required_fields = (
+        "g8_food_intake",
+        "g8_weight_loss",
+        "g8_mobility",
+        "g8_neuropsych",
+        "g8_bmi",
+        "g8_medications",
+        "g8_self_health",
+        "age",
+    )
+    missing_inputs = [field for field in required_fields if not _score_input_present(patient.get(field))]
+    if missing_inputs:
+        return _incomplete_score_payload(
+            score_name="G8 Geriatric Screening",
+            missing_inputs=missing_inputs,
+            what_score_means="Tamiza vulnerabilidad geriátrica; un G8 ≤14 sugiere necesidad de evaluación geriátrica integral.",
+            clinical_decision_supported="Ayuda a decidir intensidad terapéutica, soporte geriátrico y necesidad de evaluación integral.",
+            extra={
+                "score": None,
+                "total_score": None,
+                "fit_for_aggressive_treatment": None,
+                "fitness_for_treatment": "Faltan respuestas del G8 para estimar aptitud geriátrica real.",
+                "interpretation": "Score incompleto por falta de variables del G8.",
+                "inputs_used": {},
+            },
+        )
+
     score = 0.0
 
-    food = patient.get("g8_food_intake", 2)
+    food = patient.get("g8_food_intake")
     score += min(max(float(food), 0), 2)
 
-    weight = patient.get("g8_weight_loss", 3)
+    weight = patient.get("g8_weight_loss")
     score += min(max(float(weight), 0), 3)
 
-    mobility = patient.get("g8_mobility", 2)
+    mobility = patient.get("g8_mobility")
     score += min(max(float(mobility), 0), 2)
 
-    neuro = patient.get("g8_neuropsych", 2)
+    neuro = patient.get("g8_neuropsych")
     score += min(max(float(neuro), 0), 2)
 
-    bmi_score = patient.get("g8_bmi", 3)
+    bmi_score = patient.get("g8_bmi")
     score += min(max(float(bmi_score), 0), 3)
 
-    meds = patient.get("g8_medications", 1)
+    meds = patient.get("g8_medications")
     score += min(max(float(meds), 0), 1)
 
-    self_health = patient.get("g8_self_health", 2)
+    self_health = patient.get("g8_self_health")
     score += min(max(float(self_health), 0), 2)
 
-    # Edad: 0=>85, 1=80-85, 2=<80
-    age = patient.get("age", 70)
-    if isinstance(age, (int, float)):
-        if age > 85:
-            score += 0
-        elif age >= 80:
-            score += 1
-        else:
-            score += 2
+    age = float(patient.get("age"))
+    if age > 85:
+        score += 0
+    elif age >= 80:
+        score += 1
     else:
         score += 2
 
@@ -1863,8 +1960,18 @@ def g8_geriatric_assessment(patient: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "score": score,
+        "total_score": score,
         "fit_for_aggressive_treatment": is_fit,
+        "fitness_for_treatment": "Apto para tratamiento estándar" if is_fit else "Requiere evaluación geriátrica antes de intensificar",
         "interpretation": interpretation,
+        "is_complete": True,
+        "data_truth_status": "captured",
+        "missing_inputs": [],
+        "what_score_means": "Tamiza vulnerabilidad geriátrica; un G8 ≤14 sugiere necesidad de evaluación geriátrica integral.",
+        "risk_category": "FIT" if is_fit else "VULNERABLE",
+        "risk_interpretation": "Un puntaje bajo aumenta la probabilidad de fragilidad geriátrica clínicamente relevante.",
+        "clinical_decision_supported": "Ayuda a decidir intensidad terapéutica, soporte geriátrico y necesidad de evaluación integral.",
+        "inputs_used": {field: patient.get(field) for field in required_fields},
     }
 
 
@@ -2131,4 +2238,441 @@ def erspc_risk_calculator(patient: dict[str, Any]) -> dict[str, Any]:
             "family_history": fam_hx,
         },
         "reference": "ERSPC-RC: Roobol MJ et al. Eur Urol 2012 / PCPT-RC: Thompson IM et al. NEJM 2004",
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FITNESS TERAPÉUTICA INTEGRADA (Salto 2)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def egfr_ckd_epi_2021(creatinine: float, age: int, sex: str = "M") -> dict:
+    """
+    Calcula eGFR usando CKD-EPI 2021 (sin raza).
+
+    Fórmula: 142 × min(Scr/κ, 1)^α × max(Scr/κ, 1)^-1.200 × 0.9938^Age × (1.012 si mujer)
+    κ = 0.7 (F), 0.9 (M); α = -0.241 (F), -0.302 (M)
+
+    Impacto terapéutico:
+        eGFR <30: contraindicar zoledronato, ajustar olaparib
+        eGFR 30-60: reducir dosis cisplatino
+        eGFR <45: precaución con AINEs en paliativo
+
+    Reference: Inker LA et al. NEJM 2021
+    """
+    import math
+    if not creatinine or creatinine <= 0 or not age or age <= 0:
+        return {"egfr": None, "stage": "unknown", "clinical_actions": [], "reference": "CKD-EPI 2021 (Inker LA et al. NEJM 2021)"}
+
+    is_female = sex.upper().startswith("F")
+    kappa = 0.7 if is_female else 0.9
+    alpha = -0.241 if is_female else -0.302
+    sex_factor = 1.012 if is_female else 1.0
+
+    egfr = 142 * (min(creatinine / kappa, 1.0) ** alpha) * (max(creatinine / kappa, 1.0) ** -1.200) * (0.9938 ** age) * sex_factor
+    egfr = round(egfr, 1)
+
+    if egfr >= 90:
+        stage = "G1"
+    elif egfr >= 60:
+        stage = "G2"
+    elif egfr >= 45:
+        stage = "G3a"
+    elif egfr >= 30:
+        stage = "G3b"
+    elif egfr >= 15:
+        stage = "G4"
+    else:
+        stage = "G5"
+
+    actions = []
+    if egfr < 30:
+        actions.extend(["Contraindicar zoledronato (nefrotoxicidad)", "Ajustar dosis de olaparib", "Evitar contraste yodado sin preparación"])
+    elif egfr < 45:
+        actions.extend(["Precaución con AINEs en manejo paliativo", "Ajustar dosis de cisplatino si aplica"])
+    elif egfr < 60:
+        actions.append("Reducir dosis de cisplatino; monitorear función renal cada ciclo")
+
+    return {
+        "egfr": egfr,
+        "stage": stage,
+        "clinical_actions": actions,
+        "inputs_used": {"creatinine": creatinine, "age": age, "sex": sex},
+        "reference": "CKD-EPI 2021 (Inker LA et al. NEJM 2021)",
+    }
+
+
+def child_pugh_dynamic(bilirubin: float = None, albumin: float = None, inr: float = None,
+                       ascites: str = "none", encephalopathy: str = "none") -> dict:
+    """
+    Calcula Child-Pugh dinámico desde valores de laboratorio.
+
+    Impacto terapéutico:
+        Child-Pugh A: dosis estándar
+        Child-Pugh B: reducir dosis abiraterona 50%
+        Child-Pugh C: contraindicar abiraterona y docetaxel
+
+    Reference: Pugh RN et al. Br J Surg 1973
+    """
+    score = 0
+    details = {}
+
+    # Bilirrubina (mg/dL)
+    if bilirubin is not None:
+        if bilirubin < 2:
+            score += 1; details["bilirubin"] = 1
+        elif bilirubin <= 3:
+            score += 2; details["bilirubin"] = 2
+        else:
+            score += 3; details["bilirubin"] = 3
+    else:
+        score += 1; details["bilirubin"] = "missing (assumed 1)"
+
+    # Albúmina (g/dL)
+    if albumin is not None:
+        if albumin > 3.5:
+            score += 1; details["albumin"] = 1
+        elif albumin >= 2.8:
+            score += 2; details["albumin"] = 2
+        else:
+            score += 3; details["albumin"] = 3
+    else:
+        score += 1; details["albumin"] = "missing (assumed 1)"
+
+    # INR
+    if inr is not None:
+        if inr < 1.7:
+            score += 1; details["inr"] = 1
+        elif inr <= 2.3:
+            score += 2; details["inr"] = 2
+        else:
+            score += 3; details["inr"] = 3
+    else:
+        score += 1; details["inr"] = "missing (assumed 1)"
+
+    # Ascitis
+    ascites_map = {"none": 1, "absent": 1, "mild": 2, "moderate": 2, "leve": 2, "moderada": 2, "severe": 3, "severa": 3, "tense": 3}
+    asc_score = ascites_map.get(ascites.lower(), 1)
+    score += asc_score; details["ascites"] = asc_score
+
+    # Encefalopatía
+    enc_map = {"none": 1, "absent": 1, "grade_1": 2, "grade_2": 2, "grado_1": 2, "grado_2": 2, "grade_3": 3, "grade_4": 3, "grado_3": 3, "grado_4": 3}
+    enc_score = enc_map.get(encephalopathy.lower(), 1)
+    score += enc_score; details["encephalopathy"] = enc_score
+
+    if score <= 6:
+        grade = "A"
+    elif score <= 9:
+        grade = "B"
+    else:
+        grade = "C"
+
+    actions = []
+    if grade == "B":
+        actions.extend(["Reducir dosis de abiraterona 50%", "Monitoreo hepático cada 2 semanas", "Evitar hepatotóxicos concomitantes"])
+    elif grade == "C":
+        actions.extend(["Contraindicar abiraterona", "Contraindicar docetaxel", "Considerar best supportive care", "Referir hepatología"])
+
+    return {
+        "score": score,
+        "grade": grade,
+        "details": details,
+        "clinical_actions": actions,
+        "reference": "Child-Pugh (Pugh RN et al. Br J Surg 1973)",
+    }
+
+
+def fried_frailty_index(weight_loss_pct: float = 0, fatigue_score: float = None,
+                        low_activity: bool = False, slow_gait: bool = False,
+                        weak_grip: bool = False, ecog: int = None, age: int = None) -> dict:
+    """
+    Fragilidad de Fried modificada para oncología.
+
+    Criterios (1 punto cada uno):
+        1. Pérdida de peso >5% en 6 meses
+        2. Fatiga autoreportada (fatigue score ≥7/10 o FACIT-F <30)
+        3. Actividad física reducida
+        4. Velocidad de marcha lenta
+        5. Fuerza de prensión baja
+
+    Proxy ECOG: ECOG ≥2 agrega slow_gait + low_activity automáticamente.
+
+    Clasificación: 0 = Fit, 1-2 = Pre-frail, ≥3 = Frail
+
+    Impacto: Frail → monoterapia o BSC; Pre-frail → doblete; Fit → triplete
+
+    Reference: Fried LP et al. J Gerontol 2001, Hurria A et al. J Clin Oncol 2011
+    """
+    missing_inputs = []
+    if weight_loss_pct in (None, ""):
+        missing_inputs.append("weight_loss_6m_pct")
+    if fatigue_score in (None, ""):
+        missing_inputs.append("fatigue_score")
+    if ecog is None and low_activity in (None, ""):
+        missing_inputs.append("low_activity")
+    if ecog is None and slow_gait in (None, ""):
+        missing_inputs.append("slow_gait")
+    if weak_grip in (None, ""):
+        missing_inputs.append("weak_grip")
+    if missing_inputs:
+        return _incomplete_score_payload(
+            score_name="Fried Frailty Index",
+            missing_inputs=missing_inputs,
+            what_score_means="Resume fragilidad física en 5 dominios y orienta si el paciente es fit, pre-frail o frail.",
+            clinical_decision_supported="Ayuda a decidir triplete vs doblete vs monoterapia/supportive care y necesidad de rehabilitación geriátrica.",
+            extra={
+                "criteria_met": None,
+                "max_criteria": 5,
+                "status": "Incomplete",
+                "criteria_detail": [],
+                "clinical_actions": ["Completar pérdida de peso, fatiga, actividad, marcha y fuerza de prensión."],
+            },
+        )
+
+    criteria_met = 0
+    criteria_detail = []
+
+    if weight_loss_pct and weight_loss_pct > 5:
+        criteria_met += 1
+        criteria_detail.append("weight_loss")
+
+    if fatigue_score is not None and fatigue_score >= 7:
+        criteria_met += 1
+        criteria_detail.append("fatigue")
+
+    if ecog is not None and ecog >= 2:
+        if not slow_gait:
+            slow_gait = True
+        if not low_activity:
+            low_activity = True
+
+    if low_activity:
+        criteria_met += 1
+        criteria_detail.append("low_activity")
+
+    if slow_gait:
+        criteria_met += 1
+        criteria_detail.append("slow_gait")
+
+    if weak_grip:
+        criteria_met += 1
+        criteria_detail.append("weak_grip")
+
+    if criteria_met == 0:
+        status = "Fit"
+    elif criteria_met <= 2:
+        status = "Pre-frail"
+    else:
+        status = "Frail"
+
+    actions = []
+    if status == "Frail":
+        actions.extend([
+            "No intensificar con triplete quimio-hormonal",
+            "Preferir monoterapia ARPI o best supportive care",
+            "Evaluación geriátrica integral antes de cualquier tratamiento activo",
+            "Considerar darolutamida (menor toxicidad neurológica)",
+        ])
+    elif status == "Pre-frail":
+        actions.extend([
+            "Doblete preferible sobre triplete",
+            "Monitoreo funcional cada 4-6 semanas",
+            "Programa de ejercicio supervisado",
+        ])
+
+    return {
+        "criteria_met": criteria_met,
+        "max_criteria": 5,
+        "status": status,
+        "criteria_detail": criteria_detail,
+        "clinical_actions": actions,
+        "is_complete": True,
+        "data_truth_status": "captured",
+        "missing_inputs": [],
+        "what_score_means": "Resume fragilidad física en 5 dominios y orienta si el paciente es fit, pre-frail o frail.",
+        "risk_category": status.upper().replace("-", "_"),
+        "risk_interpretation": f"Clasificación {status}: más criterios positivos implican menor reserva fisiológica.",
+        "clinical_decision_supported": "Ayuda a decidir triplete vs doblete vs monoterapia/supportive care y necesidad de rehabilitación geriátrica.",
+        "reference": "Fried LP et al. J Gerontol 2001 / Hurria A et al. J Clin Oncol 2011",
+    }
+
+
+def competing_mortality_estimate(age: int, cci: int = 0, egfr: float = None,
+                                 frailty_status: str = "Fit") -> dict:
+    """
+    Estimación de mortalidad competitiva (no-cáncer) a 5 y 10 años.
+
+    Modelo simplificado basado en edad + CCI + eGFR + fragilidad.
+    Probabilidad derivada de tablas actuariales ajustadas por comorbilidades.
+
+    Si mortalidad competitiva >50% a 5 años → de-escalar a QoL-centered.
+
+    Reference: Daskivich TJ et al. J Clin Oncol 2013, Cho H et al. Ann Oncol 2013
+    """
+    if not age or age <= 0:
+        return {"mortality_5yr_pct": None, "mortality_10yr_pct": None, "recommendation": "Datos insuficientes"}
+
+    # Base mortality by age (simplified actuarial)
+    if age < 60:
+        base_5 = 5
+        base_10 = 12
+    elif age < 70:
+        base_5 = 10
+        base_10 = 25
+    elif age < 75:
+        base_5 = 18
+        base_10 = 40
+    elif age < 80:
+        base_5 = 28
+        base_10 = 55
+    elif age < 85:
+        base_5 = 42
+        base_10 = 72
+    else:
+        base_5 = 58
+        base_10 = 85
+
+    # CCI adjustment
+    cci_mult = 1.0 + (cci * 0.12)
+
+    # eGFR adjustment
+    egfr_mult = 1.0
+    if egfr is not None:
+        if egfr < 30:
+            egfr_mult = 1.5
+        elif egfr < 45:
+            egfr_mult = 1.3
+        elif egfr < 60:
+            egfr_mult = 1.15
+
+    # Frailty adjustment
+    frailty_mult = {"Fit": 1.0, "Pre-frail": 1.2, "Frail": 1.5}.get(frailty_status, 1.0)
+
+    mort_5 = min(round(base_5 * cci_mult * egfr_mult * frailty_mult, 0), 95)
+    mort_10 = min(round(base_10 * cci_mult * egfr_mult * frailty_mult, 0), 99)
+
+    if mort_5 >= 50:
+        rec = "Mortalidad competitiva alta — de-escalar a manejo centrado en calidad de vida. Evitar tratamientos con beneficio solo a largo plazo."
+    elif mort_5 >= 30:
+        rec = "Mortalidad competitiva moderada — considerar tratamientos con beneficio a mediano plazo. Individualizar intensidad."
+    else:
+        rec = "Mortalidad competitiva baja — tratamiento estándar según guías."
+
+    return {
+        "mortality_5yr_pct": mort_5,
+        "mortality_10yr_pct": mort_10,
+        "recommendation": rec,
+        "inputs_used": {"age": age, "cci": cci, "egfr": egfr, "frailty_status": frailty_status},
+        "reference": "Daskivich TJ et al. J Clin Oncol 2013 / Cho H et al. Ann Oncol 2013",
+    }
+
+
+def treatment_fit_score(ecog: int = 0, cci: int = 0, g8: float = None,
+                        egfr: float = None, child_pugh: str = "A",
+                        frailty_status: str = "Fit", age: int = None) -> dict:
+    """
+    Score compuesto de fitness terapéutica.
+
+    Combina: ECOG + CCI + G8 + eGFR + Child-Pugh + Fragilidad → "Fit", "Vulnerable", "Frail"
+
+    Determina intensidad terapéutica:
+        Fit → triplete eligible
+        Vulnerable → doblete preferible
+        Frail → monoterapia o BSC
+
+    Reference: Palumbo A et al. Blood 2015, Hurria A et al. J Clin Oncol 2016
+    """
+    missing_inputs = []
+    if ecog in (None, ""):
+        missing_inputs.append("ecog")
+    if cci in (None, ""):
+        missing_inputs.append("charlson_comorbidity_index")
+    if g8 in (None, ""):
+        missing_inputs.append("g8")
+    if child_pugh in (None, ""):
+        missing_inputs.append("child_pugh")
+    if frailty_status in (None, "", "Incomplete"):
+        missing_inputs.append("frailty_status")
+    if missing_inputs:
+        return _incomplete_score_payload(
+            score_name="Treatment Fit Score",
+            missing_inputs=missing_inputs,
+            what_score_means="Integra función orgánica, carga geriátrica y fragilidad para estimar aptitud terapéutica global.",
+            clinical_decision_supported="Ayuda a decidir intensidad sistémica y necesidad de de-escalamiento o soporte antes de intensificar.",
+            extra={
+                "penalty_score": None,
+                "category": "Incomplete",
+                "recommended_intensity": "Completar ECOG, CCI, G8, Child-Pugh y fragilidad antes de usar este score para decidir.",
+                "components": {},
+            },
+        )
+
+    penalty = 0
+
+    # ECOG
+    if ecog >= 3:
+        penalty += 3
+    elif ecog >= 2:
+        penalty += 2
+    elif ecog >= 1:
+        penalty += 1
+
+    # CCI
+    if cci >= 6:
+        penalty += 3
+    elif cci >= 4:
+        penalty += 2
+    elif cci >= 2:
+        penalty += 1
+
+    # G8 (≤14 = fragilidad geriátrica)
+    if g8 is not None:
+        if g8 <= 10:
+            penalty += 3
+        elif g8 <= 14:
+            penalty += 2
+
+    # eGFR
+    if egfr is not None:
+        if egfr < 30:
+            penalty += 3
+        elif egfr < 45:
+            penalty += 2
+        elif egfr < 60:
+            penalty += 1
+
+    # Child-Pugh
+    cp_penalty = {"A": 0, "B": 2, "C": 4}.get(child_pugh.upper() if child_pugh else "A", 0)
+    penalty += cp_penalty
+
+    # Fragilidad
+    frailty_penalty = {"Fit": 0, "Pre-frail": 1, "Frail": 3}.get(frailty_status, 0)
+    penalty += frailty_penalty
+
+    # Age bonus penalty
+    if age is not None and age >= 80:
+        penalty += 1
+
+    if penalty <= 2:
+        category = "Fit"
+        intensity = "Triplete eligible si indicado clínicamente"
+    elif penalty <= 5:
+        category = "Vulnerable"
+        intensity = "Doblete preferible; evitar triplete sin justificación fuerte"
+    else:
+        category = "Frail"
+        intensity = "Monoterapia o best supportive care; triplete contraindicado"
+
+    return {
+        "penalty_score": penalty,
+        "category": category,
+        "recommended_intensity": intensity,
+        "components": {
+            "ecog_penalty": min(ecog, 3) if ecog else 0,
+            "cci_penalty": min(cci // 2, 3) if cci else 0,
+            "g8_penalty": (3 if g8 and g8 <= 10 else (2 if g8 and g8 <= 14 else 0)),
+            "egfr_penalty": (3 if egfr and egfr < 30 else (2 if egfr and egfr < 45 else (1 if egfr and egfr < 60 else 0))),
+            "child_pugh_penalty": cp_penalty,
+            "frailty_penalty": frailty_penalty,
+        },
+        "reference": "Palumbo A et al. Blood 2015 / Hurria A et al. J Clin Oncol 2016",
     }

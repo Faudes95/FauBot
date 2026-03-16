@@ -3,7 +3,7 @@
 Motor de Confrontacion con Estudios Pivotales para Cancer de Prostata.
 ======================================================================
 
-ProstaNet Fase 6 — Modulo de Evidencia Clinica
+ProstaMed Fase 6 — Modulo de Evidencia Clinica
 
 Este modulo implementa:
   1. Base de datos estructurada de ~27 estudios pivotales en cancer de prostata.
@@ -20,7 +20,7 @@ Escenarios cubiertos:
   - nmCRPC (SPARTAN, PROSPER, ARAMIS)
   - mCRPC (COU-AA-301, AFFIRM, PROfound, VISION, KEYNOTE-158, CARD, ALSYMPCA)
 
-Autores: Equipo ProstaNet
+Autores: Equipo ProstaMed
 """
 from __future__ import annotations
 
@@ -1316,7 +1316,7 @@ def generate_pivotal_report(patient_data: dict[str, Any]) -> str:
     # -- Encabezado --
     report_lines.append("=" * 80)
     report_lines.append("REPORTE DE CONFRONTACION CON ESTUDIOS PIVOTALES")
-    report_lines.append("ProstaNet — Motor de Evidencia Clinica")
+    report_lines.append("ProstaMed — Motor de Evidencia Clinica")
     report_lines.append(f"Fecha de generacion: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
     report_lines.append("=" * 80)
     report_lines.append("")
@@ -1462,7 +1462,7 @@ def generate_pivotal_report(patient_data: dict[str, Any]) -> str:
     )
     report_lines.append("")
     report_lines.append("=" * 80)
-    report_lines.append(f"Generado por ProstaNet v6.0 — {len(PIVOTAL_STUDIES)} estudios evaluados")
+    report_lines.append(f"Generado por ProstaMed v6.0 — {len(PIVOTAL_STUDIES)} estudios evaluados")
     report_lines.append("=" * 80)
 
     return "\n".join(report_lines)

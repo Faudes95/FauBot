@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ProstaNet Advanced Calculator</title>
+    <title>ProstaMed — Calculadora Avanzada</title>
     <!-- Tailwind CSS (via CDN for simplicity, or local if preferred) -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Chart.js -->
@@ -60,10 +60,11 @@
 
     <!-- Header -->
     <header class="bg-slate-900 border-b border-slate-700 p-4 flex justify-between items-center shadow-lg z-10">
-        <div class="flex items-center gap-3">
-            <div class="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center font-bold text-white">P</div>
-            <h1 class="text-xl font-bold text-white tracking-tight">ProstaNet <span
-                    class="text-blue-400 font-light">Advanced Calculator</span></h1>
+        {% set wide_logo = not ui_assets.prostamed_logo.is_fallback %}
+        <div class="flex items-center gap-3 min-w-0">
+            <img src="{{ ui_assets.prostamed_logo.src }}" alt="{{ ui_assets.prostamed_logo.alt }}" class="{{ 'h-12 w-auto max-w-[220px] object-contain' if wide_logo else 'w-9 h-9 object-contain' }}">
+            <h1 class="text-xl font-bold text-white tracking-tight">{{ 'Calculadora Avanzada' if wide_logo else 'ProstaMed' }}{% if not wide_logo %} <span
+                    class="text-blue-400 font-light">Calculadora Avanzada</span>{% endif %}</h1>
         </div>
         <div class="text-xs text-slate-500">v2.2 (NCCN 2025)</div>
     </header>
@@ -312,10 +313,10 @@
                 <div class="flex justify-between items-end border-b-2 border-slate-200 pb-4 mb-6">
                     <div>
                         <h2 class="text-2xl font-bold text-slate-800">Informe Clínico Automatizado</h2>
-                        <p class="text-sm text-slate-500">Generado por ProstaNet AI v2.2</p>
+                        <p class="text-sm text-slate-500">Generado por ProstaMed v2.2</p>
                     </div>
                     <div class="text-right">
-                        <img src="https://api.qrserver.com/v1/create-qr-code/?size=60x60&data=ProstaNetReport" alt="QR"
+                        <img src="https://api.qrserver.com/v1/create-qr-code/?size=60x60&data=ProstaMedReport" alt="QR"
                             class="opacity-80">
                     </div>
                 </div>

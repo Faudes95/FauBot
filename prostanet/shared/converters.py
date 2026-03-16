@@ -43,6 +43,26 @@ def is_truthy(value):
     return s in ("si", "sí", "yes", "true", "1", "on")
 
 
+def safe_bool(value, default=None):
+    """Coerce explícitamente bool desde bool/int/str; retorna default si es ambiguo."""
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+        return default
+    s = str(value).strip().lower()
+    if s in ("si", "sí", "yes", "true", "1", "on"):
+        return True
+    if s in ("no", "false", "0", "off"):
+        return False
+    return default
+
+
 def parse_json_blob(value, default=None):
     """Parsea un campo JSON almacenado como TEXT en SQLite."""
     if default is None:

@@ -3,9 +3,12 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
+from prostanet.shared.metastatic_profile import derive_legacy_metastasis, derive_mhspc_volume_context
+
 from prostanet.application.module_registry import ModuleRegistry
 from prostanet.domains.patient_tracking.event_graph import merge_record_into_assessment_payload
 from prostanet.domains.patient_tracking.followup_agenda import build_agenda_board, infer_management_track
+from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
 from prostanet.shared.contracts import ClinicalSignalSet, NextBestAction, RecommendationAudit, StateTransitionProposal
 
 
@@ -91,8 +94,7 @@ def _derive_current_treatment(patient: dict[str, Any]) -> str:
 
 def _derive_metastatic_context(patient: dict[str, Any]) -> tuple[str, int]:
     baseline = patient.get("baseline") or {}
-    metastasis_site = str(baseline.get("metastasis_site") or "M0")
-    metastasis_count = _safe_int(baseline.get("metastasis_count")) or 0
+    metastasis_site, metastasis_count, _ = derive_legacy_metastasis(baseline)
     imaging = patient.get("imaging") or []
     for study in imaging:
         study_type = str(study.get("study_type", "")).lower()
@@ -187,17 +189,19 @@ def _derive_conventional_imaging_status(patient: dict[str, Any], state: str) -> 
 
 
 def build_state_classifier_payload(patient: dict[str, Any], latest_assessment: dict[str, Any] | None = None) -> dict[str, Any]:
-    state = _current_state(patient, latest_assessment)
+    reconciliation = build_reconciled_state(patient, latest_assessment)
+    state = reconciliation.get("reconciled_state") or _current_state(patient, latest_assessment)
     metastasis_site, metastasis_count = _derive_metastatic_context(patient)
+    supporting_evidence = reconciliation.get("supporting_evidence", {})
     state_payload = {
-        "known_cancer_diagnosis": 1 if _biopsy_confirms_cancer(patient) or state not in DIAGNOSTIC_STATES else 0,
+        "known_cancer_diagnosis": 1 if supporting_evidence.get("confirmed_cancer") or state not in DIAGNOSTIC_STATES else 0,
         "prior_negative_biopsy": 1 if state == "post_negative_biopsy_followup" else 0,
         "prior_prostatectomy": 1 if patient.get("surgery") else 0,
         "prior_radiation": 1 if patient.get("radiation") else 0,
         "bcr2": 1 if str((patient.get("bcr") or {}).get("bcr_definition", "")).upper() == "BCR2" else 0,
         "metastasis_site": metastasis_site,
         "metastasis_count": metastasis_count,
-        "volume_disease": (patient.get("baseline") or {}).get("volume_disease") or ("High" if metastasis_count >= 4 or metastasis_site == "Visceral" else "Low"),
+        "volume_disease": derive_mhspc_volume_context(patient.get("baseline") or {}) or ("high" if metastasis_count >= 4 or metastasis_site == "Visceral" else "low"),
         "metachronous_metastasis": 1 if state == "mcspc_oligo_metachronous" else 0,
         "psa_current": _safe_float(_latest(patient.get("follow_ups", []), "visit_date").get("psa_current")) or _safe_float((patient.get("bcr") or {}).get("bcr_psa")) or _safe_float((patient.get("baseline") or {}).get("baseline_psa")),
         "current_adt_context": _derive_current_adt_context(patient, state),
@@ -248,8 +252,10 @@ def _build_mcode_projection(patient: dict[str, Any], state: str, management_trac
 
 
 def build_clinical_signals(patient: dict[str, Any], latest_assessment: dict[str, Any] | None = None) -> dict[str, Any]:
-    state = _current_state(patient, latest_assessment)
-    management_track = infer_management_track(patient, state, latest_assessment or patient.get("latest_assessment"))
+    reconciliation = build_reconciled_state(patient, latest_assessment)
+    explicit_state = reconciliation.get("explicit_state") or _current_state(patient, latest_assessment)
+    state = reconciliation.get("reconciled_state") or explicit_state
+    management_track = reconciliation.get("reconciled_management_track") or infer_management_track(patient, state, latest_assessment or patient.get("latest_assessment"))
     latest_followup = _latest(patient.get("follow_ups", []), "visit_date")
     latest_biopsy = _latest(patient.get("biopsies", []), "biopsy_date")
     latest_mri = _latest(patient.get("mri_facts", []), "fact_date")
@@ -390,7 +396,14 @@ def build_clinical_signals(patient: dict[str, Any], latest_assessment: dict[str,
         active_safety=active_safety,
         mcode_projection=_build_mcode_projection(patient, state, management_track),
         evidence_basis=COMMON_EVIDENCE,
-    ).to_dict()
+    ).to_dict() | {
+        "explicit_state": explicit_state,
+        "reconciled_state": state,
+        "reconciled_management_track": management_track,
+        "state_conflict_flag": bool(reconciliation.get("state_conflict_flag")),
+        "state_conflict_reason": reconciliation.get("state_conflict_reason", ""),
+        "supporting_evidence": reconciliation.get("supporting_evidence", {}),
+    }
 
 
 def build_state_transition_proposals(
@@ -398,8 +411,10 @@ def build_state_transition_proposals(
     signals: dict[str, Any],
     latest_assessment: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    current_state = signals.get("state") or _current_state(patient, latest_assessment)
-    current_track = signals.get("management_track") or infer_management_track(patient, current_state, latest_assessment or patient.get("latest_assessment"))
+    reconciliation = build_reconciled_state(patient, latest_assessment)
+    explicit_state = reconciliation.get("explicit_state") or _current_state(patient, latest_assessment)
+    current_state = signals.get("reconciled_state") or signals.get("state") or reconciliation.get("reconciled_state") or explicit_state
+    current_track = signals.get("reconciled_management_track") or signals.get("management_track") or reconciliation.get("reconciled_management_track") or infer_management_track(patient, current_state, latest_assessment or patient.get("latest_assessment"))
     proposals: list[dict[str, Any]] = []
     latest_biopsy = _latest(patient.get("biopsies", []), "biopsy_date")
     latest_followup = _latest(patient.get("follow_ups", []), "visit_date")
@@ -407,6 +422,25 @@ def build_state_transition_proposals(
     registry = ModuleRegistry()
     classifier_payload = build_state_classifier_payload(patient, latest_assessment)
     classifier_target = registry.classify_state(classifier_payload).get("state")
+
+    if reconciliation.get("state_conflict_flag") and current_state != explicit_state:
+        proposals.append(
+            StateTransitionProposal(
+                proposal_key=f"{explicit_state}:{current_state}:reconciled",
+                from_state=explicit_state,
+                from_management_track=infer_management_track(patient, explicit_state, latest_assessment or patient.get("latest_assessment")),
+                target_state=current_state,
+                target_management_track=current_track,
+                priority="high",
+                rationale=reconciliation.get("state_conflict_reason") or "La evolución longitudinal contradice el estado persistido.",
+                trigger_signals=(signals.get("critical_missing") or [])[:2] or ["Reconciliación longitudinal del estado"],
+                next_actions=[
+                    f"Confirmar transición a {current_state}",
+                    "Recalcular agenda, evidencia y seguimiento sobre el estado reconciliado",
+                ],
+                evidence_basis=COMMON_EVIDENCE,
+            ).to_dict()
+        )
 
     if current_state in DIAGNOSTIC_STATES and _biopsy_confirms_cancer(patient):
         proposals.append(
@@ -501,10 +535,10 @@ def build_next_best_action(
     proposals: list[dict[str, Any]],
     latest_assessment: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    state = signals.get("state") or _current_state(patient, latest_assessment)
-    management_track = signals.get("management_track") or infer_management_track(patient, state, latest_assessment or patient.get("latest_assessment"))
+    state = signals.get("reconciled_state") or signals.get("state") or _current_state(patient, latest_assessment)
+    management_track = signals.get("reconciled_management_track") or signals.get("management_track") or infer_management_track(patient, state, latest_assessment or patient.get("latest_assessment"))
     agenda = build_agenda_board(patient, state, management_track, latest_assessment or patient.get("latest_assessment"))
-    due_titles = [item.get("title") for item in agenda.get("items", []) if item.get("status") in {"due", "overdue"}][:3]
+    due_titles = [item.get("title") for item in agenda.get("active_items", agenda.get("items", [])) if item.get("status") in {"due", "overdue"}][:3]
     checkpoint_actions = [item.get("action") for item in agenda.get("therapy_checkpoints", []) if item.get("status") in {"attention", "ready"} and item.get("action")][:2]
     result = (latest_assessment or patient.get("latest_assessment") or {}).get("result_snapshot", {})
     eligible = result.get("eligible_treatments", []) or []
@@ -603,4 +637,10 @@ def build_longitudinal_intelligence_bundle(
         "signals": signals,
         "transition_proposals": proposals,
         "next_best_action": next_best_action,
+        "reconciliation": {
+            "reconciled_state": signals.get("reconciled_state") or signals.get("state"),
+            "reconciled_management_track": signals.get("reconciled_management_track") or signals.get("management_track"),
+            "state_conflict_flag": signals.get("state_conflict_flag", False),
+            "state_conflict_reason": signals.get("state_conflict_reason", ""),
+        },
     }

@@ -6,6 +6,7 @@ from prostanet.application.module_registry import ModuleRegistry
 from prostanet.domains.clinical_assessments.service import ClinicalAssessmentService
 from prostanet.domains.clinical_assessments.scenario_harness import run_scenario_harness
 from prostanet.domains.patient_tracking.service import PatientTrackingService
+from prostanet.shared.converters import safe_bool, safe_float, safe_int
 from prostanet.shared.presentation_text import (
     humanize_assessment,
     humanize_care_overlays,
@@ -51,6 +52,13 @@ def _coerce_payload(payload: dict, schema: dict) -> dict:
                 continue
             coerced[name] = numeric if "." in text else int(numeric)
     return coerced
+
+
+def _validated_bool(value, field_name: str, *, default=None):
+    parsed = safe_bool(value, default=default)
+    if value not in (None, "") and parsed is None:
+        raise ValueError(f"Valor no válido para '{field_name}'. Use true/false, 1/0, si/no o yes/no.")
+    return parsed
 
 
 @modular_api.route("/api/state-classifier", methods=["POST"])
@@ -237,34 +245,40 @@ def recompute_patient_care_plan_route(nss: str) -> tuple:
 def patient_schedule(patient_id: int) -> tuple:
     """Genera el calendario de seguimiento programado para el paciente."""
     import tracking_db
-    from prostanet.domains.patient_tracking.schedule_engine import generate_schedule
-    from prostanet.domains.patient_tracking.followup_agenda import infer_management_track
+    from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
 
     try:
         patient = tracking_db.get_patient_full_record(patient_id)
         if not patient:
             return jsonify({"success": False, "error": "Paciente no encontrado."}), 404
 
-        state = (patient.get("latest_assessment") or {}).get("state") or (patient.get("prior_history") or {}).get("current_state") or "diagnostic_workup"
-        track = request.args.get("track") or infer_management_track(patient, state, patient.get("latest_assessment"))
+        reconciliation = build_reconciled_state(patient, patient.get("latest_assessment"))
+        state = reconciliation.get("reconciled_state") or "diagnostic_workup"
+        track = request.args.get("track") or reconciliation.get("reconciled_management_track") or "diagnostic_surveillance"
 
-        identity = patient.get("identity", {})
-        start_date = identity.get("diagnosis_date") or identity.get("created_at", "")
         horizon = int(request.args.get("horizon_months", 12))
-
-        schedule = generate_schedule(
-            patient_id=patient_id,
+        schedule_bundle = tracking_db.sync_scheduled_events(
+            patient,
+            state=state,
             management_track=track,
-            treatment_start_date=start_date,
             horizon_months=horizon,
         )
 
         return jsonify({
             "success": True,
-            "state": state,
-            "management_track": track,
-            "schedule": [ev.to_dict() for ev in schedule],
-            "total_events": len(schedule),
+            "state": schedule_bundle.get("state", state),
+            "management_track": schedule_bundle.get("management_track", track),
+            "reconciled_state": reconciliation.get("reconciled_state", state),
+            "state_conflict_flag": reconciliation.get("state_conflict_flag", False),
+            "state_conflict_reason": reconciliation.get("state_conflict_reason", ""),
+            "anchor_date": schedule_bundle.get("anchor_date", ""),
+            "anchor_source": schedule_bundle.get("anchor_source", ""),
+            "protocol_trace": schedule_bundle.get("protocol_trace", {}),
+            "protocol_label": schedule_bundle.get("protocol_label", ""),
+            "schedule": schedule_bundle.get("schedule", []),
+            "active_schedule": schedule_bundle.get("active_schedule", schedule_bundle.get("schedule", [])),
+            "archived_schedule": schedule_bundle.get("archived_schedule", []),
+            "total_events": len(schedule_bundle.get("schedule", [])),
         })
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500
@@ -274,29 +288,33 @@ def patient_schedule(patient_id: int) -> tuple:
 def patient_overdue(patient_id: int) -> tuple:
     """Detecta eventos de seguimiento vencidos."""
     import tracking_db
-    from prostanet.domains.patient_tracking.schedule_engine import check_overdue
-    from prostanet.domains.patient_tracking.followup_agenda import infer_management_track
+    from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
 
     try:
         patient = tracking_db.get_patient_full_record(patient_id)
         if not patient:
             return jsonify({"success": False, "error": "Paciente no encontrado."}), 404
 
-        state = (patient.get("latest_assessment") or {}).get("state") or "diagnostic_workup"
-        track = infer_management_track(patient, state, patient.get("latest_assessment"))
-
-        identity = patient.get("identity", {})
-        start_date = identity.get("diagnosis_date") or identity.get("created_at", "")
-
-        overdue = check_overdue(
-            patient_id=patient_id,
+        reconciliation = build_reconciled_state(patient, patient.get("latest_assessment"))
+        state = reconciliation.get("reconciled_state") or "diagnostic_workup"
+        track = reconciliation.get("reconciled_management_track") or "diagnostic_surveillance"
+        schedule_bundle = tracking_db.sync_scheduled_events(
+            patient,
+            state=state,
             management_track=track,
-            treatment_start_date=start_date,
+            horizon_months=int(request.args.get("horizon_months", 12)),
         )
+        overdue = [item for item in (schedule_bundle.get("active_schedule") or schedule_bundle.get("schedule") or []) if item.get("status") == "overdue" and not item.get("completed")]
 
         return jsonify({
             "success": True,
-            "overdue_alerts": [a.to_dict() for a in overdue],
+            "reconciled_state": reconciliation.get("reconciled_state", state),
+            "state_conflict_flag": reconciliation.get("state_conflict_flag", False),
+            "state_conflict_reason": reconciliation.get("state_conflict_reason", ""),
+            "anchor_date": schedule_bundle.get("anchor_date", ""),
+            "anchor_source": schedule_bundle.get("anchor_source", ""),
+            "protocol_trace": schedule_bundle.get("protocol_trace", {}),
+            "overdue_alerts": overdue,
             "overdue_count": len(overdue),
         })
     except Exception as exc:
@@ -308,6 +326,7 @@ def patient_clinical_alerts(patient_id: int) -> tuple:
     """Ejecuta el motor de alertas clínicas y retorna alertas activas."""
     import tracking_db
     from prostanet.domains.patient_tracking.alert_engine import ClinicalAlertEngine
+    from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
 
     try:
         patient = tracking_db.get_patient_full_record(patient_id)
@@ -332,13 +351,27 @@ def patient_clinical_alerts(patient_id: int) -> tuple:
             alert_data["alp"] = last.get("alp_current")
             if len(followups) >= 2:
                 alert_data["ecog_previous"] = followups[-2].get("ecog_current")
+        adt_context = alert_data.get("current_adt_context") or alert_data.get("adt_context")
+        if adt_context:
+            alert_data["adt_context"] = adt_context
+            alert_data["current_adt_context"] = adt_context
 
         # Include assessment state info
         assessment = patient.get("latest_assessment")
-        if assessment:
-            state = assessment.get("state", "")
-            from prostanet.domains.patient_tracking.followup_agenda import infer_management_track
-            alert_data["management_track"] = infer_management_track(patient, state, assessment)
+        reconciliation = build_reconciled_state(patient, assessment)
+        state = reconciliation.get("reconciled_state", "")
+        alert_data["management_track"] = reconciliation.get("reconciled_management_track", "")
+        alert_data["reconciled_state"] = state
+        snapshot = assessment.get("input_snapshot", {}) if isinstance(assessment, dict) else {}
+        adt_context = (
+            alert_data.get("current_adt_context")
+            or alert_data.get("adt_context")
+            or snapshot.get("current_adt_context")
+            or snapshot.get("adt_context")
+        )
+        if adt_context:
+            alert_data["adt_context"] = adt_context
+            alert_data["current_adt_context"] = adt_context
 
         alerts = ClinicalAlertEngine.run_all(patient_id, alert_data)
 
@@ -371,32 +404,46 @@ def patient_response_assessment(patient_id: int) -> tuple:
         # Soft tissue assessment (RECIST 1.1)
         st_data = data.get("soft_tissue")
         if st_data:
+            current_sum = safe_float(st_data.get("current_sum_mm"), None)
+            baseline_sum = safe_float(st_data.get("baseline_sum_mm"), None)
+            if current_sum is None or baseline_sum is None:
+                raise ValueError("Para evaluar tejidos blandos se requieren 'current_sum_mm' y 'baseline_sum_mm'.")
             soft_tissue = ResponseAssessmentService.assess_soft_tissue(
-                current_sum_mm=float(st_data.get("current_sum_mm", 0)),
-                baseline_sum_mm=float(st_data.get("baseline_sum_mm", 0)),
-                nadir_sum_mm=float(st_data.get("nadir_sum_mm", 0)) or None,
-                new_lesions=bool(st_data.get("new_lesions", False)),
-                non_target_progression=bool(st_data.get("non_target_progression", False)),
+                current_sum_mm=current_sum,
+                baseline_sum_mm=baseline_sum,
+                nadir_sum_mm=safe_float(st_data.get("nadir_sum_mm"), None),
+                new_lesions=_validated_bool(st_data.get("new_lesions"), "soft_tissue.new_lesions", default=False),
+                non_target_progression=_validated_bool(st_data.get("non_target_progression"), "soft_tissue.non_target_progression", default=False),
             )
 
         # Bone assessment (PCWG3)
         bone_data = data.get("bone")
         if bone_data:
+            lesion_count = safe_int(bone_data.get("new_lesion_count"), None)
+            if lesion_count is None:
+                raise ValueError("Para evaluar respuesta ósea se requiere 'new_lesion_count'.")
             bone = ResponseAssessmentService.assess_bone(
-                new_lesion_count=int(bone_data.get("new_lesion_count", 0)),
-                prior_scan_new_lesions=int(bone_data.get("prior_scan_new_lesions", 0)),
-                is_first_assessment=bool(bone_data.get("is_first_assessment", False)),
+                new_lesion_count=lesion_count,
+                prior_scan_new_lesions=safe_int(bone_data.get("prior_scan_new_lesions"), 0),
+                is_first_assessment=_validated_bool(bone_data.get("is_first_assessment"), "bone.is_first_assessment", default=False),
             )
 
         # PSA response
         psa_data = data.get("psa")
         if psa_data:
+            baseline_psa = safe_float(psa_data.get("baseline_psa"), None)
+            current_psa = safe_float(psa_data.get("current_psa"), None)
+            if baseline_psa is None or current_psa is None:
+                raise ValueError("Para evaluar respuesta por PSA se requieren 'baseline_psa' y 'current_psa'.")
             psa = ResponseAssessmentService.assess_psa(
-                baseline_psa=float(psa_data.get("baseline_psa", 0)),
-                current_psa=float(psa_data.get("current_psa", 0)),
-                nadir_psa=float(psa_data.get("nadir_psa", 0)) or None,
-                confirmed_at_4_weeks=bool(psa_data.get("confirmed", False)),
+                baseline_psa=baseline_psa,
+                current_psa=current_psa,
+                nadir_psa=safe_float(psa_data.get("nadir_psa"), None),
+                confirmed_at_4_weeks=_validated_bool(psa_data.get("confirmed"), "psa.confirmed", default=False),
             )
+
+        if not any((soft_tissue, bone, psa)):
+            raise ValueError("Se requiere al menos un bloque válido: 'soft_tissue', 'bone' o 'psa'.")
 
         # Composite
         composite = ResponseAssessmentService.composite_response(soft_tissue, bone, psa)
@@ -431,8 +478,21 @@ def patient_response_assessment(patient_id: int) -> tuple:
                     __import__("json").dumps(composite.to_dict(), ensure_ascii=False),
                 ),
             )
+            assessment_id = c.lastrowid
             conn.commit()
             conn.close()
+            event_id = tracking_db.record_patient_event(
+                patient_id,
+                event_type="study_resulted",
+                event_date=None,
+                state_context=(patient.get("latest_assessment") or {}).get("state", ""),
+                management_track=(patient.get("latest_signal_snapshot") or {}).get("management_track", ""),
+                source_type="response_assessment",
+                source_record_id=assessment_id,
+                payload={"response": composite.to_dict()},
+                mcode_focus={"resource": "response_assessment"},
+            )
+            tracking_db.refresh_longitudinal_intelligence(patient_id, event_id=event_id, force_recompute=False)
         except Exception as db_err:
             import logging
             logging.getLogger(__name__).warning("Error persisting response assessment: %s", db_err)
@@ -660,7 +720,7 @@ def diagnostic_calculators() -> tuple:
 def response_visualization(patient_id: int) -> tuple:
     """Genera datos de visualización de respuesta terapéutica (waterfall, spider, swimmer)."""
     from prostanet.domains.reporting.response_visualization import ResponseVisualizationService
-    from tracking_db import get_full_record, get_db_connection
+    from tracking_db import get_full_record
 
     try:
         record = get_full_record(patient_id)
@@ -670,43 +730,8 @@ def response_visualization(patient_id: int) -> tuple:
         treatments = record.get("treatments") or []
         baseline_psa = (record.get("baseline") or {}).get("baseline_psa")
         diagnosis_date = (record.get("identity") or {}).get("diagnosis_date")
-
-        # Obtener lesiones con mediciones
-        lesion_data = []
-        try:
-            conn = get_db_connection()
-            c = conn.cursor()
-            c.execute("SELECT id, lesion_id, anatomical_location, lesion_category FROM lesion_tracking WHERE patient_id = ?", (patient_id,))
-            for tl in c.fetchall():
-                c.execute(
-                    "SELECT measurement_date, longest_diameter_mm, suvmax, volume_ml FROM lesion_measurements WHERE lesion_id = ? ORDER BY measurement_date ASC",
-                    (tl["id"],)
-                )
-                measurements = [dict(m) for m in c.fetchall()]
-                if measurements:
-                    lesion_data.append({
-                        "lesion_id": tl["lesion_id"] or str(tl["id"]),
-                        "anatomical_location": tl["anatomical_location"],
-                        "lesion_category": tl["lesion_category"],
-                        "measurements": measurements,
-                    })
-            conn.close()
-        except Exception:
-            pass
-
-        # Obtener serie PSA longitudinal
-        psa_series = []
-        try:
-            conn = get_db_connection()
-            c = conn.cursor()
-            c.execute(
-                "SELECT sample_date, value FROM biomarker_longitudinal WHERE patient_id = ? AND biomarker_type = 'PSA' ORDER BY sample_date ASC",
-                (patient_id,),
-            )
-            psa_series = [dict(r) for r in c.fetchall()]
-            conn.close()
-        except Exception:
-            pass
+        lesion_data = record.get("lesion_tracking") or []
+        psa_series = record.get("psa_series") or []
 
         bundle = ResponseVisualizationService.build_visualization_bundle(
             treatments=treatments,

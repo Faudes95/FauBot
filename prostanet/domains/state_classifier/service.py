@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from prostanet.shared.metastatic_profile import derive_legacy_metastasis, derive_mhspc_volume_context
+
 
 class StateClassifierService:
     def classify(self, payload: dict) -> dict:
         known_cancer_diagnosis = self._is_true(payload.get("known_cancer_diagnosis", 1))
         prior_negative_biopsy = self._is_true(payload.get("prior_negative_biopsy"))
-        metastasis_site = str(payload.get("metastasis_site", "M0") or "M0")
-        metastasis_count = int(float(payload.get("metastasis_count", 0) or 0))
+        metastasis_site, metastasis_count, m_substage = derive_legacy_metastasis(payload)
         systemic_progression_context = str(payload.get("systemic_progression_context", "none") or "none")
         current_adt_context = str(payload.get("current_adt_context", "none") or "none")
         castrate_status = self._normalize_castrate_status(payload)
@@ -32,7 +33,7 @@ class StateClassifierService:
             prior_radiation = self._is_true(payload.get("prior_radiation"))
             bcr2 = self._is_true(payload.get("bcr2"))
             metachronous = self._is_true(payload.get("metachronous_metastasis"))
-            volume_disease = str(payload.get("volume_disease", "Low") or "Low").lower()
+            volume_disease = str(payload.get("volume_disease") or derive_mhspc_volume_context(payload) or "low").lower()
         castration_resistant = (
             legacy_crpc_signal
             or systemic_progression_context == "confirmed_crpc"
@@ -79,7 +80,7 @@ class StateClassifierService:
         elif metastatic:
             if metachronous and metastasis_count <= 5:
                 module = "mcspc_oligo_metachronous"
-            elif volume_disease == "high" or metastasis_count >= 4 or metastasis_site.lower() == "visceral":
+            elif volume_disease == "high" or metastasis_count >= 4 or metastasis_site.lower() == "visceral" or m_substage == "M1c":
                 module = "mcspc_high_volume"
             else:
                 module = "mcspc_low_volume_sync_oligo"

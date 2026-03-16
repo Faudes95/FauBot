@@ -7,6 +7,7 @@ import os
 import sys
 import json
 import logging
+import sqlite3
 from datetime import datetime
 
 from flask import Flask, render_template, request, jsonify, redirect, url_for
@@ -16,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from prostate_cancer_model import load_all
 from prostanet.domains.patient_tracking.service import PatientTrackingService
 from prostanet.presentation.bootstrap import register_modular_blueprints
+from prostanet.presentation.ui_assets import build_ui_assets
 from prostanet.presentation.view_models import build_page_chrome
 from prostanet.shared.feature_flags import resolve_feature_flags
 from tracking_db import configure_db_path, get_stats, init_tracking_db, patient_exists
@@ -65,11 +67,24 @@ REGISTER_NUMERIC_FIELDS = (
     "prior_docetaxel_cycles",
     "prior_arpi_duration",
     "line_of_therapy",
+    "line_of_therapy_number",
     "metastasis_count",
     "ecog_score",
     "ipss_score",
     "iief5_score",
     "paquetes_anio",
+    "weight_kg",
+    "bmi_current",
+    "weight_loss_6m_pct",
+    "mini_cog_score",
+    "fatigue_score",
+    "g8_food_intake",
+    "g8_weight_loss",
+    "g8_mobility",
+    "g8_neuropsych",
+    "g8_bmi",
+    "g8_medications",
+    "g8_self_health",
 )
 FOLLOWUP_NUMERIC_FIELDS = (
     "psa",
@@ -83,6 +98,11 @@ FOLLOWUP_NUMERIC_FIELDS = (
 )
 
 app.config.update(DEFAULT_APP_CONFIG)
+
+
+@app.context_processor
+def inject_ui_assets():
+    return {"ui_assets": build_ui_assets()}
 
 model = None
 artifacts = None
@@ -115,6 +135,89 @@ def validate_numeric_fields(data, field_names):
             float(value)
         except (TypeError, ValueError):
             raise ValueError(f"'{field}' debe ser numérico.")
+
+
+def _reconciled_patient_snapshot(record):
+    from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
+
+    reconciliation = build_reconciled_state(record, record.get("latest_assessment"))
+    return {
+        "reconciled_state": reconciliation.get("reconciled_state") or "diagnostic_workup",
+        "reconciled_management_track": reconciliation.get("reconciled_management_track") or "diagnostic_surveillance",
+        "state_conflict_flag": reconciliation.get("state_conflict_flag", False),
+        "state_conflict_reason": reconciliation.get("state_conflict_reason", ""),
+    }
+
+
+def _analysis_dataset_payload():
+    import tracking_db
+    from prostanet.domains.patient_tracking.cohort_analytics import (
+        build_analysis_dataset_row,
+        compute_patient_cohort_completeness,
+        compute_patient_endpoint_readiness,
+        compute_patient_research_readiness,
+        summarize_cohort,
+    )
+
+    stats_conn = tracking_db._connect()
+    stats_conn.row_factory = sqlite3.Row
+    cursor = stats_conn.cursor()
+    cursor.execute("SELECT id FROM patient_identity ORDER BY id ASC")
+    patient_ids = [row["id"] for row in cursor.fetchall()]
+    stats_conn.close()
+
+    analysis_rows = []
+    enriched_records = []
+    for patient_id in patient_ids:
+        record = tracking_db.get_patient_full_record(patient_id)
+        if not record:
+            continue
+        reconciliation = _reconciled_patient_snapshot(record)
+        state = reconciliation["reconciled_state"]
+        management_track = reconciliation["reconciled_management_track"]
+        latest_signals = dict(record.get("latest_signal_snapshot") or {})
+        latest_signals.update(reconciliation)
+        record["reconciled_state"] = state
+        record["reconciled_management_track"] = management_track
+        record["latest_signal_snapshot"] = latest_signals
+        analysis_rows.append(build_analysis_dataset_row(record, state, management_track, latest_signals))
+        enriched_records.append(record)
+
+    summary = summarize_cohort(enriched_records)
+    completeness_rows = [
+        {
+            "patient_uid": row["patient_uid"],
+            "nss_hash_hint": row["nss_hash_hint"],
+            "reconciled_state": row["reconciled_state"],
+            **compute_patient_cohort_completeness(record, record["reconciled_state"]),
+        }
+        for row, record in zip(analysis_rows, enriched_records)
+    ]
+    readiness_rows = [
+        {
+            "patient_uid": row["patient_uid"],
+            "nss_hash_hint": row["nss_hash_hint"],
+            "reconciled_state": row["reconciled_state"],
+            **compute_patient_research_readiness(record, record["reconciled_state"]),
+        }
+        for row, record in zip(analysis_rows, enriched_records)
+    ]
+    endpoint_rows = [
+        {
+            "patient_uid": row["patient_uid"],
+            "nss_hash_hint": row["nss_hash_hint"],
+            "reconciled_state": row["reconciled_state"],
+            **compute_patient_endpoint_readiness(record, record["reconciled_state"]),
+        }
+        for row, record in zip(analysis_rows, enriched_records)
+    ]
+    return {
+        "analysis_rows": analysis_rows,
+        "cohort_completeness_rows": completeness_rows,
+        "research_readiness_rows": readiness_rows,
+        "endpoint_readiness_rows": endpoint_rows,
+        "summary": summary,
+    }
 
 
 def ensure_model_loaded():
@@ -210,6 +313,8 @@ def dashboard():
 
 @app.route("/patient_intake")
 def patient_intake():
+    from prostanet.domains.patient_tracking.therapy_catalog import therapy_catalog_entries
+
     assessment_id = request.args.get("assessment_id", "").strip()
     if not assessment_id:
         return redirect("/clinical-hub")
@@ -219,7 +324,12 @@ def patient_intake():
         "Ruta temporal de compatibilidad. El ingreso visible de nuevos casos ahora debe iniciar desde el centro clínico.",
         content_width_class="max-w-5xl",
     )
-    return render_template("patient_intake.html", assessment_id=assessment_id, page_chrome=page_chrome)
+    return render_template(
+        "patient_intake.html",
+        assessment_id=assessment_id,
+        page_chrome=page_chrome,
+        therapy_catalog_entries=therapy_catalog_entries(),
+    )
 
 
 @app.route("/favicon.ico")
@@ -284,7 +394,7 @@ def patient_profile(nss):
                 if last_visit.get('psa_current') is not None:
                     current_context['psa_current'] = last_visit['psa_current']
 
-            current_context.setdefault('line_of_therapy', 1)
+            current_context.setdefault('line_of_therapy', current_context.get('line_of_therapy_number'))
             current_context.setdefault('psa', current_context.get('baseline_psa', 0))
             current_context.setdefault('age', age)
             current_context.setdefault('ecog', current_context.get('ecog_score', 0))
@@ -323,12 +433,16 @@ def patient_profile(nss):
                     "visit_schema": {},
                     "therapy_checkpoints": [],
                     "protocol_comparators": [],
+                    "protocol_trace": {},
                     "data_provenance": [],
                     "clinical_signals": {},
                     "next_best_action": {},
                     "transition_proposals": [],
                     "recommendation_audit": [],
                     "document_board": {},
+                    "advanced_panel_context": {},
+                    "missing_inputs_by_panel": {},
+                    "evidence_applicability": {},
                     "recommendations": recs,
                     "copilot": {},
                 }
@@ -350,6 +464,9 @@ def patient_profile(nss):
             state_timeline=state_timeline,
             care_overlays=care_overlays,
             profile_view=profile_view,
+            agenda_board=profile_view.get("agenda_board", {}) if isinstance(profile_view, dict) else {},
+            visit_schema=profile_view.get("visit_schema", {}) if isinstance(profile_view, dict) else {},
+            agenda_item_form_context=profile_view.get("agenda_item_form_context", {}) if isinstance(profile_view, dict) else {},
             page_chrome=page_chrome,
         )
     except Exception as e:
@@ -392,7 +509,8 @@ def api_patient_agenda(nss):
         agenda = tracking_db.get_patient_agenda(nss)
         if agenda is None:
             return error_response("Paciente no encontrado", 404)
-        return jsonify({"success": True, "agenda": agenda})
+        record = tracking_db.get_patient_full_record(nss)
+        return jsonify({"success": True, "agenda": agenda, **_reconciled_patient_snapshot(record or {})})
     except Exception as e:
         logger.error(f"Error getting patient agenda: {e}")
         return error_response(str(e), 500)
@@ -525,11 +643,51 @@ def api_visit_schema(patient_id):
         patient = tracking_db.get_patient_full_record(patient_id)
         if not patient:
             return error_response("Paciente no encontrado", 404)
-        from prostanet.domains.patient_tracking.followup_agenda import build_visit_schema, infer_management_track
+        from prostanet.domains.patient_tracking.followup_agenda import build_visit_schema
 
-        state = request.args.get("state") or (patient.get("latest_assessment") or {}).get("state") or (patient.get("prior_history") or {}).get("current_state") or "diagnostic_workup"
-        track = request.args.get("track") or infer_management_track(patient, state, patient.get("latest_assessment"))
-        return jsonify({"success": True, "state": state, "management_track": track, "visit_schema": build_visit_schema(state, track)})
+        reconciliation = _reconciled_patient_snapshot(patient)
+        state = request.args.get("state") or reconciliation["reconciled_state"]
+        track = request.args.get("track") or reconciliation["reconciled_management_track"]
+        agenda_item = None
+        capture_fields = [field.strip() for field in str(request.args.get("fields") or "").split(",") if field.strip()]
+        capture_context = None
+        agenda_id = request.args.get("agenda_id")
+        if agenda_id:
+            try:
+                agenda_id_int = int(agenda_id)
+            except (TypeError, ValueError):
+                return error_response("agenda_id inválido", 400)
+            agenda_item = next((item for item in (patient.get("agenda_items") or []) if int(item.get("id") or 0) == agenda_id_int), None)
+            if agenda_item is None:
+                return error_response("Item de agenda no encontrado", 404)
+        elif capture_fields:
+            capture_context = {
+                "title": request.args.get("capture_title") or "Completar datos críticos",
+                "rationale": request.args.get("capture_rationale") or "Completa variables faltantes del flujo clínico.",
+                "decision_affected": request.args.get("decision_affected") or "",
+                "module_owner": request.args.get("module_owner") or "",
+                "form_scope": {
+                    "mode": "capture_block",
+                    "focus": request.args.get("capture_group") or "clinical_completion",
+                    "fields": capture_fields,
+                },
+            }
+        visit_schema = build_visit_schema(
+            state,
+            track,
+            agenda_item=agenda_item,
+            field_scope=capture_fields or None,
+            capture_context=capture_context,
+        )
+        return jsonify(
+            {
+                "success": True,
+                "state": state,
+                "management_track": track,
+                "visit_schema": visit_schema,
+                "agenda_item_context": visit_schema.get("agenda_item_context"),
+            }
+        )
     except Exception as e:
         logger.error(f"Error getting visit schema: {e}")
         return error_response(str(e), 500)
@@ -542,11 +700,12 @@ def api_protocol_comparison(patient_id):
         patient = tracking_db.get_patient_full_record(patient_id)
         if not patient:
             return error_response("Paciente no encontrado", 404)
-        from prostanet.domains.patient_tracking.followup_agenda import build_protocol_comparators, infer_management_track
+        from prostanet.domains.patient_tracking.followup_agenda import build_protocol_comparators
 
-        state = (patient.get("latest_assessment") or {}).get("state") or (patient.get("prior_history") or {}).get("current_state") or "diagnostic_workup"
-        track = infer_management_track(patient, state, patient.get("latest_assessment"))
-        return jsonify({"success": True, "comparators": build_protocol_comparators(state, track), "state": state, "management_track": track})
+        reconciliation = _reconciled_patient_snapshot(patient)
+        state = reconciliation["reconciled_state"]
+        track = reconciliation["reconciled_management_track"]
+        return jsonify({"success": True, "comparators": build_protocol_comparators(state, track), "state": state, "management_track": track, **reconciliation})
     except Exception as e:
         logger.error(f"Error getting protocol comparison: {e}")
         return error_response(str(e), 500)
@@ -622,10 +781,13 @@ def api_confirm_state_transition(patient_id, proposal_id):
 def api_next_best_action(patient_id):
     import tracking_db
     try:
+        patient = tracking_db.get_patient_full_record(patient_id)
+        if not patient:
+            return error_response("Paciente no encontrado", 404)
         action = tracking_db.get_patient_next_best_action(patient_id)
         if action is None:
             return error_response("Paciente no encontrado", 404)
-        return jsonify({"success": True, "next_best_action": action})
+        return jsonify({"success": True, "next_best_action": action, **_reconciled_patient_snapshot(patient)})
     except Exception as e:
         logger.error(f"Error getting next best action: {e}")
         return error_response(str(e), 500)
@@ -635,16 +797,49 @@ def api_next_best_action(patient_id):
 def api_patient_signals(patient_id):
     import tracking_db
     try:
+        patient = tracking_db.get_patient_full_record(patient_id)
+        if not patient:
+            return error_response("Paciente no encontrado", 404)
         signals = tracking_db.get_patient_signals(patient_id)
         if signals is None:
             return error_response("Paciente no encontrado", 404)
         bundle = tracking_db.refresh_longitudinal_intelligence(patient_id, force_recompute=False)
+        from prostanet.shared.presentation_text import (
+            humanize_assessment,
+            humanize_care_overlays,
+            humanize_state_timeline,
+        )
+        from prostanet.domains.patient_tracking.profile_compass import build_patient_profile_view_model
+
+        latest_assessment = humanize_assessment(patient["latest_assessment"]) if patient.get("latest_assessment") else {}
+        state_timeline = humanize_state_timeline(patient.get("state_timeline", []))
+        care_overlays = humanize_care_overlays(patient.get("care_overlays", []))
+        profile_view = build_patient_profile_view_model(
+            patient=patient,
+            latest_assessment_raw=patient.get("latest_assessment"),
+            latest_assessment=latest_assessment,
+            state_timeline=state_timeline,
+            care_overlays=care_overlays,
+        )
         return jsonify(
             {
                 "success": True,
                 "signals": signals,
                 "transition_proposals": bundle.get("transition_proposals", []),
                 "next_best_action": bundle.get("next_best_action", {}),
+                "module_data_contracts": profile_view.get("module_data_contracts", {}),
+                "missing_input_actions": profile_view.get("missing_input_actions", []),
+                "missing_input_capture_tasks": profile_view.get("missing_input_capture_tasks", []),
+                "intake_capture_target": profile_view.get("intake_capture_target"),
+                "followup_capture_target": profile_view.get("followup_capture_target"),
+                "intake_completion_block": profile_view.get("intake_completion_block", {}),
+                "followup_completion_block": profile_view.get("followup_completion_block", {}),
+                "psa_observability": profile_view.get("psa_observability", {}),
+                "clinical_journey_events": profile_view.get("clinical_journey_events", []),
+                "agenda_resolution_trace": profile_view.get("agenda_resolution_trace", []),
+                "therapy_checkpoints": profile_view.get("therapy_checkpoints", []),
+                "evidence_applicability": profile_view.get("evidence_applicability", {}),
+                **_reconciled_patient_snapshot(patient),
             }
         )
     except Exception as e:
@@ -701,7 +896,7 @@ def register_patient():
             from prostanet.shared.precision_medicine_legacy import evaluate_patient_for_mhspc, evaluate_patient_for_mcrpc, evaluate_patient_for_nmcrpc
             from prostanet.domains.patient_tracking.event_graph import build_processing_summary
 
-            line_therapy = safe_int(data.get('line_of_therapy'), 1)
+            line_therapy = safe_int(data.get('line_of_therapy_number') or data.get('line_of_therapy'), 1)
             meta_site = data.get('metastasis_site', 'M0')
             recommendations = assessment.get("result_snapshot", {}) if assessment else {}
             exploratory_benchmark = None
@@ -1373,9 +1568,65 @@ def api_dashboard_stats():
         }
 
         conn.close()
+
+        analysis_payload = _analysis_dataset_payload()
+        summary = analysis_payload["summary"]
+        stats["cohort_completeness"] = {
+            "average_pct": summary["cohort_average_completeness_pct"],
+            "publishable_ready_count": summary["publishable_ready_count"],
+            "mexico_core_complete_count": summary["mexico_core_complete_count"],
+            "document_verification_coverage_count": summary["document_verification_coverage_count"],
+        }
+        stats["research_readiness"] = {
+            "average_pct": summary["cohort_average_research_readiness_pct"],
+            "research_ready_count": summary["research_ready_count"],
+        }
+        stats["endpoint_readiness"] = summary["endpoint_ready_distribution"]
+        stats["analysis_dataset_size"] = len(analysis_payload["analysis_rows"])
+        stats["analysis_dataset_preview"] = analysis_payload["analysis_rows"][:5]
         return jsonify({"success": True, **stats})
     except Exception as e:
         logger.error(f"Error en dashboard_stats: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/analysis_dataset_export', methods=['GET'])
+def api_analysis_dataset_export():
+    try:
+        payload = _analysis_dataset_payload()
+        return jsonify({"success": True, "analysis_dataset_export": payload["analysis_rows"]})
+    except Exception as e:
+        logger.error(f"Error exporting analysis dataset: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/cohort_completeness', methods=['GET'])
+def api_cohort_completeness():
+    try:
+        payload = _analysis_dataset_payload()
+        return jsonify({"success": True, "cohort_completeness": payload["cohort_completeness_rows"], "summary": payload["summary"]})
+    except Exception as e:
+        logger.error(f"Error computing cohort completeness: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/research_readiness', methods=['GET'])
+def api_research_readiness():
+    try:
+        payload = _analysis_dataset_payload()
+        return jsonify({"success": True, "research_readiness": payload["research_readiness_rows"], "summary": payload["summary"]})
+    except Exception as e:
+        logger.error(f"Error computing research readiness: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/endpoint_readiness', methods=['GET'])
+def api_endpoint_readiness():
+    try:
+        payload = _analysis_dataset_payload()
+        return jsonify({"success": True, "endpoint_readiness": payload["endpoint_readiness_rows"], "summary": payload["summary"]})
+    except Exception as e:
+        logger.error(f"Error computing endpoint readiness: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 

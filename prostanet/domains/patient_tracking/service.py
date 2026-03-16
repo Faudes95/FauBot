@@ -5,7 +5,21 @@ from typing import Any
 
 from tracking_db import get_patient_full_record
 
+from prostanet.domains.patient_tracking.followup_agenda import (
+    LINE_OF_THERAPY_CONTEXT_OPTIONS,
+    LINE_OF_THERAPY_NUMBER_OPTIONS,
+)
+from prostanet.domains.patient_tracking.therapy_catalog import (
+    normalize_regimen_code,
+    therapy_catalog_entries,
+    therapy_select_options,
+)
 from prostanet.shared.contracts import FieldSpec, RegistrationFragment
+from prostanet.shared.metastatic_profile import (
+    BONE_SITE_LABELS,
+    NONREGIONAL_NODAL_SITE_LABELS,
+    VISCERAL_SITE_LABELS,
+)
 
 
 STATE_SCOPE_MAP = {
@@ -64,6 +78,10 @@ SCOPE_CONFIG = {
 CANONICAL_FIELD_MAP = {
     "comorb_seizure": "comorbidity_seizure",
     "comorb_cardio": "comorbidity_cardio",
+    "line_of_therapy": "line_of_therapy_number",
+    "molecular_report_date": "molecular_assay_date",
+    "molecular_assay_source": "biomarker_source",
+    "castrate_testosterone_confirmed": "castrate_testosterone_status",
 }
 
 CANONICAL_VALUE_MAPS = {
@@ -91,6 +109,72 @@ def _field(name: str, label: str, field_type: str, **kwargs) -> FieldSpec:
     return FieldSpec(name=name, label=label, field_type=field_type, **kwargs)
 
 
+def _metastatic_intake_fields() -> list[FieldSpec]:
+    fields = [
+        _field("nonregional_nodal_metastasis_present", "Ganglios no regionales presentes", "select", options=["", "0", "1"], default="", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
+        _field("nonregional_nodal_count", "Número de ganglios no regionales", "number", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
+        _field("nonregional_nodal_other_label", "Otro sitio ganglionar no regional", "text", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
+    ]
+    for key, label in NONREGIONAL_NODAL_SITE_LABELS.items():
+        fields.append(
+            _field(
+                f"nonregional_nodal_{key}_count",
+                f"{label}: número de lesiones",
+                "number",
+                group="Distribución metastásica",
+                group_order=4,
+                clinical_role="decision_refiner",
+                unit="lesiones",
+            )
+        )
+    fields.extend(
+        [
+            _field("bone_metastasis_present", "Metástasis óseas presentes", "select", options=["", "0", "1"], default="", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
+            _field("bone_axial_count", "Número de lesiones en esqueleto axial", "number", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
+            _field("bone_appendicular_count", "Número de lesiones en esqueleto apendicular", "number", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
+        ]
+    )
+    for key, label in BONE_SITE_LABELS.items():
+        fields.append(
+            _field(
+                f"bone_{key}_count",
+                f"{label}: número de lesiones",
+                "number",
+                group="Distribución metastásica",
+                group_order=4,
+                clinical_role="decision_refiner",
+                unit="lesiones",
+            )
+        )
+    fields.extend(
+        [
+            _field("visceral_metastasis_present", "Metástasis viscerales presentes", "select", options=["", "0", "1"], default="", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
+            _field("visceral_lesion_count", "Número total de lesiones viscerales", "number", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
+            _field("visceral_other_label", "Otro órgano visceral", "text", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
+        ]
+    )
+    for key, label in VISCERAL_SITE_LABELS.items():
+        fields.append(
+            _field(
+                f"visceral_{key}_count",
+                f"{label}: número de lesiones",
+                "number",
+                group="Distribución metastásica",
+                group_order=4,
+                clinical_role="decision_refiner",
+                unit="lesiones",
+            )
+        )
+    fields.extend(
+        [
+            _field("metastatic_total_lesion_count", "Número total de lesiones metastásicas", "number", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
+            _field("metastasis_assessment_date", "Fecha de evaluación metastásica", "date", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
+            _field("metastasis_document_source", "Fuente documental de la distribución metastásica", "text", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
+        ]
+    )
+    return fields
+
+
 def _common_fragment() -> RegistrationFragment:
     return RegistrationFragment(
         id="fragment_common_identity_baseline",
@@ -105,12 +189,32 @@ def _common_fragment() -> RegistrationFragment:
             _field("full_name", "Nombre completo", "text", required=True, group="Identidad", group_order=1, clinical_role="required"),
             _field("nss", "Número de seguridad social", "text", required=True, group="Identidad", group_order=1, clinical_role="required"),
             _field("dob", "Fecha de nacimiento", "date", required=True, group="Identidad", group_order=1, clinical_role="required"),
+            _field("ecog_score", "ECOG basal", "select", options=["", "0", "1", "2", "3", "4"], group="Línea basal clínica", group_order=2, clinical_role="decision_refiner"),
+            _field("frailty_status", "Fragilidad basal", "select", options=["", "Fit", "Vulnerable", "Frail"], group="Línea basal clínica", group_order=2, clinical_role="decision_refiner"),
+            _field("tobacco_use", "Tabaquismo", "select", options=["", "Nunca", "Exfumador", "Activo"], group="Línea basal clínica", group_order=2, clinical_role="decision_refiner"),
+            _field("exercise_status", "Actividad física basal", "select", options=["", "No realiza", "Ligera", "Moderada", "Intensa"], group="Línea basal clínica", group_order=2, clinical_role="decision_refiner"),
             _field("baseline_psa", "Antígeno prostático específico basal (PSA)", "number", group="Laboratorio basal", group_order=2, clinical_role="required", unit="ng/mL"),
             _field("testosterone_baseline", "Testosterona basal", "number", group="Laboratorio basal", group_order=2, clinical_role="decision_refiner", unit="ng/dL"),
             _field("hemoglobin", "Hemoglobina", "number", group="Laboratorio basal", group_order=2, clinical_role="decision_refiner", unit="g/dL"),
             _field("alp", "Fosfatasa alcalina", "number", group="Laboratorio basal", group_order=2, clinical_role="decision_refiner", unit="UI/L"),
             _field("ldh", "Lactato deshidrogenasa", "number", group="Laboratorio basal", group_order=2, clinical_role="decision_refiner", unit="UI/L"),
             _field("albumin", "Albúmina", "number", group="Laboratorio basal", group_order=2, clinical_role="decision_refiner", unit="g/dL"),
+            _field("dxa_baseline_done", "DXA basal realizada", "select", options=["0", "1"], default="0", group="Laboratorio basal", group_order=2, clinical_role="decision_refiner"),
+            _field("weight_kg", "Peso actual", "number", group="Fragilidad y fitness", group_order=3, clinical_role="decision_refiner", unit="kg"),
+            _field("bmi_current", "Índice de masa corporal actual", "number", group="Fragilidad y fitness", group_order=3, clinical_role="decision_refiner", unit="kg/m²"),
+            _field("weight_loss_6m_pct", "Pérdida de peso en 6 meses", "number", group="Fragilidad y fitness", group_order=3, clinical_role="decision_refiner", unit="%"),
+            _field("mini_cog_score", "Mini-Cog basal", "number", group="Fragilidad y fitness", group_order=3, clinical_role="decision_refiner"),
+            _field("fatigue_score", "Fatiga basal", "number", group="Fragilidad y fitness", group_order=3, clinical_role="decision_refiner"),
+            _field("g8_food_intake", "G8: ingesta de alimentos", "select", options=["", "0", "1", "2"], group="Fragilidad y fitness", group_order=3, clinical_role="decision_refiner"),
+            _field("g8_weight_loss", "G8: pérdida de peso", "select", options=["", "0", "1", "2", "3"], group="Fragilidad y fitness", group_order=3, clinical_role="decision_refiner"),
+            _field("g8_mobility", "G8: movilidad", "select", options=["", "0", "1", "2"], group="Fragilidad y fitness", group_order=3, clinical_role="decision_refiner"),
+            _field("g8_neuropsych", "G8: estado neuropsicológico", "select", options=["", "0", "1", "2"], group="Fragilidad y fitness", group_order=3, clinical_role="decision_refiner"),
+            _field("g8_bmi", "G8: categoría BMI", "select", options=["", "0", "1", "2", "3"], group="Fragilidad y fitness", group_order=3, clinical_role="decision_refiner"),
+            _field("g8_medications", "G8: medicamentos diarios", "select", options=["", "0", "1"], group="Fragilidad y fitness", group_order=3, clinical_role="decision_refiner"),
+            _field("g8_self_health", "G8: percepción de salud", "select", options=["", "0", "0.5", "1", "2"], group="Fragilidad y fitness", group_order=3, clinical_role="decision_refiner"),
+            _field("low_activity", "Actividad física reducida", "select", options=["", "0", "1"], group="Fragilidad y fitness", group_order=3, clinical_role="decision_refiner"),
+            _field("slow_gait", "Marcha lenta", "select", options=["", "0", "1"], group="Fragilidad y fitness", group_order=3, clinical_role="decision_refiner"),
+            _field("weak_grip", "Fuerza de prensión baja", "select", options=["", "0", "1"], group="Fragilidad y fitness", group_order=3, clinical_role="decision_refiner"),
         ],
     )
 
@@ -181,22 +285,52 @@ def _advanced_history_fragment() -> RegistrationFragment:
             "Alimenta secuenciación terapéutica, perfil longitudinal y benchmarking de adopción.",
         ],
         fields=[
-            _field("line_of_therapy", "Línea terapéutica", "select", options=["1", "2"], default="1", group="Tratamiento actual", group_order=1, clinical_role="required"),
-            _field("drug_scheme", "Esquema farmacológico", "select", options=[
-                "",
-                "ADT_MONO",
-                "ADT_ENZALUTAMIDE",
-                "ADT_APALUTAMIDE",
-                "ADT_ABIRATERONE",
-                "ADT_DOCETAXEL_DAROLUTAMIDE",
-                "ADT_DOCETAXEL_ABIRATERONE",
-            ], default="", group="Tratamiento actual", group_order=1, clinical_role="decision_refiner"),
+            _field("line_of_therapy_number", "Número de línea terapéutica", "select", options=LINE_OF_THERAPY_NUMBER_OPTIONS, default="", group="Tratamiento actual", group_order=1, clinical_role="required"),
+            _field("line_of_therapy_context", "Contexto clínico de la línea", "select", options=LINE_OF_THERAPY_CONTEXT_OPTIONS, default="", group="Tratamiento actual", group_order=1, clinical_role="required"),
+            _field(
+                "drug_scheme",
+                "Esquema farmacológico",
+                "select",
+                options=therapy_select_options(state="advanced", management_track="systemic_surveillance", include_empty=True),
+                default="",
+                group="Tratamiento actual",
+                group_order=1,
+                clinical_role="decision_refiner",
+                help_text="Seleccione el esquema canónico activo para que la línea terapéutica y la torre de APE queden alineadas.",
+            ),
+            _field("current_adt_context", "Contexto actual de ADT", "select", options=["", "none", "medical_adt_continuous", "medical_adt_interrupted", "orchiectomy"], default="", group="Tratamiento actual", group_order=1, clinical_role="required"),
+            _field("castrate_testosterone_status", "Estado de castración", "select", options=["", "unknown", "confirmed_castrate", "not_castrate"], default="unknown", group="Tratamiento actual", group_order=1, clinical_role="required"),
+            _field("conventional_imaging_status", "Imagen convencional", "select", options=["", "NOT_RESTAGED", "M0", "M1"], default="", group="Tratamiento actual", group_order=1, clinical_role="decision_refiner"),
             _field("rt_primary_received", "Radioterapia primaria previa", "select", options=["0", "1"], default="0", group="Historial previo", group_order=2, clinical_role="monitoring"),
             _field("rt_primary_dose_gy", "Dosis total de radioterapia primaria", "number", group="Historial previo", group_order=2, clinical_role="monitoring", unit="Gy"),
             _field("prior_docetaxel_cycles", "Ciclos previos de docetaxel", "number", default=0, group="Historial previo", group_order=2, clinical_role="decision_refiner", unit="ciclos"),
             _field("prior_arpi_agent", "Inhibidor previo de la vía del receptor androgénico", "select", options=["", "Abiraterona", "Enzalutamida", "Apalutamida", "Darolutamida"], default="", group="Historial previo", group_order=2, clinical_role="decision_refiner"),
             _field("prior_arpi_duration", "Duración del inhibidor previo de la vía del receptor androgénico", "number", default=0, group="Historial previo", group_order=2, clinical_role="decision_refiner", unit="meses"),
-        ],
+            _field("hrr_status", "Estado HRR", "select", options=["", "Positivo", "Negativo", "Desconocido"], default="Desconocido", group="Biomarcadores", group_order=3, clinical_role="decision_refiner"),
+            _field("hrr_gene", "Gen HRR dominante", "text", group="Biomarcadores", group_order=3, clinical_role="decision_refiner"),
+            _field("brca2_status", "BRCA2", "select", options=["", "Positivo", "Negativo", "Desconocido"], default="Desconocido", group="Biomarcadores", group_order=3, clinical_role="decision_refiner"),
+            _field("msi_status", "MSI", "select", options=["", "Inestable", "Estable", "Desconocido"], default="Desconocido", group="Biomarcadores", group_order=3, clinical_role="decision_refiner"),
+            _field("tmb_high", "TMB alto", "select", options=["0", "1"], default="0", group="Biomarcadores", group_order=3, clinical_role="decision_refiner"),
+            _field("biomarker_source", "Fuente del biomarcador", "text", group="Biomarcadores", group_order=3, clinical_role="decision_refiner"),
+            _field("molecular_assay_date", "Fecha del estudio molecular", "date", group="Biomarcadores", group_order=3, clinical_role="decision_refiner"),
+            _field("psma_positive", "PSMA positivo", "select", options=["0", "1"], default="0", group="Biomarcadores", group_order=3, clinical_role="decision_refiner"),
+            _field("psma_negative_dominant_lesions", "Lesiones dominantes PSMA negativas", "select", options=["0", "1"], default="0", group="Biomarcadores", group_order=3, clinical_role="decision_refiner"),
+            _field("seizure_history", "Antecedente convulsivo", "select", options=["0", "1"], default="0", group="Seguridad ARPI", group_order=3, clinical_role="decision_refiner"),
+            _field("dermatitis_history", "Dermatitis / rash previo", "select", options=["0", "1"], default="0", group="Seguridad ARPI", group_order=3, clinical_role="decision_refiner"),
+            _field("mini_cog_score", "Mini-Cog basal", "number", group="Seguridad ARPI", group_order=3, clinical_role="decision_refiner"),
+            _field("fatigue_score", "Brief Fatigue Inventory basal", "number", group="Seguridad ARPI", group_order=3, clinical_role="decision_refiner"),
+            _field("systolic_bp", "PA sistólica basal", "number", group="Seguridad ARPI", group_order=3, clinical_role="decision_refiner", unit="mmHg"),
+            _field("total_cholesterol", "Colesterol total basal", "number", group="Seguridad ARPI", group_order=3, clinical_role="decision_refiner", unit="mg/dL"),
+            _field("hdl_cholesterol", "HDL basal", "number", group="Seguridad ARPI", group_order=3, clinical_role="decision_refiner", unit="mg/dL"),
+            _field("triglycerides", "Triglicéridos basales", "number", group="Seguridad ARPI", group_order=3, clinical_role="decision_refiner", unit="mg/dL"),
+            _field("glucose", "Glucosa basal", "number", group="Seguridad ARPI", group_order=3, clinical_role="decision_refiner", unit="mg/dL"),
+            _field("waist_circumference_cm", "Cintura abdominal", "number", group="Seguridad ARPI", group_order=3, clinical_role="decision_refiner", unit="cm"),
+            _field("vitamin_d_level", "Vitamina D basal", "number", group="Seguridad ARPI", group_order=3, clinical_role="decision_refiner", unit="ng/mL"),
+            _field("weight_loss_6m_pct", "Pérdida ponderal 6 meses", "number", group="Seguridad ARPI", group_order=3, clinical_role="decision_refiner", unit="%"),
+            _field("protein_supplements", "Suplementos proteicos", "select", options=["0", "1"], default="0", group="Seguridad ARPI", group_order=3, clinical_role="decision_refiner"),
+            _field("calcium_vitd_started", "Calcio / vitamina D iniciados", "select", options=["0", "1"], default="0", group="Salud ósea", group_order=4, clinical_role="monitoring"),
+            _field("bone_protection_started", "Protección ósea iniciada", "select", options=["0", "1"], default="0", group="Salud ósea", group_order=4, clinical_role="monitoring"),
+        ] + _metastatic_intake_fields(),
     )
 
 
@@ -257,12 +391,19 @@ def _persist_targets_for_field(field_name: str, scope: str) -> list[str]:
         "decipher_risk": ["genomic_profile"],
         "psma_pet_result": ["imaging_studies"],
         "hrr_gene": ["genomic_profile"],
+        "hrr_status": ["genomic_profile", "clinical_baseline"],
         "brca2_status": ["genomic_profile"],
+        "tmb_high": ["genomic_profile"],
+        "biomarker_source": ["genomic_profile"],
+        "molecular_assay_date": ["genomic_profile"],
+        "psma_positive": ["imaging_studies", "clinical_assessments"],
+        "psma_negative_dominant_lesions": ["imaging_studies", "clinical_assessments"],
         "mcrpc_line_context": ["prior_clinical_history"],
         "current_adt_context": ["prior_clinical_history", "clinical_assessments"],
         "castrate_testosterone_status": ["clinical_baseline", "clinical_assessments"],
         "conventional_imaging_status": ["imaging_studies", "clinical_assessments"],
         "dxa_baseline_done": ["clinical_assessments"],
+        "calcium_vitd_started": ["clinical_assessments"],
         "bone_protection_started": ["clinical_assessments"],
     }
     default_targets = {
@@ -276,6 +417,10 @@ def _persist_targets_for_field(field_name: str, scope: str) -> list[str]:
 
 def _is_present(value: Any) -> bool:
     return value not in (None, "")
+
+
+def _truthy(value: Any) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "si", "sí", "positivo", "positive", "confirmed_castrate"}
 
 
 class PatientTrackingService:
@@ -334,7 +479,8 @@ class PatientTrackingService:
             "baseline_psa": assessment_input.get("baseline_psa", assessment_input.get("psa", "")),
             "metastasis_site": assessment_input.get("metastasis_site", "M0" if scope != "advanced" else ""),
             "volume_disease": assessment_input.get("volume_disease", "Low" if scope != "advanced" else ""),
-            "line_of_therapy": "2" if state in {"m0_crpc", "m1_crpc"} else "1",
+            "line_of_therapy_number": assessment_input.get("line_of_therapy_number", assessment_input.get("line_of_therapy", "")),
+            "line_of_therapy_context": assessment_input.get("line_of_therapy_context", ""),
         }
 
         return {
@@ -344,6 +490,8 @@ class PatientTrackingService:
             "scope_bullets": config["bullets"],
             "registration_fragments": [fragment.to_dict() for fragment in fragments],
             "registration_defaults": defaults,
+            "therapy_catalog_options": therapy_select_options(state="advanced", management_track="systemic_surveillance", include_empty=True),
+            "therapy_catalog_entries": therapy_catalog_entries(),
             "canonicalization_map": self.canonicalization_map(),
             "imported_clinical_fields": imported_fields,
         }
@@ -356,8 +504,6 @@ class PatientTrackingService:
         merged["assessment_module"] = assessment.get("module_id") or merged.get("assessment_state", "")
         if not _is_present(merged.get("baseline_psa")) and _is_present(merged.get("psa")):
             merged["baseline_psa"] = merged.get("psa")
-        if merged.get("assessment_state") in {"m0_crpc", "m1_crpc"} and not _is_present(merged.get("line_of_therapy")):
-            merged["line_of_therapy"] = "2"
         return self.canonicalize_payload(merged)
 
     def canonicalize_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -369,6 +515,23 @@ class PatientTrackingService:
         for field_name, value_map in CANONICAL_VALUE_MAPS.items():
             if field_name in canonical and canonical[field_name] in value_map:
                 canonical[field_name] = value_map[canonical[field_name]]
+
+        if _is_present(canonical.get("castrate_testosterone_status")):
+            canonical["castrate_testosterone_status"] = (
+                "confirmed_castrate" if _truthy(canonical.get("castrate_testosterone_status"))
+                else "not_castrate" if str(canonical.get("castrate_testosterone_status")).strip().lower() in {"0", "false", "no", "not_castrate"}
+                else canonical.get("castrate_testosterone_status")
+            )
+
+        line_number = canonical.get("line_of_therapy_number")
+        if not _is_present(line_number) and _is_present(canonical.get("line_of_therapy")):
+            line_number = canonical.get("line_of_therapy")
+        if _is_present(line_number):
+            canonical["line_of_therapy_number"] = str(line_number)
+            canonical["line_of_therapy"] = str(line_number)
+
+        if _is_present(canonical.get("drug_scheme")):
+            canonical["drug_scheme"] = normalize_regimen_code(canonical.get("drug_scheme"))
 
         if canonical.get("genomic_test_done") in (None, "", "0", 0, False):
             genomic_markers = [

@@ -38,16 +38,18 @@ class TumorBoardPresentation:
         identity = patient.get("identity", {})
         baseline = patient.get("baseline", {}) or {}
         prior = patient.get("prior_history", {}) or {}
+        demographics = patient.get("demographics", {}) or {}
         assessment = patient.get("latest_assessment", {}) or {}
         followups = patient.get("follow_ups", []) or []
-        genomic = patient.get("genomic_profile", {}) or {}
+        genomic = patient.get("genomics", {}) or {}
+        psa_series = patient.get("psa_series", []) or []
 
         return {
             "generated_date": date.today().isoformat(),
-            "patient_summary": cls._patient_summary(identity, baseline, prior),
+            "patient_summary": cls._patient_summary(identity, demographics, baseline, prior),
             "disease_timeline": cls._disease_timeline(identity, baseline, prior, assessment),
             "treatment_history": cls._treatment_history(prior, followups),
-            "psa_kinetics": cls._psa_kinetics(baseline, followups, prior),
+            "psa_kinetics": cls._psa_kinetics(baseline, followups, prior, psa_series),
             "pathology": cls._pathology(baseline, prior),
             "imaging": cls._imaging(baseline, prior, followups),
             "genomic_profile": cls._genomic_profile(genomic),
@@ -56,15 +58,15 @@ class TumorBoardPresentation:
         }
 
     @classmethod
-    def _patient_summary(cls, identity: dict, baseline: dict, prior: dict) -> dict[str, Any]:
+    def _patient_summary(cls, identity: dict, demographics: dict, baseline: dict, prior: dict) -> dict[str, Any]:
         age = identity.get("age") or identity.get("edad")
         return {
             "age": age,
             "ecog": prior.get("ecog") or baseline.get("ecog_score") or baseline.get("ecog"),
             "comorbidities": prior.get("comorbidities") or baseline.get("comorbidities", ""),
-            "charlson_score": identity.get("charlson_score"),
-            "g8_score": identity.get("g8_score"),
-            "frailty_status": identity.get("frailty_status", ""),
+            "charlson_score": demographics.get("charlson_score"),
+            "g8_score": demographics.get("g8_score"),
+            "frailty_status": demographics.get("frailty_status", ""),
             "relevant_history": prior.get("relevant_medical_history", ""),
         }
 
@@ -188,21 +190,28 @@ class TumorBoardPresentation:
         return treatments
 
     @classmethod
-    def _psa_kinetics(cls, baseline: dict, followups: list, prior: dict) -> dict[str, Any]:
+    def _psa_kinetics(cls, baseline: dict, followups: list, prior: dict, psa_series_input: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         psa_series: list[dict[str, Any]] = []
-        psa_dx = baseline.get("psa_at_diagnosis") or baseline.get("psa_diagnosis")
-        if psa_dx:
-            psa_series.append({"label": "Diagnóstico", "value": psa_dx})
+        if psa_series_input:
+            for entry in psa_series_input:
+                value = entry.get("value") or entry.get("psa")
+                sample_date = entry.get("sample_date") or entry.get("date")
+                if value is not None and sample_date:
+                    psa_series.append({"label": str(sample_date), "value": value})
+        else:
+            psa_dx = baseline.get("psa_at_diagnosis") or baseline.get("psa_diagnosis") or baseline.get("baseline_psa")
+            if psa_dx:
+                psa_series.append({"label": "Diagnóstico", "value": psa_dx})
 
-        for i, fu in enumerate(followups):
-            psa_val = fu.get("psa_current")
-            if psa_val is not None:
-                visit_date = fu.get("visit_date", f"Visita {i+1}")
-                psa_series.append({"label": str(visit_date), "value": psa_val})
+            for i, fu in enumerate(followups):
+                psa_val = fu.get("psa_current")
+                if psa_val is not None:
+                    visit_date = fu.get("visit_date", f"Visita {i+1}")
+                    psa_series.append({"label": str(visit_date), "value": psa_val})
 
         return {
             "psa_series": psa_series,
-            "psa_current": followups[-1].get("psa_current") if followups else None,
+            "psa_current": psa_series[-1]["value"] if psa_series else (followups[-1].get("psa_current") if followups else None),
             "psadt_months": prior.get("psadt_months") or prior.get("psa_doubling_time"),
             "psa_velocity": prior.get("psa_velocity"),
             "psa_nadir": prior.get("psa_nadir"),
@@ -268,7 +277,7 @@ class TumorBoardPresentation:
             if status and "pathogenic" in str(status).lower():
                 actionable.append(f"{gene.upper()} → PARPi (olaparib, rucaparib)")
 
-        if genomic.get("msi_status", "").lower() in ("msi-h", "high"):
+        if str(genomic.get("msi_status") or "").lower() in ("msi-h", "high"):
             actionable.append("MSI-H → Pembrolizumab (KEYNOTE-158)")
 
         if genomic.get("tmb_score"):

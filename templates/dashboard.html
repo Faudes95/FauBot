@@ -446,6 +446,8 @@
                 { label: 'Factibilidad de rescate local documentada', count: dashboardData.salvage_documented_count || 0, denominator: nAssessments },
                 { label: 'Contexto de línea mCRPC documentado', count: dashboardData.mcrpc_line_context_count || 0, denominator: nAssessments },
                 { label: 'Informe molecular fechado', count: dashboardData.molecular_report_count || 0, denominator: nAssessments },
+                { label: 'Cohorte México completa', count: dashboardData.cohort_completeness?.mexico_core_complete_count || 0, denominator: n },
+                { label: 'Cobertura de documentos verificados', count: dashboardData.cohort_completeness?.document_verification_coverage_count || 0, denominator: n },
             ];
 
             container.innerHTML = metrics.map(m => {
@@ -480,7 +482,7 @@
                 { cat: 'validacion', title: 'Validación EAU 2024 Risk Groups vs NCCN', desc: 'Comparar concordancia EAU vs NCCN en outcomes de BCR y metástasis', minN: 80, ref: 'EAU Guidelines 2024; Mottet N. Eur Urol 2024', nivel: 'IIa', diseno: 'Cohorte comparativa' },
                 { cat: 'validacion', title: 'Calibración de Partin Tables en México', desc: 'PSA, Gleason, T-stage vs patología post-RP — Nomograma desarrollado en Johns Hopkins', minN: 80, ref: 'Eifler JB. BJU Int 2013; Makarov DV. Urology 2007', nivel: 'IIb', diseno: 'Cohorte retrospectiva' },
                 { cat: 'validacion', title: 'MSKCC Pre-RP BCR nomograma: validación externa', desc: 'Validar predicción de supervivencia libre de BCR a 5 y 10 años en cohorte local', minN: 120, ref: 'Stephenson AJ. J Clin Oncol 2006; Shariat SF. BJU Int 2008', nivel: 'IIb', diseno: 'Cohorte retrospectiva' },
-                { cat: 'validacion', title: 'Score ProstaNet Integrado vs scores individuales', desc: 'Comparar C-index de score compuesto ProstaNet vs CAPRA, NCCN, D\'Amico individual', minN: 100, ref: 'Validación interna — ProstaNet 2026', nivel: 'IIb', diseno: 'Estudio de calibración/discriminación' },
+                { cat: 'validacion', title: 'Score ProstaMed Integrado vs scores individuales', desc: 'Comparar C-index de score compuesto ProstaMed vs CAPRA, NCCN, D\'Amico individual', minN: 100, ref: 'Validación interna — ProstaMed 2026', nivel: 'IIb', diseno: 'Estudio de calibración/discriminación' },
 
                 // ═══ GENÓMICA Y BIOMARCADORES ═══
                 { cat: 'genomica', title: 'Correlación Decipher vs outcomes en México', desc: 'Decipher GC score, BCR, metástasis, mortalidad — Utilidad en reclasificación', minN: 40, ref: 'Spratt DE. J Clin Oncol 2018; Nguyen PL. Eur Urol 2017', nivel: 'IIa', diseno: 'Cohorte prospectiva' },
@@ -540,7 +542,7 @@
                 { cat: 'epidemio', title: 'Obesidad y síndrome metabólico: impacto en outcomes', desc: 'IMC >30 y su asociación con upstaging, BCR y complicaciones quirúrgicas', minN: 60, ref: 'Allott EH. Eur Urol 2013; Cao Y. Cancer Epidemiol 2011', nivel: 'IIb', diseno: 'Cohorte retrospectiva' },
 
                 // ═══ IA Y PREDICCIÓN ═══
-                { cat: 'ia', title: 'ML multi-output vs CAPRA: C-index comparativo', desc: 'Comparar AUC/C-index del modelo ML de ProstaNet vs scores clínicos clásicos', minN: 100, ref: 'Cosma G. BMC Med Inform Decis Mak 2017; Goldenberg SL. Nat Rev Urol 2019', nivel: 'IIb', diseno: 'Estudio de validación' },
+                { cat: 'ia', title: 'ML multi-output vs CAPRA: C-index comparativo', desc: 'Comparar AUC/C-index del modelo ML de ProstaMed vs scores clínicos clásicos', minN: 100, ref: 'Cosma G. BMC Med Inform Decis Mak 2017; Goldenberg SL. Nat Rev Urol 2019', nivel: 'IIb', diseno: 'Estudio de validación' },
                 { cat: 'ia', title: 'Radar multimodal como herramienta de decisión', desc: 'Concordancia inter-observador usando radar de 12 ejes vs reporte textual', minN: 30, ref: 'Esteva A. Nat Med 2019; Topol EJ. NEJM 2019 (review)', nivel: 'IIb', diseno: 'Concordancia inter-observador' },
                 { cat: 'ia', title: 'Predicción de upgrade con IA + mpMRI features', desc: 'Integrar PI-RADS, volumen de lesión y features radiómicos para predecir GG≥2', minN: 50, ref: 'Schelb P. Eur Urol 2021; Hiremath A. Eur Radiol 2021', nivel: 'IIa', diseno: 'Diagnóstico prospectivo' },
                 { cat: 'ia', title: 'NLP para extracción automática de reportes patología', desc: 'Procesamiento de lenguaje natural para captura estructurada de biopsias', minN: 100, ref: 'Yim WW. J Am Med Inform Assoc 2016; Banerjee I. JCO Clin Cancer Inform 2019', nivel: 'IIb', diseno: 'Desarrollo y validación' },
@@ -650,6 +652,15 @@
                         'Salvage local documentado en BCR/post-RP',
                         'Contexto de línea mCRPC explícito',
                         'Evita sobreescalar sin contexto clínico',
+                    ],
+                },
+                {
+                    name: 'Cohorte publicable',
+                    score: Math.round(dashboardData.cohort_completeness?.average_pct || 0),
+                    details: [
+                        `${dashboardData.cohort_completeness?.publishable_ready_count || 0} casos listos para dataset analítico`,
+                        `${dashboardData.research_readiness?.research_ready_count || 0} casos con research readiness utilizable`,
+                        'Mide si la cohorte ya sirve para estadística y publicación clínica',
                     ],
                 },
             ];

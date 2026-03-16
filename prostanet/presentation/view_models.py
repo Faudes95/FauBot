@@ -32,14 +32,14 @@ class PageChrome:
     title: str
     subtitle: str
     page_key: str
-    kicker: str = "ProstaNet 2026"
+    kicker: str = "ProstaMed 2026"
     nav_items: tuple[NavItem, ...] = field(default_factory=tuple)
     header_actions: tuple[PageAction, ...] = field(default_factory=tuple)
     primary_action: PageAction | None = None
     content_width_class: str = "max-w-7xl"
     density: str = "comfortable"
     show_page_header: bool = True
-    footer_text: str = "ProstaNet 2026 · Plataforma clínica longitudinal para cáncer de próstata"
+    footer_text: str = "ProstaMed 2026 · Salud · Diagnóstico · Precisión"
     requires_charts: bool = False
     accent_profile: AccentProfile = field(default_factory=AccentProfile)
 
@@ -56,7 +56,7 @@ def build_page_chrome(
     title: str,
     subtitle: str,
     *,
-    kicker: str = "ProstaNet 2026",
+    kicker: str = "ProstaMed 2026",
     show_page_header: bool = True,
     requires_charts: bool = False,
     content_width_class: str = "max-w-7xl",

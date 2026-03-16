@@ -119,6 +119,112 @@
                     </div>
                 </section>
 
+                <section class="pn-surface" data-intake-scope="all">
+                    <h2 class="section-header text-cyan-300 border-cyan-900/50">2.1 Fragilidad y fitness terapéutica basal</h2>
+                    <p class="text-xs text-slate-500 mb-4">Si estos datos faltan, los scores geriátricos y de aptitud se mostrarán incompletos y se volverán a solicitar en seguimiento.</p>
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Peso actual (kg)</label>
+                            <input type="number" step="0.1" name="weight_kg" class="input-dark">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Índice de masa corporal actual</label>
+                            <input type="number" step="0.1" name="bmi_current" class="input-dark">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Pérdida de peso en 6 meses (%)</label>
+                            <input type="number" step="0.1" name="weight_loss_6m_pct" class="input-dark">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Mini-Cog basal</label>
+                            <input type="number" step="1" name="mini_cog_score" class="input-dark">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Fatiga basal (0-10)</label>
+                            <input type="number" step="1" min="0" max="10" name="fatigue_score" class="input-dark">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">G8: ingesta de alimentos</label>
+                            <select name="g8_food_intake" class="input-dark">
+                                <option value="">Seleccionar</option>
+                                <option value="0">Disminución severa</option>
+                                <option value="1">Disminución moderada</option>
+                                <option value="2">Sin disminución</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">G8: pérdida de peso</label>
+                            <select name="g8_weight_loss" class="input-dark">
+                                <option value="">Seleccionar</option>
+                                <option value="0">Mayor a 3 kg</option>
+                                <option value="1">No sabe</option>
+                                <option value="2">Entre 1 y 3 kg</option>
+                                <option value="3">Sin pérdida</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">G8: movilidad</label>
+                            <select name="g8_mobility" class="input-dark">
+                                <option value="">Seleccionar</option>
+                                <option value="0">Cama/sillón</option>
+                                <option value="1">Se levanta pero no sale</option>
+                                <option value="2">Sale de casa</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">G8: estado neuropsicológico</label>
+                            <select name="g8_neuropsych" class="input-dark">
+                                <option value="">Seleccionar</option>
+                                <option value="0">Demencia/depresión severa</option>
+                                <option value="1">Deterioro leve</option>
+                                <option value="2">Sin alteración</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">G8: categoría BMI</label>
+                            <select name="g8_bmi" class="input-dark">
+                                <option value="">Seleccionar</option>
+                                <option value="0">&lt;19</option>
+                                <option value="1">19 a &lt;21</option>
+                                <option value="2">21 a &lt;23</option>
+                                <option value="3">≥23</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">G8: más de 3 medicamentos diarios</label>
+                            <select name="g8_medications" class="input-dark">
+                                <option value="">Seleccionar</option>
+                                <option value="0">Sí</option>
+                                <option value="1">No</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">G8: percepción de salud</label>
+                            <select name="g8_self_health" class="input-dark">
+                                <option value="">Seleccionar</option>
+                                <option value="0">Peor</option>
+                                <option value="0.5">No sabe</option>
+                                <option value="1">Igual</option>
+                                <option value="2">Mejor</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <label class="flex items-center gap-2 text-sm text-slate-300">
+                            <input type="checkbox" name="low_activity" value="1" class="rounded text-cyan-500">
+                            Actividad física reducida
+                        </label>
+                        <label class="flex items-center gap-2 text-sm text-slate-300">
+                            <input type="checkbox" name="slow_gait" value="1" class="rounded text-cyan-500">
+                            Marcha lenta
+                        </label>
+                        <label class="flex items-center gap-2 text-sm text-slate-300">
+                            <input type="checkbox" name="weak_grip" value="1" class="rounded text-cyan-500">
+                            Fuerza de prensión baja
+                        </label>
+                    </div>
+                </section>
+
                 <!-- 3. Estadificación y volumen -->
                 <section class="pn-surface" data-intake-scope="localized,postlocal,advanced">
                     <h2 id="stagingSectionHeading" class="section-header text-purple-400 border-purple-900/50">3. Estadificación y volumen de enfermedad</h2>
@@ -129,7 +235,7 @@
                             <select name="metastasis_site" class="input-dark" onchange="updateVolumeCheck()">
                                 <option value="M0">Sin metástasis a distancia (M0)</option>
                                 <option value="Hueso">Hueso (Esqueleto Axial/Apendicular)</option>
-                                <option value="Ganglio">Ganglionar (N1/M1a)</option>
+                                <option value="Ganglio">Ganglionar no regional (M1a)</option>
                                 <option value="Visceral">Visceral (Pulmón/Hígado - M1c)</option>
                             </select>
                         </div>
@@ -153,6 +259,102 @@
                                 <p class="text-xs text-slate-500">¿Se cuenta con reporte en imagen?</p>
                             </div>
                         </label>
+                    </div>
+                </section>
+
+                <section class="pn-surface" data-intake-scope="advanced">
+                    <h2 class="section-header text-red-300 border-red-900/50">3.1 Distribución metastásica detallada</h2>
+                    <p class="text-xs text-slate-500 mb-4">Estos datos resuelven correctamente M1a / M1b / M1c y alimentan la imagen TNM, la estadística por sitio y el seguimiento longitudinal real.</p>
+
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Fecha de evaluación metastásica</label>
+                            <input type="date" name="metastasis_assessment_date" class="input-dark">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Fuente documental</label>
+                            <input type="text" name="metastasis_document_source" placeholder="TAC, PSMA-PET, gammagrama, nota clínica..." class="input-dark">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Número total de lesiones metastásicas</label>
+                            <input type="number" min="0" name="metastatic_total_lesion_count" class="input-dark">
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <div class="bg-slate-800/50 p-4 rounded border border-slate-700/50">
+                            <h3 class="text-sm font-semibold text-cyan-200 mb-3">M1a · Ganglios no regionales</h3>
+                            <div class="space-y-3">
+                                <label class="block text-xs font-medium">Ganglios no regionales presentes</label>
+                                <select name="nonregional_nodal_metastasis_present" class="input-dark">
+                                    <option value="">No documentado</option>
+                                    <option value="0">No</option>
+                                    <option value="1">Sí</option>
+                                </select>
+                                <label class="block text-xs font-medium">Número total de lesiones ganglionares no regionales</label>
+                                <input type="number" min="0" name="nonregional_nodal_count" class="input-dark">
+                                <div class="grid grid-cols-1 gap-3">
+                                    <div><label class="block text-[11px] font-medium mb-1">Retroperitoneales</label><input type="number" min="0" name="nonregional_nodal_retroperitoneal_count" class="input-dark"></div>
+                                    <div><label class="block text-[11px] font-medium mb-1">Mediastinales</label><input type="number" min="0" name="nonregional_nodal_mediastinal_count" class="input-dark"></div>
+                                    <div><label class="block text-[11px] font-medium mb-1">Supraclaviculares</label><input type="number" min="0" name="nonregional_nodal_supraclavicular_count" class="input-dark"></div>
+                                    <div><label class="block text-[11px] font-medium mb-1">Inguinales</label><input type="number" min="0" name="nonregional_nodal_inguinal_count" class="input-dark"></div>
+                                    <div><label class="block text-[11px] font-medium mb-1">Otro sitio ganglionar</label><input type="text" name="nonregional_nodal_other_label" class="input-dark mb-2"><input type="number" min="0" name="nonregional_nodal_other_count" class="input-dark"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="bg-slate-800/50 p-4 rounded border border-slate-700/50">
+                            <h3 class="text-sm font-semibold text-amber-200 mb-3">M1b · Metástasis ósea</h3>
+                            <div class="space-y-3">
+                                <label class="block text-xs font-medium">Metástasis óseas presentes</label>
+                                <select name="bone_metastasis_present" class="input-dark">
+                                    <option value="">No documentado</option>
+                                    <option value="0">No</option>
+                                    <option value="1">Sí</option>
+                                </select>
+                                <div class="grid grid-cols-2 gap-3">
+                                    <div><label class="block text-[11px] font-medium mb-1">Esqueleto axial</label><input type="number" min="0" name="bone_axial_count" class="input-dark"></div>
+                                    <div><label class="block text-[11px] font-medium mb-1">Esqueleto apendicular</label><input type="number" min="0" name="bone_appendicular_count" class="input-dark"></div>
+                                </div>
+                                <div class="grid grid-cols-2 gap-3">
+                                    <div><label class="block text-[11px] font-medium mb-1">Cráneo</label><input type="number" min="0" name="bone_skull_count" class="input-dark"></div>
+                                    <div><label class="block text-[11px] font-medium mb-1">Columna cervical</label><input type="number" min="0" name="bone_cervical_spine_count" class="input-dark"></div>
+                                    <div><label class="block text-[11px] font-medium mb-1">Columna torácica</label><input type="number" min="0" name="bone_thoracic_spine_count" class="input-dark"></div>
+                                    <div><label class="block text-[11px] font-medium mb-1">Columna lumbar</label><input type="number" min="0" name="bone_lumbar_spine_count" class="input-dark"></div>
+                                    <div><label class="block text-[11px] font-medium mb-1">Costillas / tórax</label><input type="number" min="0" name="bone_ribs_thorax_count" class="input-dark"></div>
+                                    <div><label class="block text-[11px] font-medium mb-1">Pelvis / sacro</label><input type="number" min="0" name="bone_pelvis_sacrum_count" class="input-dark"></div>
+                                    <div><label class="block text-[11px] font-medium mb-1">Húmero</label><input type="number" min="0" name="bone_humerus_count" class="input-dark"></div>
+                                    <div><label class="block text-[11px] font-medium mb-1">Radio / cúbito</label><input type="number" min="0" name="bone_forearm_count" class="input-dark"></div>
+                                    <div><label class="block text-[11px] font-medium mb-1">Fémur</label><input type="number" min="0" name="bone_femur_count" class="input-dark"></div>
+                                    <div><label class="block text-[11px] font-medium mb-1">Tibia / peroné</label><input type="number" min="0" name="bone_tibia_fibula_count" class="input-dark"></div>
+                                    <div><label class="block text-[11px] font-medium mb-1">Mano</label><input type="number" min="0" name="bone_hand_count" class="input-dark"></div>
+                                    <div><label class="block text-[11px] font-medium mb-1">Pie</label><input type="number" min="0" name="bone_foot_count" class="input-dark"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="bg-slate-800/50 p-4 rounded border border-slate-700/50">
+                            <h3 class="text-sm font-semibold text-rose-200 mb-3">M1c · Metástasis viscerales</h3>
+                            <div class="space-y-3">
+                                <label class="block text-xs font-medium">Metástasis viscerales presentes</label>
+                                <select name="visceral_metastasis_present" class="input-dark">
+                                    <option value="">No documentado</option>
+                                    <option value="0">No</option>
+                                    <option value="1">Sí</option>
+                                </select>
+                                <label class="block text-xs font-medium">Número total de lesiones viscerales</label>
+                                <input type="number" min="0" name="visceral_lesion_count" class="input-dark">
+                                <div class="grid grid-cols-2 gap-3">
+                                    <div><label class="block text-[11px] font-medium mb-1">Pulmón</label><input type="number" min="0" name="visceral_lung_count" class="input-dark"></div>
+                                    <div><label class="block text-[11px] font-medium mb-1">Hígado</label><input type="number" min="0" name="visceral_liver_count" class="input-dark"></div>
+                                    <div><label class="block text-[11px] font-medium mb-1">Cerebro</label><input type="number" min="0" name="visceral_brain_count" class="input-dark"></div>
+                                    <div><label class="block text-[11px] font-medium mb-1">Suprarrenal</label><input type="number" min="0" name="visceral_adrenal_count" class="input-dark"></div>
+                                    <div><label class="block text-[11px] font-medium mb-1">Pleura</label><input type="number" min="0" name="visceral_pleura_count" class="input-dark"></div>
+                                    <div><label class="block text-[11px] font-medium mb-1">Peritoneo</label><input type="number" min="0" name="visceral_peritoneum_count" class="input-dark"></div>
+                                    <div class="col-span-2"><label class="block text-[11px] font-medium mb-1">Otro órgano visceral</label><input type="text" name="visceral_other_label" class="input-dark mb-2"><input type="number" min="0" name="visceral_other_count" class="input-dark"></div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </section>
 
@@ -555,10 +757,12 @@
                                         </select>
                                     </div>
                                     <div>
-                                        <label class="block text-xs font-medium mb-1">Testosterona en rango de castración confirmada</label>
-                                        <select name="castrate_testosterone_confirmed" class="input-dark">
-                                            <option value="1">Sí</option>
-                                            <option value="0">No</option>
+                                        <label class="block text-xs font-medium mb-1">Estado de castración</label>
+                                        <select name="castrate_testosterone_status" class="input-dark">
+                                            <option value="">Seleccionar</option>
+                                            <option value="confirmed_castrate">Confirmada</option>
+                                            <option value="not_castrate">No confirmada</option>
+                                            <option value="unknown">No documentada</option>
                                         </select>
                                     </div>
                                     <div>
@@ -639,32 +843,38 @@
 
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div>
-                            <label class="block text-xs font-medium mb-1">Línea terapéutica</label>
-                            <select name="line_of_therapy" class="input-dark">
-                                <option value="1">Primera línea en enfermedad metastásica sensible a la castración</option>
-                                <option value="2">Segunda línea o posterior en enfermedad resistente a la castración con metástasis</option>
+                            <label class="block text-xs font-medium mb-1">Número de línea terapéutica</label>
+                            <select name="line_of_therapy_number" class="input-dark">
+                                <option value="">Seleccionar</option>
+                                <option value="1">1L</option>
+                                <option value="2">2L</option>
+                                <option value="3">3L</option>
+                                <option value="4">4L</option>
+                                <option value="5">5L</option>
+                                <option value="6">6L o posterior</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Contexto clínico de la línea</label>
+                            <select name="line_of_therapy_context" class="input-dark">
+                                <option value="">Seleccionar</option>
+                                <option value="mHSPC_initial">mHSPC inicial</option>
+                                <option value="mHSPC_post_docetaxel">mHSPC post-docetaxel</option>
+                                <option value="m0_CRPC_first_line">m0 CRPC primera línea</option>
+                                <option value="mCRPC_first_line">mCRPC primera línea</option>
+                                <option value="mCRPC_post_ARPI_pre_taxane">mCRPC post-ARPI pre-taxano</option>
+                                <option value="mCRPC_post_taxane">mCRPC post-taxano</option>
+                                <option value="mCRPC_post_PARP">mCRPC post-PARP</option>
+                                <option value="mCRPC_post_Lu177">mCRPC post-Lu177</option>
+                                <option value="later_line">Líneas posteriores</option>
                             </select>
                         </div>
 
                         <div>
                             <label class="block text-xs font-medium mb-1">Esquema farmacológico</label>
-                            <select name="drug_scheme" class="input-dark bg-slate-800 font-medium text-amber-100">
-                                <option value="">Sin esquema sistémico al ingreso</option>
-                                <optgroup label="Monoterapia (no recomendada por las guías actuales)">
-                                    <option value="ADT_MONO">Solo terapia de privación androgénica (ADT)</option>
-                                </optgroup>
-                                <optgroup label="Dobletes con terapia de privación androgénica">
-                                    <option value="ADT_ENZALUTAMIDE">Terapia de privación androgénica (ADT) + enzalutamida según los estudios ARCHES y ENZAMET</option>
-                                    <option value="ADT_APALUTAMIDE">Terapia de privación androgénica (ADT) + apalutamida según el estudio TITAN</option>
-                                    <option value="ADT_ABIRATERONE">Terapia de privación androgénica + abiraterona según el estudio LATITUDE</option>
-                                </optgroup>
-                                <optgroup label="Tripletes para alto volumen">
-                                    <option value="ADT_DOCETAXEL_DAROLUTAMIDE">Terapia de privación androgénica (ADT) + docetaxel + darolutamida según el estudio ARASENS
-                                    </option>
-                                    <option value="ADT_DOCETAXEL_ABIRATERONE">Terapia de privación androgénica (ADT) + docetaxel + abiraterona según el estudio PEACE-1
-                                    </option>
-                                </optgroup>
-                            </select>
+                            <select name="drug_scheme" class="input-dark bg-slate-800 font-medium text-amber-100" data-therapy-catalog="true"></select>
+                            <p class="mt-1 text-[11px] text-slate-500">Seleccione el esquema canónico activo. El cambio de esquema alimenta la línea terapéutica, el historial del paciente y la torre de vigilancia del APE.</p>
                         </div>
 
                         <div>
@@ -965,6 +1175,7 @@
     <script>
         const humanizeClinicalText = window.clinicalPresentation?.humanize || ((value) => value);
         const assessmentId = '{{ assessment_id or "" }}';
+        const therapyCatalogEntries = {{ (therapy_catalog_entries or [])|tojson }};
         let assessmentState = '';
         const intakeScopeConfig = {
             diagnostic: {
@@ -1032,6 +1243,82 @@
             field.value = value;
         }
 
+        function normalizeTherapyCatalogEntry(entry) {
+            return {
+                value: entry.regimen_code || '',
+                label: entry.label_clinico || entry.regimen_code || '',
+                group: entry.therapy_class || 'other',
+                groupLabel: {
+                    observation: 'Observación / sin sistémico',
+                    androgen_axis: 'Eje androgénico',
+                    triplet: 'Tripletes / intensificación',
+                    taxane: 'Taxanos',
+                    parp: 'PARP / precisión',
+                    radioligand: 'Radioligandos / radiofármacos',
+                    immunotherapy: 'Inmunoterapia',
+                }[entry.therapy_class || ''] || 'Otros esquemas',
+                stateScope: entry.state_scope || [],
+                managementTracks: entry.management_tracks || [],
+                lineContexts: entry.line_contexts || [],
+            };
+        }
+
+        function buildTherapyCatalogOptions() {
+            const scope = stateToScope(assessmentState);
+            const lineContext = document.querySelector('[name="line_of_therapy_context"]')?.value || '';
+            const selectedValue = document.querySelector('[name="drug_scheme"]')?.value || '';
+            if (scope !== 'advanced') {
+                return [{ value: '', label: 'Sin esquema sistémico confirmado', groupLabel: '', group: '', stateScope: [], managementTracks: [], lineContexts: [] }];
+            }
+            const normalized = therapyCatalogEntries.map(normalizeTherapyCatalogEntry);
+            const stateFiltered = normalized.filter((entry) => !entry.stateScope.length || entry.stateScope.includes('advanced') || entry.stateScope.includes(assessmentState));
+            const scored = stateFiltered.map((entry) => ({
+                ...entry,
+                sortScore: lineContext && entry.lineContexts.includes(lineContext) ? -1 : 0,
+            })).sort((left, right) => {
+                if (left.sortScore !== right.sortScore) return left.sortScore - right.sortScore;
+                return String(left.label).localeCompare(String(right.label), 'es');
+            });
+            const options = [{ value: '', label: 'Sin esquema sistémico confirmado', groupLabel: '', group: '', stateScope: [], managementTracks: [], lineContexts: [] }, ...scored];
+            if (selectedValue && !options.some((entry) => entry.value === selectedValue)) {
+                options.unshift({ value: selectedValue, label: selectedValue, groupLabel: 'Esquema previamente cargado', group: 'legacy', stateScope: [], managementTracks: [], lineContexts: [] });
+            }
+            return options;
+        }
+
+        function refreshTherapySchemeOptions(preserveSelection = true) {
+            const select = document.querySelector('[name="drug_scheme"]');
+            if (!select) return;
+            const selectedValue = preserveSelection ? select.value : '';
+            const options = buildTherapyCatalogOptions();
+            const groups = new Map();
+            select.innerHTML = '';
+            options.forEach((option) => {
+                if (!option.groupLabel) {
+                    const element = document.createElement('option');
+                    element.value = option.value;
+                    element.textContent = option.label;
+                    if (selectedValue === option.value) element.selected = true;
+                    select.appendChild(element);
+                    return;
+                }
+                if (!groups.has(option.groupLabel)) {
+                    const group = document.createElement('optgroup');
+                    group.label = option.groupLabel;
+                    groups.set(option.groupLabel, group);
+                    select.appendChild(group);
+                }
+                const element = document.createElement('option');
+                element.value = option.value;
+                element.textContent = option.label;
+                if (selectedValue === option.value) element.selected = true;
+                groups.get(option.groupLabel).appendChild(element);
+            });
+            if (!select.value && selectedValue && options.some((option) => option.value === selectedValue)) {
+                select.value = selectedValue;
+            }
+        }
+
         function stateToScope(state) {
             if (state === 'diagnostic_workup' || state === 'post_negative_biopsy_followup') {
                 return 'diagnostic';
@@ -1093,19 +1380,15 @@
             if (scope !== 'advanced') {
                 setFormField('metastasis_site', 'M0');
                 setFormField('volume_disease', 'Low');
-                setFormField('line_of_therapy', '1');
+                setFormField('line_of_therapy_number', '');
+                setFormField('line_of_therapy_context', '');
                 setFormField('drug_scheme', '');
             } else {
-                setFormField('line_of_therapy', stateToLineOfTherapy(state));
+                setFormField('line_of_therapy_number', '');
+                setFormField('line_of_therapy_context', '');
             }
             updateVolumeCheck();
-        }
-
-        function stateToLineOfTherapy(state) {
-            if (state === 'm0_crpc' || state === 'm1_crpc') {
-                return '2';
-            }
-            return '1';
+            refreshTherapySchemeOptions(scope === 'advanced');
         }
 
         function renderList(items, emptyMessage) {
@@ -1149,6 +1432,7 @@
                 setFormField('child_pugh_score', input.child_pugh_score);
                 setFormField('pain_symptoms', input.pain_symptoms);
                 setFormField('prior_docetaxel_cycles', input.prior_docetaxel_cycles);
+                refreshTherapySchemeOptions(true);
                 window.clinicalPresentation?.normalizeDocument();
             } catch (error) {
                 console.error('No se pudo cargar la evaluación clínica:', error);
@@ -1167,6 +1451,62 @@
             }
         }
 
+        function syncDetailedMetastaticSummary(data) {
+            const asNumber = (value) => {
+                if (value === undefined || value === null || value === '') return 0;
+                const parsed = Number(value);
+                return Number.isFinite(parsed) ? parsed : 0;
+            };
+
+            const nodalCount =
+                asNumber(data.nonregional_nodal_count) +
+                asNumber(data.nonregional_nodal_retroperitoneal_count) +
+                asNumber(data.nonregional_nodal_mediastinal_count) +
+                asNumber(data.nonregional_nodal_supraclavicular_count) +
+                asNumber(data.nonregional_nodal_inguinal_count) +
+                asNumber(data.nonregional_nodal_other_count);
+            const boneCount =
+                asNumber(data.bone_axial_count) +
+                asNumber(data.bone_appendicular_count) +
+                asNumber(data.bone_skull_count) +
+                asNumber(data.bone_cervical_spine_count) +
+                asNumber(data.bone_thoracic_spine_count) +
+                asNumber(data.bone_lumbar_spine_count) +
+                asNumber(data.bone_ribs_thorax_count) +
+                asNumber(data.bone_pelvis_sacrum_count) +
+                asNumber(data.bone_humerus_count) +
+                asNumber(data.bone_forearm_count) +
+                asNumber(data.bone_femur_count) +
+                asNumber(data.bone_tibia_fibula_count) +
+                asNumber(data.bone_hand_count) +
+                asNumber(data.bone_foot_count);
+            const visceralCount =
+                asNumber(data.visceral_lesion_count) +
+                asNumber(data.visceral_lung_count) +
+                asNumber(data.visceral_liver_count) +
+                asNumber(data.visceral_brain_count) +
+                asNumber(data.visceral_adrenal_count) +
+                asNumber(data.visceral_pleura_count) +
+                asNumber(data.visceral_peritoneum_count) +
+                asNumber(data.visceral_other_count);
+
+            const detailedTotal = asNumber(data.metastatic_total_lesion_count) || nodalCount + boneCount + visceralCount;
+            if (visceralCount > 0) {
+                data.metastasis_site = 'Visceral';
+            } else if (boneCount > 0) {
+                data.metastasis_site = 'Hueso';
+            } else if (nodalCount > 0) {
+                data.metastasis_site = 'Ganglio';
+            } else if (!data.metastasis_site) {
+                data.metastasis_site = 'M0';
+            }
+
+            data.metastasis_count = data.metastasis_site === 'M0' ? 0 : Math.max(detailedTotal, 1);
+            if (data.metastasis_site !== 'M0' && !data.volume_disease) {
+                data.volume_disease = (data.metastasis_site === 'Visceral' || data.metastasis_count >= 4) ? 'High' : 'Low';
+            }
+        }
+
         async function submitPatient() {
             const formData = new FormData(document.getElementById('intakeForm'));
             const data = Object.fromEntries(formData.entries());
@@ -1178,7 +1518,10 @@
             };
             if (stateToScope(assessmentState) !== 'advanced') {
                 data.drug_scheme = '';
-                data.line_of_therapy = '1';
+                data.line_of_therapy_number = '';
+                data.line_of_therapy_context = '';
+            } else {
+                syncDetailedMetastaticSummary(data);
             }
 
             try {
@@ -1280,6 +1623,8 @@
         }
 
         applyIntakeState('', '');
+        document.querySelector('[name="line_of_therapy_context"]')?.addEventListener('change', () => refreshTherapySchemeOptions(true));
+        refreshTherapySchemeOptions(false);
         loadAssessmentContext();
         window.clinicalPresentation?.normalizeDocument();
     </script>
