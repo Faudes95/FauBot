@@ -20,6 +20,13 @@ from prostanet.shared.metastatic_profile import (
     NONREGIONAL_NODAL_SITE_LABELS,
     VISCERAL_SITE_LABELS,
 )
+from prostanet.shared.official_diagnosis import (
+    CLINICAL_RISK_GROUP_OPTIONS,
+    CLINICAL_STAGE_GROUP_OPTIONS,
+    CLINICAL_TSTAGE_OPTIONS,
+    HISTOLOGY_SUBTYPE_OPTIONS,
+    NODAL_STATUS_OPTIONS,
+)
 
 
 DIAGNOSTIC_STATES = {"diagnostic_workup", "post_negative_biopsy_followup"}
@@ -377,6 +384,22 @@ def _build_visit_sections(state: str, management_track: str) -> list[dict[str, A
             ],
         }
     ]
+    sections.append(
+        {
+            "title": "Diagnóstico oficial y clasificación",
+            "subtitle": "Complete o corrija subtipo histológico, Gleason y TNM clínico sin esperar un nuevo ingreso.",
+            "fields": [
+                _field("histology_subtype", "Subtipo histológico", "select", options=HISTOLOGY_SUBTYPE_OPTIONS),
+                _field("gleason_primary", "Gleason primario", "select", options=["", "3", "4", "5"]),
+                _field("gleason_secondary", "Gleason secundario", "select", options=["", "3", "4", "5"]),
+                _field("isup_grade", "ISUP / Grade Group", "select", options=["", "1", "2", "3", "4", "5"]),
+                _field("clinical_tstage", "T clínico", "select", options=CLINICAL_TSTAGE_OPTIONS),
+                _field("nodal_status", "N clínico", "select", options=NODAL_STATUS_OPTIONS),
+                _field("clinical_stage_group", "Etapa clínica", "select", options=CLINICAL_STAGE_GROUP_OPTIONS),
+                _field("clinical_risk_group", "Grupo de riesgo clínico", "select", options=CLINICAL_RISK_GROUP_OPTIONS),
+            ],
+        }
+    )
 
     if state in DIAGNOSTIC_STATES:
         sections.append(

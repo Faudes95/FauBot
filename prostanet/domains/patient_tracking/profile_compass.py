@@ -14,6 +14,7 @@ from prostanet.domains.patient_tracking.cohort_analytics import (
 from prostanet.domains.patient_tracking.psa_line_monitor import build_psa_by_treatment_line
 from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
 from prostanet.domains.patient_tracking.therapy_catalog import regimen_label, therapy_select_options
+from prostanet.shared.official_diagnosis import build_official_diagnosis_context, diagnosis_field_label
 
 
 DIAGNOSTIC_STATES = {"diagnostic_workup", "post_negative_biopsy_followup"}
@@ -323,7 +324,7 @@ def _label_for_field(field_name: str) -> str:
         "castrate_testosterone_status": "estado de castración",
         "testosterone": "testosterona",
     }
-    return labels.get(field_name, field_name.replace("_", " "))
+    return labels.get(field_name, diagnosis_field_label(field_name))
 
 
 def _build_missing_input_actions(
@@ -715,6 +716,7 @@ def _build_clinical_compass(
     display_assessment: dict[str, Any],
     raw_assessment: dict[str, Any],
     state_timeline: list[dict[str, Any]],
+    diagnosis_context: dict[str, Any],
     copilot_modifiers: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     display_result = (display_assessment or {}).get("display_result", {}) if display_assessment else {}
@@ -726,16 +728,12 @@ def _build_clinical_compass(
     state_conflict = bool(reconciliation.get("state_conflict_flag"))
     freshness = _build_data_freshness(patient, state)
     last_decisive = freshness[1] if state in DIAGNOSTIC_STATES and len(freshness) > 1 else freshness[0]
-    current_diagnosis = (
-        _first_nonempty(STATE_DISPLAY_MAP.get(state), "Diagnóstico en consolidación")
-        if state_conflict
-        else _first_nonempty(
-            nccn.get("label"),
-            display_assessment.get("module_label"),
-            STATE_DISPLAY_MAP.get(state),
-            "Diagnóstico en consolidación",
-        )
+    current_diagnosis = diagnosis_context.get("official_diagnosis") or _first_nonempty(
+        display_assessment.get("module_label"),
+        STATE_DISPLAY_MAP.get(state),
+        "Diagnóstico en consolidación",
     )
+    operational_module_label = _first_nonempty(display_assessment.get("module_label"), STATE_DISPLAY_MAP.get(state), state)
     modifier_bundle = copilot_modifiers or {}
     what_could_change_course = _merge_unique_text(
         _as_list(display_result.get("decision_changing_inputs"))[:4] or _as_list(display_result.get("missing_critical_inputs"))[:4],
@@ -749,7 +747,12 @@ def _build_clinical_compass(
     )
     return {
         "current_diagnosis": current_diagnosis,
-        "current_stage_label": _first_nonempty(STATE_DISPLAY_MAP.get(state), state) if state_conflict else _first_nonempty(display_assessment.get("module_label"), STATE_DISPLAY_MAP.get(state), state),
+        "official_diagnosis": current_diagnosis,
+        "official_diagnosis_status": diagnosis_context.get("official_diagnosis_status", "missing"),
+        "official_diagnosis_missing_fields": diagnosis_context.get("official_diagnosis_missing_fields", []),
+        "official_diagnosis_source_summary": diagnosis_context.get("official_diagnosis_source_summary", ""),
+        "operational_module_label": operational_module_label,
+        "current_stage_label": _first_nonempty(STATE_DISPLAY_MAP.get(state), state) if state_conflict else operational_module_label,
         "explicit_stage_label": _first_nonempty(STATE_DISPLAY_MAP.get(reconciliation.get("explicit_state")), reconciliation.get("explicit_state")),
         "state_conflict_flag": state_conflict,
         "state_conflict_reason": reconciliation.get("state_conflict_reason", ""),
@@ -2282,6 +2285,14 @@ def build_patient_profile_view_model(
     diagnostic_state = state in DIAGNOSTIC_STATES
     display_result = assessment.get("display_result", {}) if assessment else {}
     management_track = reconciliation.get("reconciled_management_track") or infer_management_track(patient, state, raw_assessment)
+    operational_module_label = _first_nonempty(assessment.get("module_label"), STATE_DISPLAY_MAP.get(state), state)
+    diagnosis_context = build_official_diagnosis_context(
+        patient=patient,
+        state=state,
+        raw_assessment=raw_assessment,
+        display_assessment=assessment,
+        operational_module_label=operational_module_label,
+    )
     agenda_board = build_agenda_board(patient, state, management_track, raw_assessment)
     persisted_agenda_items = patient.get("agenda_items") or agenda_board.get("items", [])
     active_agenda_items = [item for item in persisted_agenda_items if item.get("status") not in {"completed", "superseded", "cancelled"}]
@@ -2334,6 +2345,8 @@ def build_patient_profile_view_model(
         modifier_panel = _copilot_orientation_panel(copilot_modifiers or {})
         if modifier_panel:
             stage_specific_panels.append(modifier_panel)
+    if diagnosis_context.get("official_diagnosis_missing_fields_raw"):
+        missing_inputs_by_panel["official_diagnosis"] = diagnosis_context.get("official_diagnosis_missing_fields_raw", [])
     pivotal_panel = _build_pivotal_panel(patient.get("pivotal_matches", []))
     evidence_applicability = _build_evidence_applicability(
         state=state,
@@ -2393,8 +2406,14 @@ def build_patient_profile_view_model(
             display_assessment=assessment,
             raw_assessment=raw_assessment,
             state_timeline=state_timeline,
+            diagnosis_context=diagnosis_context,
             copilot_modifiers=copilot_modifiers,
         ),
+        "official_diagnosis": diagnosis_context.get("official_diagnosis", ""),
+        "official_diagnosis_status": diagnosis_context.get("official_diagnosis_status", "missing"),
+        "official_diagnosis_missing_fields": diagnosis_context.get("official_diagnosis_missing_fields", []),
+        "official_diagnosis_source_summary": diagnosis_context.get("official_diagnosis_source_summary", ""),
+        "operational_module_label": diagnosis_context.get("operational_module_label", operational_module_label),
         "stage_specific_panels": stage_specific_panels,
         "algorithm_panels": _build_algorithm_panels(
             state=state,

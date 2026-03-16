@@ -27,8 +27,11 @@
             </div>
         </main>
         {% block footer %}
-        <footer class="border-t border-slate-800 py-4 text-center text-xs text-slate-600">
-            {{ page_chrome.footer_text }}
+        <footer class="pm-footer border-t border-slate-800 py-4 text-center text-xs text-slate-600">
+            <div class="pm-footer-inner mx-auto {{ page_chrome.content_width_class }} px-4 sm:px-6 lg:px-8">
+                <div class="pm-footer-rule"></div>
+                <p class="pm-footer-text">{{ page_chrome.footer_text }}</p>
+            </div>
         </footer>
         {% endblock %}
     </div>

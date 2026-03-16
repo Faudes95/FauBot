@@ -2,222 +2,314 @@
 {% from "components/clinical_ui.html" import badge, section_header, surface_card %}
 
 {% block content %}
-    <div class="space-y-8">
-        <section class="grid gap-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
-            {% call surface_card("Selección rápida del módulo clínico", "Clasificación clínica", "Defina el escenario real y abra el asistente correcto.") %}
-                <form id="stateForm" class="grid gap-4 md:grid-cols-2">
-                    <div class="md:col-span-2">
-                        <p class="text-xs uppercase tracking-[0.2em] text-cyan-300">1. Confirmación diagnóstica</p>
-                        <p class="mt-1 text-sm text-slate-400">Primero separe triage diagnóstico de cáncer ya confirmado.</p>
-                    </div>
-                    <label class="text-sm">
-                        <span class="mb-1 block text-slate-300">Diagnóstico confirmado de cáncer de próstata</span>
-                        <select name="known_cancer_diagnosis" class="pn-input w-full px-3 py-2">
-                            <option value="1">Sí</option>
-                            <option value="0">No</option>
-                        </select>
-                    </label>
-                    <label class="text-sm">
-                        <span class="mb-1 block text-slate-300">Biopsia prostática previa benigna</span>
-                        <select name="prior_negative_biopsy" class="pn-input w-full px-3 py-2">
-                            <option value="0">No</option>
-                            <option value="1">Sí</option>
-                        </select>
-                    </label>
+    {% set domain_groups = [
+        {
+            'id': 'diagnostico',
+            'title': 'Diagnóstico',
+            'subtitle': 'Confirme histología, refine sospecha persistente y encamine el caso antes de abrir rutas de progresión o recurrencia.',
+            'modules': ['diagnostic_workup', 'post_negative_biopsy_followup'],
+        },
+        {
+            'id': 'localizado-postlocal',
+            'title': 'Localizado y postlocal',
+            'subtitle': 'Agrupa el trayecto inicial localizado, la vigilancia posterior a tratamiento local y la recurrencia bioquímica documentada.',
+            'modules': ['localized_initial', 'post_prostatectomy', 'recurrence_bcr'],
+        },
+        {
+            'id': 'sistemico-sensible',
+            'title': 'Sistémico sensible a la castración',
+            'subtitle': 'Ordena verificación bajo ADT y los distintos escenarios mHSPC según distribución metastásica y volumen clínico.',
+            'modules': ['adt_progression_verification', 'mcspc_oligo_metachronous', 'mcspc_low_volume_sync_oligo', 'mcspc_high_volume'],
+        },
+        {
+            'id': 'resistente-castracion',
+            'title': 'Resistente a la castración',
+            'subtitle': 'Concentra la toma de decisiones cuando la enfermedad ya cumple criterios de progresión resistente a la castración.',
+            'modules': ['m0_crpc', 'm1_crpc'],
+        },
+    ] %}
 
-                    <div id="localRecurrenceStageHeader" class="hidden md:col-span-2">
-                        <p class="text-xs uppercase tracking-[0.2em] text-cyan-300">2. Tratamiento local previo y recurrencia</p>
-                        <p class="mt-1 text-sm text-slate-400">Solo aplica si ya hubo tratamiento local por cáncer de próstata.</p>
-                    </div>
-                    <div id="priorProstatectomyWrapper" class="hidden text-sm">
-                        <span class="mb-1 block text-slate-300">Prostatectomía radical previa por cáncer de próstata</span>
-                        <select name="prior_prostatectomy" class="pn-input w-full px-3 py-2">
-                            <option value="0">No</option>
-                            <option value="1">Sí</option>
-                        </select>
-                    </div>
-                    <div id="priorRadiationWrapper" class="hidden text-sm">
-                        <span class="mb-1 block text-slate-300">Radioterapia previa por cáncer de próstata</span>
-                        <select name="prior_radiation" class="pn-input w-full px-3 py-2">
-                            <option value="0">No</option>
-                            <option value="1">Sí</option>
-                        </select>
-                    </div>
-                    <div id="bcr2Wrapper" class="hidden text-sm md:col-span-2">
-                        <span class="mb-1 block text-slate-300">Segunda recurrencia bioquímica tras tratamiento local</span>
-                        <select name="bcr2" class="pn-input w-full px-3 py-2">
-                            <option value="0">No</option>
-                            <option value="1">Sí</option>
-                        </select>
-                        <p class="mt-2 text-xs text-slate-500">Solo aplica si ya hubo cáncer confirmado, terapia local previa y una primera recurrencia bioquímica documentada.</p>
-                    </div>
-
-                    <div id="metastaticStageHeader" class="hidden md:col-span-2">
-                        <p class="text-xs uppercase tracking-[0.2em] text-cyan-300">3. Enfermedad metastásica conocida</p>
-                        <p class="mt-1 text-sm text-slate-400">Use este bloque solo con estadificación metastásica ya documentada.</p>
-                    </div>
-                    <div id="metastasisSiteWrapper" class="hidden text-sm">
-                        <span class="mb-1 block text-slate-300">Sitio de metástasis conocida</span>
-                        <select name="metastasis_site" class="pn-input w-full px-3 py-2">
-                            <option value="M0">Sin metástasis a distancia (M0)</option>
-                            <option value="Bone">Metástasis ósea</option>
-                            <option value="Node">Metástasis ganglionar</option>
-                            <option value="Visceral">Metástasis visceral</option>
-                            <option value="Oligometastatic">Enfermedad oligometastásica</option>
-                        </select>
-                    </div>
-                    <div id="metastasisCountWrapper" class="hidden text-sm">
-                        <span class="mb-1 block text-slate-300">Número de metástasis</span>
-                        <input type="number" name="metastasis_count" value="0" class="pn-input w-full px-3 py-2">
-                    </div>
-                    <div id="metachronousWrapper" class="hidden text-sm">
-                        <span class="mb-1 block text-slate-300">Metástasis metacrónicas</span>
-                        <select name="metachronous_metastasis" class="pn-input w-full px-3 py-2">
-                            <option value="0">No</option>
-                            <option value="1">Sí</option>
-                        </select>
-                    </div>
-                    <div id="volumeDiseaseWrapper" class="hidden text-sm">
-                        <span class="mb-1 block text-slate-300">Volumen de enfermedad</span>
-                        <select name="volume_disease" class="pn-input w-full px-3 py-2">
-                            <option value="Low">Bajo volumen</option>
-                            <option value="High">Alto volumen</option>
-                        </select>
-                    </div>
-
-                    <div id="systemicStageHeader" class="hidden md:col-span-2">
-                        <p class="text-xs uppercase tracking-[0.2em] text-cyan-300">4. Progresión bajo ADT / CRPC</p>
-                        <p class="mt-1 text-sm text-slate-400">CRPC solo existe con progresión y castración adecuada documentadas.</p>
-                    </div>
-                    <div id="systemicContextWrapper" class="hidden text-sm md:col-span-2">
-                        <span class="mb-1 block text-slate-300">Contexto de progresión sistémica</span>
-                        <select name="systemic_progression_context" class="pn-input w-full px-3 py-2">
-                            <option value="none">No aplica / sin contexto de progresión bajo ADT</option>
-                            <option value="progression_on_adt_verify_castration">Progresión bajo ADT: verificar castración</option>
-                            <option value="confirmed_crpc">CRPC ya confirmado</option>
-                        </select>
-                        <p class="mt-2 text-xs text-slate-500">Este contexto solo aplica cuando ya existe cáncer de próstata confirmado y una duda real de progresión bajo ADT o CRPC.</p>
-                    </div>
-                    <div id="adtVerificationFields" class="hidden md:col-span-2">
-                        <div class="rounded-2xl border border-cyan-500/20 bg-cyan-500/5 p-4">
-                            <p class="text-xs uppercase tracking-[0.2em] text-cyan-300">Verificación bajo ADT</p>
-                            <p class="mt-2 text-sm text-slate-300">No etiquetar enfermedad resistente a la castración sin testosterona en rango de castración confirmada y reestadificación convencional suficiente.</p>
-                            <div class="mt-4 grid gap-4 md:grid-cols-2">
-                                <label class="text-sm">
-                                    <span class="mb-1 block text-slate-300">Contexto actual de ADT</span>
-                                    <select name="current_adt_context" class="pn-input w-full px-3 py-2">
-                                        <option value="none">Sin ADT activa</option>
-                                        <option value="medical_adt_continuous">ADT médica continua</option>
-                                        <option value="orchiectomy">Orquiectomía</option>
-                                        <option value="intermittent_adt">ADT intermitente</option>
-                                    </select>
-                                </label>
-                                <label class="text-sm">
-                                    <span class="mb-1 block text-slate-300">Estado de testosterona en rango de castración</span>
-                                    <select name="castrate_testosterone_status" class="pn-input w-full px-3 py-2">
-                                        <option value="unknown">Desconocido</option>
-                                        <option value="confirmed_castrate">Castración confirmada</option>
-                                        <option value="not_castrate">No castrado</option>
-                                    </select>
-                                </label>
-                                <label class="text-sm">
-                                    <span class="mb-1 block text-slate-300">Patrón de progresión</span>
-                                    <select name="progression_pattern" class="pn-input w-full px-3 py-2">
-                                        <option value="biochemical_only">Solo bioquímica</option>
-                                        <option value="radiographic">Radiográfica</option>
-                                        <option value="clinical">Clínica</option>
-                                        <option value="mixed">Mixta</option>
-                                    </select>
-                                </label>
-                                <label class="text-sm">
-                                    <span class="mb-1 block text-slate-300">Estado de imagen convencional</span>
-                                    <select name="conventional_imaging_status" class="pn-input w-full px-3 py-2">
-                                        <option value="not_restaged">Sin reestadificación convencional reciente</option>
-                                        <option value="M0">Imagen convencional M0</option>
-                                        <option value="M1">Imagen convencional M1</option>
-                                    </select>
-                                </label>
-                            </div>
+    <div id="clinicalHubTop" class="space-y-8">
+        <section class="pm-mobile-domain-nav lg:hidden">
+            {% for group in domain_groups %}
+                <details class="pm-mobile-domain-card">
+                    <summary class="pm-mobile-domain-summary">
+                        <div>
+                            <p class="pm-micro-label">Dominio {{ "%02d"|format(loop.index) }}</p>
+                            <p class="pm-mobile-domain-title mt-2">{{ group.title }}</p>
                         </div>
+                        <span class="pm-micro-label">Abrir</span>
+                    </summary>
+                    <div class="pm-mobile-domain-links">
+                        <a href="#domain-{{ group.id }}" class="pm-mobile-domain-link" data-domain-link="{{ group.id }}">
+                            <span class="pm-label">Ir al bloque</span>
+                            <span class="pm-body mt-2 block">{{ group.subtitle }}</span>
+                        </a>
+                        {% for module in modules if module.module in group.modules %}
+                            <a href="#module-{{ module.module }}" class="pm-mobile-domain-link">
+                                <span class="pm-card-title">{{ module.title }}</span>
+                                <span class="pm-body mt-2 block">{{ module.core_questions[0] if module.core_questions else 'Ruta clínica estructurada por etapa.' }}</span>
+                            </a>
+                        {% endfor %}
                     </div>
-                </form>
-                <details class="pn-accordion mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-sm text-slate-300">
-                    <summary class="font-medium text-white">Qué corrige este clasificador</summary>
-                    <ul class="mt-3 space-y-1 text-slate-400">
-                        <li>Separa estudio diagnóstico de cáncer confirmado.</li>
-                        <li>No muestra recurrencia, metástasis o CRPC si el contexto aún no los permite.</li>
-                        <li>Evita mezclar sospecha diagnóstica, recurrencia local y progresión bajo ADT.</li>
-                    </ul>
                 </details>
-                <div class="mt-5 flex flex-wrap items-center gap-3">
-                    <button id="classifyButton" class="pn-btn pn-btn-primary">Clasificar estado</button>
-                    <span id="classifierStatus" class="text-sm text-slate-400"></span>
-                </div>
-                <div id="classifierResult" class="mt-4 hidden rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-4"></div>
-            {% endcall %}
-
-            {% call surface_card("Normativa activa", "Normativa", "NCCN y EAU ordenan el centro clínico y los asistentes.") %}
-                <ul class="space-y-3 text-sm text-slate-300">
-                    <li>La Red Nacional Integral del Cáncer (NCCN) versión 5.2026 decide la recomendación principal.</li>
-                    <li>La Asociación Europea de Urología (EAU) 2026 se muestra en paralelo cuando exista diferencia clínica.</li>
-                    <li>Recurrencia bioquímica, mHSPC y CRPC ya no comparten un solo flujo.</li>
-                    <li>CAPRA-S solo aparece después de prostatectomía radical.</li>
-                </ul>
-            {% endcall %}
+            {% endfor %}
         </section>
 
-        <section>
-            {{ section_header("Asistentes clínicos por dominio", "Módulos clínicos", "Abra el asistente que corresponde al punto real del recorrido del paciente.") }}
-            <div class="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                {% for module in modules %}
-                <article class="pn-surface flex h-full flex-col">
-                    <div class="flex items-center justify-between gap-3">
-                        {{ badge("Módulo clínico", "info") }}
-                        {{ badge(module.module, "muted", "font-mono normal-case") }}
-                    </div>
-                    <h3 class="mt-4 text-lg font-semibold text-white">{{ module.title }}</h3>
-                    <p class="mt-3 text-sm text-slate-300">{{ module.core_questions[0] if module.core_questions else 'Ruta clínica estructurada por etapa.' }}</p>
-                    <div class="mt-3 text-xs uppercase tracking-[0.2em] text-slate-500">Aplica cuando</div>
-                    <div class="mt-1 text-sm text-slate-400">{{ module.nccn_panels[0] if module.nccn_panels else 'Hay duda clínica en este escenario.' }}</div>
-                    <details class="pn-accordion mt-4 rounded-xl border border-slate-800 bg-slate-950/40 p-3 text-sm text-slate-300">
-                        <summary class="font-medium text-slate-200">Ver evidencia y preguntas</summary>
-                        <div class="mt-3 space-y-3">
-                            <div>
-                                <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Paneles NCCN</p>
-                                <p class="mt-1 text-sm text-slate-300">{{ module.nccn_panels | join(', ') }}</p>
+        <div class="pm-hub-layout">
+            <aside class="pm-hub-sidebar hidden lg:block">
+                <section class="pn-surface pm-hub-sidebar-card">
+                    <p class="pm-label">Asistentes por dominio</p>
+                    <h2 class="pm-section-title mt-3">Centro clínico organizado</h2>
+                    <p class="pm-body mt-3">Ubique cada asistente por momento clínico y reduzca el ruido visual sin alterar los flujos existentes.</p>
+                    <nav class="pm-hub-nav-list mt-6">
+                        {% for group in domain_groups %}
+                            <a href="#domain-{{ group.id }}" class="pm-hub-nav-link" data-domain-link="{{ group.id }}">
+                                <span class="pm-hub-nav-kicker">Dominio {{ "%02d"|format(loop.index) }}</span>
+                                <span class="pm-card-title mt-2 block">{{ group.title }}</span>
+                                <span class="pm-hub-nav-copy">{{ group.subtitle }}</span>
+                            </a>
+                        {% endfor %}
+                    </nav>
+                </section>
+            </aside>
+
+            <div class="pm-hub-main space-y-8">
+                <section class="pm-classifier-grid">
+                    {% call surface_card("Selección rápida del módulo clínico", "Clasificación clínica", "Defina el escenario real y abra el asistente correcto.", "pm-classifier-card lg:col-span-2") %}
+                        <form id="stateForm" class="grid gap-4 md:grid-cols-2">
+                            <div class="md:col-span-2">
+                                <p class="pm-step-label">1. Confirmación diagnóstica</p>
+                                <p class="pm-body">Primero separe triage diagnóstico de cáncer ya confirmado.</p>
                             </div>
-                            <div>
-                                <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Estudios pivotales</p>
-                                <p class="mt-1 text-sm text-slate-300">{{ module.pivotal_trials | join(', ') }}</p>
+                            <label class="text-sm">
+                                <span class="pm-field-label">Diagnóstico confirmado de cáncer de próstata</span>
+                                <select name="known_cancer_diagnosis" class="pn-input w-full px-3 py-2">
+                                    <option value="1">Sí</option>
+                                    <option value="0">No</option>
+                                </select>
+                            </label>
+                            <label class="text-sm">
+                                <span class="pm-field-label">Biopsia prostática previa benigna</span>
+                                <select name="prior_negative_biopsy" class="pn-input w-full px-3 py-2">
+                                    <option value="0">No</option>
+                                    <option value="1">Sí</option>
+                                </select>
+                            </label>
+
+                            <div id="localRecurrenceStageHeader" class="hidden md:col-span-2">
+                                <p class="pm-step-label">2. Tratamiento local previo y recurrencia</p>
+                                <p class="pm-body">Solo aplica si ya hubo tratamiento local por cáncer de próstata.</p>
                             </div>
-                            <div>
-                                <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Preguntas clínicas</p>
-                                <ul class="mt-1 space-y-1 text-sm text-slate-300">
-                                    {% for question in module.core_questions[:3] %}
-                                    <li>{{ question }}</li>
-                                    {% endfor %}
-                                </ul>
+                            <div id="priorProstatectomyWrapper" class="hidden text-sm">
+                                <span class="pm-field-label">Prostatectomía radical previa por cáncer de próstata</span>
+                                <select name="prior_prostatectomy" class="pn-input w-full px-3 py-2">
+                                    <option value="0">No</option>
+                                    <option value="1">Sí</option>
+                                </select>
                             </div>
+                            <div id="priorRadiationWrapper" class="hidden text-sm">
+                                <span class="pm-field-label">Radioterapia previa por cáncer de próstata</span>
+                                <select name="prior_radiation" class="pn-input w-full px-3 py-2">
+                                    <option value="0">No</option>
+                                    <option value="1">Sí</option>
+                                </select>
+                            </div>
+                            <div id="bcr2Wrapper" class="hidden text-sm md:col-span-2">
+                                <span class="pm-field-label">Segunda recurrencia bioquímica tras tratamiento local</span>
+                                <select name="bcr2" class="pn-input w-full px-3 py-2">
+                                    <option value="0">No</option>
+                                    <option value="1">Sí</option>
+                                </select>
+                                <p class="pm-muted-copy mt-2">Solo aplica si ya hubo cáncer confirmado, terapia local previa y una primera recurrencia bioquímica documentada.</p>
+                            </div>
+
+                            <div id="metastaticStageHeader" class="hidden md:col-span-2">
+                                <p class="pm-step-label">3. Enfermedad metastásica conocida</p>
+                                <p class="pm-body">Use este bloque solo con estadificación metastásica ya documentada.</p>
+                            </div>
+                            <div id="metastasisSiteWrapper" class="hidden text-sm">
+                                <span class="pm-field-label">Sitio de metástasis conocida</span>
+                                <select name="metastasis_site" class="pn-input w-full px-3 py-2">
+                                    <option value="M0">Sin metástasis a distancia (M0)</option>
+                                    <option value="Bone">Metástasis ósea</option>
+                                    <option value="Node">Metástasis ganglionar</option>
+                                    <option value="Visceral">Metástasis visceral</option>
+                                    <option value="Oligometastatic">Enfermedad oligometastásica</option>
+                                </select>
+                            </div>
+                            <div id="metastasisCountWrapper" class="hidden text-sm">
+                                <span class="pm-field-label">Número de metástasis</span>
+                                <input type="number" name="metastasis_count" value="0" class="pn-input w-full px-3 py-2">
+                            </div>
+                            <div id="metachronousWrapper" class="hidden text-sm">
+                                <span class="pm-field-label">Metástasis metacrónicas</span>
+                                <select name="metachronous_metastasis" class="pn-input w-full px-3 py-2">
+                                    <option value="0">No</option>
+                                    <option value="1">Sí</option>
+                                </select>
+                            </div>
+                            <div id="volumeDiseaseWrapper" class="hidden text-sm">
+                                <span class="pm-field-label">Volumen de enfermedad</span>
+                                <select name="volume_disease" class="pn-input w-full px-3 py-2">
+                                    <option value="Low">Bajo volumen</option>
+                                    <option value="High">Alto volumen</option>
+                                </select>
+                            </div>
+
+                            <div id="systemicStageHeader" class="hidden md:col-span-2">
+                                <p class="pm-step-label">4. Progresión bajo ADT / CRPC</p>
+                                <p class="pm-body">CRPC solo existe con progresión y castración adecuada documentadas.</p>
+                            </div>
+                            <div id="systemicContextWrapper" class="hidden text-sm md:col-span-2">
+                                <span class="pm-field-label">Contexto de progresión sistémica</span>
+                                <select name="systemic_progression_context" class="pn-input w-full px-3 py-2">
+                                    <option value="none">No aplica / sin contexto de progresión bajo ADT</option>
+                                    <option value="progression_on_adt_verify_castration">Progresión bajo ADT: verificar castración</option>
+                                    <option value="confirmed_crpc">CRPC ya confirmado</option>
+                                </select>
+                                <p class="pm-muted-copy mt-2">Este contexto solo aplica cuando ya existe cáncer de próstata confirmado y una duda real de progresión bajo ADT o CRPC.</p>
+                            </div>
+                            <div id="adtVerificationFields" class="hidden md:col-span-2">
+                                <div class="rounded-2xl border border-cyan-500/20 bg-cyan-500/5 p-4">
+                                    <p class="pm-step-label">Verificación bajo ADT</p>
+                                    <p class="pm-body mt-3">No etiquetar enfermedad resistente a la castración sin testosterona en rango de castración confirmada y reestadificación convencional suficiente.</p>
+                                    <div class="mt-4 grid gap-4 md:grid-cols-2">
+                                        <label class="text-sm">
+                                            <span class="pm-field-label">Contexto actual de ADT</span>
+                                            <select name="current_adt_context" class="pn-input w-full px-3 py-2">
+                                                <option value="none">Sin ADT activa</option>
+                                                <option value="medical_adt_continuous">ADT médica continua</option>
+                                                <option value="orchiectomy">Orquiectomía</option>
+                                                <option value="intermittent_adt">ADT intermitente</option>
+                                            </select>
+                                        </label>
+                                        <label class="text-sm">
+                                            <span class="pm-field-label">Estado de testosterona en rango de castración</span>
+                                            <select name="castrate_testosterone_status" class="pn-input w-full px-3 py-2">
+                                                <option value="unknown">Desconocido</option>
+                                                <option value="confirmed_castrate">Castración confirmada</option>
+                                                <option value="not_castrate">No castrado</option>
+                                            </select>
+                                        </label>
+                                        <label class="text-sm">
+                                            <span class="pm-field-label">Patrón de progresión</span>
+                                            <select name="progression_pattern" class="pn-input w-full px-3 py-2">
+                                                <option value="biochemical_only">Solo bioquímica</option>
+                                                <option value="radiographic">Radiográfica</option>
+                                                <option value="clinical">Clínica</option>
+                                                <option value="mixed">Mixta</option>
+                                            </select>
+                                        </label>
+                                        <label class="text-sm">
+                                            <span class="pm-field-label">Estado de imagen convencional</span>
+                                            <select name="conventional_imaging_status" class="pn-input w-full px-3 py-2">
+                                                <option value="not_restaged">Sin reestadificación convencional reciente</option>
+                                                <option value="M0">Imagen convencional M0</option>
+                                                <option value="M1">Imagen convencional M1</option>
+                                            </select>
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                        </form>
+                        <div class="mt-5 flex flex-wrap items-center gap-3">
+                            <span id="classifierStatus" class="pm-body"></span>
                         </div>
-                    </details>
-                    <a href="/wizard/{{ module.module }}" class="mt-5 inline-flex w-fit rounded-full border border-cyan-400/40 px-4 py-2 text-sm font-medium text-cyan-300 transition-colors hover:border-cyan-300 hover:text-cyan-200">Abrir asistente clínico</a>
-                </article>
+                        <div id="classifierResult" class="mt-4 hidden rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-4"></div>
+                    {% endcall %}
+                </section>
+
+                <section id="hubEmptyState" class="pn-surface border border-slate-700/70 bg-slate-950/50">
+                    <p class="pm-label">Escenario por dominio</p>
+                    <h2 class="pm-section-title mt-3">Seleccione un dominio o complete el clasificador</h2>
+                    <p class="pm-body mt-3 max-w-3xl">Los asistentes clínicos se mantienen ocultos hasta que usted elija un dominio desde el menú lateral o el clasificador identifique el escenario más probable.</p>
+                </section>
+
+                <section>
+                    {{ section_header("Asistentes clínicos por dominio", "Módulos clínicos", "El centro clínico se ordena por dominios para mostrar primero el momento clínico correcto y después el asistente preciso.") }}
+                </section>
+
+                {% for group in domain_groups %}
+                    <section id="domain-{{ group.id }}" class="pm-domain-section" data-domain-section="{{ group.id }}">
+                        <div class="pm-domain-header">
+                            <div>
+                                <p class="pm-label">Dominio {{ "%02d"|format(loop.index) }}</p>
+                                <h2 class="pm-section-title mt-3">{{ group.title }}</h2>
+                                <p class="pm-body mt-3 max-w-4xl">{{ group.subtitle }}</p>
+                            </div>
+                            <span class="pm-domain-pill">Asistentes {{ group.modules | length }}</span>
+                        </div>
+
+                        <div class="pm-domain-grid">
+                            {% for module in modules if module.module in group.modules %}
+                                <article id="module-{{ module.module }}" class="pn-surface pm-module-card">
+                                    <div class="pm-module-card-body">
+                                        <div class="flex items-center justify-between gap-3">
+                                            {{ badge("Módulo clínico", "info") }}
+                                            {{ badge(module.module, "muted", "font-mono normal-case") }}
+                                        </div>
+                                        <p class="pm-module-kicker mt-5">Asistente clínico</p>
+                                        <h3 class="pm-card-title mt-2">{{ module.title }}</h3>
+                                        <p class="pm-body mt-3">{{ module.core_questions[0] if module.core_questions else 'Ruta clínica estructurada por etapa.' }}</p>
+
+                                        <div class="pm-module-when">
+                                            <p class="pm-label">Aplica cuando</p>
+                                            <p class="pm-inline-meta mt-3">{{ module.nccn_panels[0] if module.nccn_panels else 'Hay una duda clínica o un checkpoint activo en este escenario.' }}</p>
+                                        </div>
+
+                                        <details class="pn-accordion pm-accordion mt-4 rounded-2xl p-4 text-sm text-slate-300">
+                                            <summary class="pm-card-title">Ver evidencia y preguntas</summary>
+                                            <div class="mt-4 space-y-4">
+                                                <div>
+                                                    <p class="pm-micro-label">Paneles NCCN</p>
+                                                    <p class="pm-body mt-2">{{ module.nccn_panels | join(', ') }}</p>
+                                                </div>
+                                                <div>
+                                                    <p class="pm-micro-label">Estudios pivotales</p>
+                                                    <p class="pm-body mt-2">{{ module.pivotal_trials | join(', ') }}</p>
+                                                </div>
+                                                <div>
+                                                    <p class="pm-micro-label">Preguntas clínicas</p>
+                                                    <ul class="pm-body mt-2 space-y-2">
+                                                        {% for question in module.core_questions[:3] %}
+                                                            <li>{{ question }}</li>
+                                                        {% endfor %}
+                                                    </ul>
+                                                </div>
+                                            </div>
+                                        </details>
+                                        <a href="/wizard/{{ module.module }}" class="pm-module-cta mt-5">Abrir asistente clínico</a>
+                                    </div>
+                                </article>
+                            {% endfor %}
+                        </div>
+                    </section>
                 {% endfor %}
             </div>
-        </section>
+        </div>
     </div>
 {% endblock %}
 
 {% block page_scripts %}
     <script>
         const humanizeClinicalText = window.clinicalPresentation?.humanize || ((value) => value);
-        const classifyButton = document.getElementById('classifyButton');
         const stateForm = document.getElementById('stateForm');
+        const classifierStatus = document.getElementById('classifierStatus');
+        const classifierResult = document.getElementById('classifierResult');
+        const hubEmptyState = document.getElementById('hubEmptyState');
         const knownDiagnosisField = stateForm.querySelector('[name="known_cancer_diagnosis"]');
         const progressionContextField = stateForm.querySelector('[name="systemic_progression_context"]');
         const metastasisSiteField = stateForm.querySelector('[name="metastasis_site"]');
         const priorProstatectomyField = stateForm.querySelector('[name="prior_prostatectomy"]');
         const priorRadiationField = stateForm.querySelector('[name="prior_radiation"]');
+        const moduleToDomain = {
+            {% for group in domain_groups %}
+                {% for module_id in group.modules %}
+                    "{{ module_id }}": "{{ group.id }}",
+                {% endfor %}
+            {% endfor %}
+        };
         const wrapperIds = {
             localRecurrenceStageHeader: document.getElementById('localRecurrenceStageHeader'),
             priorProstatectomyWrapper: document.getElementById('priorProstatectomyWrapper'),
@@ -346,30 +438,81 @@
         ].forEach((control) => control.addEventListener('change', updateClassifierStages));
         updateClassifierStages();
 
-        classifyButton.addEventListener('click', async () => {
+        const domainSections = Array.from(document.querySelectorAll('[data-domain-section]'));
+        const domainLinks = Array.from(document.querySelectorAll('[data-domain-link]'));
+        const setActiveDomain = (domainId) => {
+            domainLinks.forEach((link) => {
+                link.classList.toggle('is-active', Boolean(domainId) && link.dataset.domainLink === domainId);
+            });
+            domainSections.forEach((section) => {
+                const isVisible = Boolean(domainId) && section.dataset.domainSection === domainId;
+                section.classList.toggle('is-hidden', !isVisible);
+                section.classList.toggle('is-visible', isVisible);
+            });
+            if (hubEmptyState) {
+                hubEmptyState.classList.toggle('hidden', Boolean(domainId));
+            }
+        };
+
+        async function runClassifier() {
             const payload = Object.fromEntries(new FormData(stateForm).entries());
-            document.getElementById('classifierStatus').textContent = 'Clasificando...';
+            classifierStatus.textContent = 'Clasificando...';
             const response = await fetch('/api/state-classifier', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify(payload),
             });
             const data = await response.json();
-            document.getElementById('classifierStatus').textContent = '';
-            const target = document.getElementById('classifierResult');
+            classifierStatus.textContent = '';
             if (!data.success) {
-                target.classList.remove('hidden');
-                target.innerHTML = `<p class="text-sm text-rose-300">${data.error}</p>`;
+                classifierResult.classList.remove('hidden');
+                classifierResult.innerHTML = `<p class="pm-body text-rose-300">${data.error}</p>`;
                 return;
             }
-            target.classList.remove('hidden');
-            target.innerHTML = `
-                <p class="text-xs uppercase tracking-[0.2em] text-cyan-300">Módulo sugerido</p>
-                <h3 class="mt-2 text-lg font-semibold text-white">${data.state_label || data.state}</h3>
-                <p class="mt-2 text-sm text-slate-300">${humanizeClinicalText(data.classification_reason)}</p>
-                <a href="/wizard/${data.state}" class="mt-4 inline-flex rounded-full bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400">Ir al asistente clínico</a>
+            const targetDomain = moduleToDomain[data.state] || null;
+            classifierResult.classList.remove('hidden');
+            classifierResult.innerHTML = `
+                <p class="pm-micro-label text-cyan-200">Módulo sugerido</p>
+                <h3 class="pm-card-title mt-3">${data.state_label || data.state}</h3>
+                <p class="pm-body mt-3 text-slate-200">${humanizeClinicalText(data.classification_reason)}</p>
+                <a href="/wizard/${data.state}" class="pn-btn pn-btn-primary mt-4 inline-flex">Ir al asistente clínico</a>
             `;
+            setActiveDomain(targetDomain);
             window.clinicalPresentation?.normalizeDocument();
-        });
+        }
+
+        if (domainSections.length && domainLinks.length) {
+            domainLinks.forEach((link) => {
+                link.addEventListener('click', () => {
+                    const targetId = link.dataset.domainLink;
+                    if (targetId) {
+                        setActiveDomain(targetId);
+                    }
+                });
+            });
+
+            let classifyDebounce = null;
+            let hasUserInteraction = false;
+            stateForm.addEventListener('input', () => {
+                hasUserInteraction = true;
+                clearTimeout(classifyDebounce);
+                classifyDebounce = window.setTimeout(() => {
+                    if (hasUserInteraction) {
+                        runClassifier();
+                    }
+                }, 320);
+            });
+            stateForm.addEventListener('change', () => {
+                hasUserInteraction = true;
+                clearTimeout(classifyDebounce);
+                classifyDebounce = window.setTimeout(() => {
+                    if (hasUserInteraction) {
+                        runClassifier();
+                    }
+                }, 320);
+            });
+
+            setActiveDomain(null);
+        }
     </script>
 {% endblock %}

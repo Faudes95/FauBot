@@ -86,6 +86,82 @@
                     </div>
                 </section>
 
+                <section class="pn-surface" data-intake-scope="all">
+                    <h2 class="section-header text-indigo-300 border-indigo-900/50">Diagnóstico oficial y clasificación oncológica</h2>
+                    <p class="text-xs text-slate-500 mb-4">Estos campos permiten que el perfil muestre un diagnóstico oncológico formal. Si hoy faltan, podrán completarse después desde la visita o desde verificación documental.</p>
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Subtipo histológico</label>
+                            <select name="histology_subtype" class="input-dark">
+                                {% for option in diagnosis_capture_options.histology_subtype %}
+                                    <option value="{{ option }}">{{ option or 'Seleccionar' }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Gleason primario</label>
+                            <select name="gleason_primary" class="input-dark">
+                                <option value="">Seleccionar</option>
+                                <option value="3">3</option>
+                                <option value="4">4</option>
+                                <option value="5">5</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Gleason secundario</label>
+                            <select name="gleason_secondary" class="input-dark">
+                                <option value="">Seleccionar</option>
+                                <option value="3">3</option>
+                                <option value="4">4</option>
+                                <option value="5">5</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">ISUP / Grade Group</label>
+                            <select name="isup_grade" class="input-dark">
+                                <option value="">Seleccionar</option>
+                                <option value="1">1</option>
+                                <option value="2">2</option>
+                                <option value="3">3</option>
+                                <option value="4">4</option>
+                                <option value="5">5</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">T clínico</label>
+                            <select name="clinical_tstage" class="input-dark">
+                                {% for option in diagnosis_capture_options.clinical_tstage %}
+                                    <option value="{{ option }}">{{ option or 'Seleccionar' }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">N clínico</label>
+                            <select name="nodal_status" class="input-dark">
+                                {% for option in diagnosis_capture_options.nodal_status %}
+                                    <option value="{{ option }}">{{ option or 'Seleccionar' }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Etapa clínica</label>
+                            <select name="clinical_stage_group" class="input-dark">
+                                {% for option in diagnosis_capture_options.clinical_stage_group %}
+                                    <option value="{{ option }}">{{ option or 'Seleccionar' }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Grupo de riesgo clínico</label>
+                            <select name="clinical_risk_group" class="input-dark">
+                                {% for option in diagnosis_capture_options.clinical_risk_group %}
+                                    <option value="{{ option }}">{{ option or 'Seleccionar' }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+                </section>
+
                 <!-- 2. Perfil Biológico Basal -->
                 <section class="pn-surface" data-intake-scope="all">
                     <h2 id="baselineSectionHeading" class="section-header text-emerald-400 border-emerald-900/50">2. Perfil biológico y laboratorios basales</h2>
@@ -1432,6 +1508,11 @@
                 setFormField('child_pugh_score', input.child_pugh_score);
                 setFormField('pain_symptoms', input.pain_symptoms);
                 setFormField('prior_docetaxel_cycles', input.prior_docetaxel_cycles);
+                setFormField('clinical_risk_group', input.clinical_risk_group ?? primary.risk_group);
+                setFormField('clinical_tstage', input.clinical_tstage);
+                setFormField('nodal_status', input.nodal_status);
+                setFormField('clinical_stage_group', input.clinical_stage_group);
+                setFormField('histology_subtype', input.histology_subtype);
                 refreshTherapySchemeOptions(true);
                 window.clinicalPresentation?.normalizeDocument();
             } catch (error) {

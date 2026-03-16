@@ -11,34 +11,29 @@
 {%- endmacro %}
 
 {% macro top_nav(page_chrome, ui_assets=None) -%}
-<header class="sticky top-0 z-50 border-b border-slate-800 bg-slate-950/90 backdrop-blur">
-    <div class="mx-auto flex h-20 {{ page_chrome.content_width_class }} items-center justify-between px-4 sm:px-6 lg:px-8">
+<header class="pm-top-nav sticky top-0 z-50 border-b border-slate-800 bg-slate-950/90 backdrop-blur">
+    <div class="pm-top-nav-shell mx-auto flex min-h-[6rem] {{ page_chrome.content_width_class }} items-center justify-between px-4 py-3 sm:px-6 lg:px-8">
         {% set logo_asset = (ui_assets or {}).get('prostamed_logo', {'src': '/static/img/prostamed_logo.svg', 'alt': 'PROSTAMED', 'is_fallback': True}) %}
         {% set wide_logo = not logo_asset.is_fallback %}
         <div class="pm-brand-lockup {{ 'pm-brand-lockup--wide' if wide_logo else '' }}">
             <img src="{{ logo_asset.src }}" alt="{{ logo_asset.alt }}" class="pm-logo {{ 'pm-logo--wide' if wide_logo else 'pm-logo--icon' }}" />
             <div class="pm-brand-copy {{ 'pm-brand-copy--wide' if wide_logo else '' }}">
-                <p class="text-[11px] uppercase tracking-[0.24em] text-slate-500">{{ page_chrome.kicker }}</p>
-                <p class="pm-brand-name text-sm">Prosta<span class="pm-med">Med</span></p>
+                <p class="pm-kicker pm-micro-label">{{ page_chrome.kicker }}</p>
+                <p class="pm-brand-name">Prosta<span class="pm-med">Med</span></p>
             </div>
-            {% if wide_logo %}
-            <div class="hidden lg:block min-w-0 pm-brand-kicker-shell">
-                <p class="text-[11px] uppercase tracking-[0.24em] text-slate-500">{{ page_chrome.kicker }}</p>
-            </div>
-            {% endif %}
         </div>
         <div class="flex items-center gap-2 sm:gap-4">
-            <nav class="hidden items-center gap-1 rounded-full border border-slate-800 bg-slate-900/70 p-1 md:flex">
+            <nav class="pm-nav-shell hidden items-center gap-1 rounded-full border border-slate-800 bg-slate-900/70 p-1 md:flex">
                 {% for item in page_chrome.nav_items %}
                     <a href="{{ item.href }}"
-                        class="rounded-full px-3 py-2 text-sm font-medium transition-colors {{ 'bg-cyan-500 text-slate-950' if item.active else 'text-slate-400 hover:bg-slate-800 hover:text-white' }}">
+                        class="pm-nav-link rounded-full px-3 py-2 text-sm font-medium transition-colors {{ 'bg-cyan-500 text-slate-950' if item.active else 'text-slate-400 hover:bg-slate-800 hover:text-white' }}">
                         {{ item.label }}
                     </a>
                 {% endfor %}
             </nav>
             {% if page_chrome.primary_action and page_chrome.primary_action.href %}
                 <a href="{{ page_chrome.primary_action.href }}"
-                    class="hidden rounded-full px-4 py-2 text-sm font-semibold shadow-lg shadow-cyan-950/30 transition-colors md:inline-flex {{ page_chrome.accent_profile.primary_bg_class }} {{ page_chrome.accent_profile.primary_hover_class }} text-slate-950">
+                    class="pm-primary-cta hidden rounded-full px-4 py-2 text-sm font-semibold shadow-lg shadow-cyan-950/30 transition-colors md:inline-flex {{ page_chrome.accent_profile.primary_bg_class }} {{ page_chrome.accent_profile.primary_hover_class }} text-slate-950">
                     {% if page_chrome.primary_action.icon %}<span class="mr-2">{{ page_chrome.primary_action.icon }}</span>{% endif %}
                     {{ page_chrome.primary_action.label }}
                 </a>
@@ -68,13 +63,13 @@
 {%- endmacro %}
 
 {% macro page_header(page_chrome) -%}
-<section class="mb-6 rounded-3xl border border-slate-800 bg-slate-900/80 p-6 shadow-2xl shadow-slate-950/40">
+<section class="pm-page-hero mb-6 rounded-3xl border border-slate-800 bg-slate-900/80 p-6 shadow-2xl shadow-slate-950/40">
     <div class="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-        <div class="max-w-3xl">
-            <p class="text-[11px] uppercase tracking-[0.28em] text-slate-500">{{ page_chrome.kicker }}</p>
-            <h1 class="mt-3 text-3xl font-semibold tracking-tight text-white sm:text-4xl">{{ page_chrome.title }}</h1>
+        <div class="{{ 'max-w-5xl' if page_chrome.page_key == 'clinical_hub' else 'max-w-3xl' }}">
+            <p class="pm-kicker pm-micro-label">{{ page_chrome.kicker }}</p>
+            <h1 class="pm-page-title pm-display-title mt-3 {{ 'pm-page-title--singleline' if page_chrome.page_key == 'clinical_hub' else '' }}">{{ page_chrome.title }}</h1>
             {% if page_chrome.subtitle %}
-                <p class="mt-3 max-w-3xl text-sm leading-7 text-slate-400 sm:text-base">{{ page_chrome.subtitle }}</p>
+                <p class="pm-page-subtitle pm-body-lg mt-4 max-w-3xl">{{ page_chrome.subtitle }}</p>
             {% endif %}
         </div>
         {% if page_chrome.header_actions %}
@@ -99,19 +94,19 @@
 {%- endmacro %}
 
 {% macro hero_header(title, subtitle='', kicker='', class_name='') -%}
-<section class="rounded-3xl border border-slate-800 bg-slate-900/80 p-6 shadow-2xl shadow-slate-950/40 {{ class_name }}">
-    {% if kicker %}<p class="text-[11px] uppercase tracking-[0.28em] text-slate-500">{{ kicker }}</p>{% endif %}
-    <h2 class="mt-2 text-2xl font-semibold tracking-tight text-white">{{ title }}</h2>
-    {% if subtitle %}<p class="mt-3 text-sm leading-7 text-slate-400">{{ subtitle }}</p>{% endif %}
+<section class="pm-page-hero rounded-3xl border border-slate-800 bg-slate-900/80 p-6 shadow-2xl shadow-slate-950/40 {{ class_name }}">
+    {% if kicker %}<p class="pm-kicker pm-micro-label">{{ kicker }}</p>{% endif %}
+    <h2 class="pm-page-title pm-section-title mt-3">{{ title }}</h2>
+    {% if subtitle %}<p class="pm-page-subtitle pm-body mt-3">{{ subtitle }}</p>{% endif %}
     {{ caller() if caller is defined }}
 </section>
 {%- endmacro %}
 
 {% macro section_header(title, kicker='', subtitle='') -%}
 <div class="mb-4">
-    {% if kicker %}<p class="text-[11px] uppercase tracking-[0.24em] text-slate-500">{{ kicker }}</p>{% endif %}
-    <h3 class="mt-1 text-xl font-semibold text-white">{{ title }}</h3>
-    {% if subtitle %}<p class="mt-2 text-sm text-slate-400">{{ subtitle }}</p>{% endif %}
+    {% if kicker %}<p class="pm-kicker pm-label">{{ kicker }}</p>{% endif %}
+    <h3 class="pm-section-title mt-3">{{ title }}</h3>
+    {% if subtitle %}<p class="pm-body mt-3">{{ subtitle }}</p>{% endif %}
 </div>
 {%- endmacro %}
 
@@ -119,9 +114,9 @@
 <section class="pn-surface {{ class_name }}">
     {% if title or kicker or subtitle %}
         <div class="mb-5">
-            {% if kicker %}<p class="text-[11px] uppercase tracking-[0.24em] text-slate-500">{{ kicker }}</p>{% endif %}
-            {% if title %}<h3 class="mt-1 text-lg font-semibold text-white">{{ title }}</h3>{% endif %}
-            {% if subtitle %}<p class="mt-2 text-sm text-slate-400">{{ subtitle }}</p>{% endif %}
+            {% if kicker %}<p class="pm-kicker pm-label">{{ kicker }}</p>{% endif %}
+            {% if title %}<h3 class="pm-card-title mt-3">{{ title }}</h3>{% endif %}
+            {% if subtitle %}<p class="pm-body mt-3">{{ subtitle }}</p>{% endif %}
         </div>
     {% endif %}
     {{ caller() }}
@@ -154,8 +149,8 @@
 <section class="pn-surface overflow-hidden {{ class_name }}">
     {% if title or subtitle %}
         <div class="border-b border-slate-800 px-5 py-4">
-            {% if title %}<h3 class="text-sm font-semibold uppercase tracking-[0.2em] text-slate-300">{{ title }}</h3>{% endif %}
-            {% if subtitle %}<p class="mt-2 text-sm text-slate-500">{{ subtitle }}</p>{% endif %}
+            {% if title %}<h3 class="pm-label">{{ title }}</h3>{% endif %}
+            {% if subtitle %}<p class="pm-body mt-3">{{ subtitle }}</p>{% endif %}
         </div>
     {% endif %}
     {{ caller() }}
@@ -164,8 +159,8 @@
 
 {% macro empty_state(title, message, action_href=None, action_label=None, class_name='') -%}
 <div class="pn-empty {{ class_name }}">
-    <h3 class="text-lg font-semibold text-slate-200">{{ title }}</h3>
-    <p class="mt-2 text-sm text-slate-500">{{ message }}</p>
+    <h3 class="pm-card-title">{{ title }}</h3>
+    <p class="pm-body mt-3">{{ message }}</p>
     {% if action_href and action_label %}
         <a href="{{ action_href }}" class="mt-5 inline-flex rounded-full bg-cyan-500 px-5 py-2.5 text-sm font-semibold text-slate-950 transition-colors hover:bg-cyan-400">
             {{ action_label }}
@@ -215,9 +210,9 @@
     {% if tnm_staging and tnm_staging.has_data %}
     <section class="pn-surface mt-6">
         <div class="mb-5">
-            <p class="text-[11px] uppercase tracking-[0.24em] text-slate-500">Clasificación Clínica</p>
+            <p class="pm-micro-label">Clasificación clínica</p>
             <div class="flex items-center gap-4 mt-2">
-                <h3 class="text-lg font-semibold text-white">Estadificación TNM</h3>
+                <h3 class="pm-card-title">Estadificación TNM</h3>
                 {% set cs = tnm_staging.severity_classes %}
                 <span class="tnm-composite {{ cs.border }} {{ cs.bg }} {{ cs.text }}">
                     {{ tnm_staging.tnm_composite }}
@@ -231,7 +226,7 @@
             {{ tnm_stage_card(tnm_staging.n_data, 'N') }}
             {{ tnm_stage_card(tnm_staging.m_data, 'M') }}
         </div>
-        <p class="mt-4 text-[11px] text-slate-600 italic">Referencia: AJCC Cancer Staging Manual 8th Ed. · NCCN 5.2026</p>
+        <p class="pm-muted-copy mt-4 italic">Referencia: AJCC Cancer Staging Manual 8th Ed. · NCCN 5.2026</p>
     </section>
     {% endif %}
 {%- endmacro %}

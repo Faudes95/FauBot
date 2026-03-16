@@ -20,6 +20,7 @@ from prostanet.presentation.bootstrap import register_modular_blueprints
 from prostanet.presentation.ui_assets import build_ui_assets
 from prostanet.presentation.view_models import build_page_chrome
 from prostanet.shared.feature_flags import resolve_feature_flags
+from prostanet.shared.official_diagnosis import diagnosis_capture_options
 from tracking_db import configure_db_path, get_stats, init_tracking_db, patient_exists
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -70,6 +71,9 @@ REGISTER_NUMERIC_FIELDS = (
     "line_of_therapy_number",
     "metastasis_count",
     "ecog_score",
+    "gleason_primary",
+    "gleason_secondary",
+    "isup_grade",
     "ipss_score",
     "iief5_score",
     "paquetes_anio",
@@ -329,6 +333,7 @@ def patient_intake():
         assessment_id=assessment_id,
         page_chrome=page_chrome,
         therapy_catalog_entries=therapy_catalog_entries(),
+        diagnosis_capture_options=diagnosis_capture_options(),
     )
 
 
@@ -844,6 +849,19 @@ def api_patient_signals(patient_id):
         )
     except Exception as e:
         logger.error(f"Error getting patient signals: {e}")
+        return error_response(str(e), 500)
+
+
+@app.route('/api/patients/<int:patient_id>', methods=['DELETE'])
+def api_delete_patient_profile(patient_id):
+    import tracking_db
+    try:
+        success, payload = tracking_db.delete_patient_profile(patient_id)
+        if not success:
+            return error_response(payload, 404)
+        return jsonify({"success": True, "deleted": payload})
+    except Exception as e:
+        logger.error(f"Error deleting patient {patient_id}: {e}")
         return error_response(str(e), 500)
 
 

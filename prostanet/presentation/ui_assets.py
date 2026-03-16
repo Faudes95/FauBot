@@ -60,6 +60,10 @@ def _resolve_asset(
 def build_ui_assets() -> dict[str, dict[str, object]]:
     prostamed_logo = _resolve_asset(
         candidates=[
+            "img/prostamed_logo_header.png",
+            "img/prostamed_logo_header.jpg",
+            "img/prostamed_logo_header.jpeg",
+            "img/prostamed_logo_header.webp",
             "img/prostamed_logo_real.png",
             "img/prostamed_logo_real.jpg",
             "img/prostamed_logo_real.jpeg",

@@ -4,6 +4,7 @@ import json
 import sqlite3
 
 from prostanet.shared.tnm_engine import TNMEngine
+from prostanet.shared.official_diagnosis import build_official_diagnosis_context
 
 
 def make_patient_payload(nss="12345678901", full_name="Paciente Demo"):
@@ -80,6 +81,99 @@ def test_register_patient_validates_required_fields_and_numeric_types(app_client
     assert "line_of_therapy" in invalid_data["error"]
 
 
+def test_clinical_hub_hides_classifier_noise_and_starts_empty(app_client):
+    client, _ = app_client
+
+    response = client.get("/clinical-hub")
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "Qué corrige este clasificador" not in html
+    assert "Clasificar estado" not in html
+    assert "Seleccione un dominio o complete el clasificador" in html
+    assert "setActiveDomain(null);" in html
+
+
+def test_visit_schema_includes_official_diagnosis_capture_fields(app_client):
+    client, _ = app_client
+    register = client.post("/api/register_patient", json=make_patient_payload(nss="23232323232", full_name="Paciente Diagnóstico Oficial"))
+    patient_id = register.get_json()["patient_id"]
+
+    schema_response = client.get(f"/api/patients/{patient_id}/visit-schema")
+
+    assert schema_response.status_code == 200
+    schema = schema_response.get_json()["visit_schema"]
+    field_names = {
+        field["name"]
+        for section in schema["sections"]
+        for field in section["fields"]
+    }
+    for field_name in (
+        "histology_subtype",
+        "gleason_primary",
+        "gleason_secondary",
+        "isup_grade",
+        "clinical_tstage",
+        "nodal_status",
+        "clinical_stage_group",
+        "clinical_risk_group",
+    ):
+        assert field_name in field_names
+
+
+def test_official_diagnosis_context_builds_localized_phrase_from_structured_fields(app_client):
+    client, db_path = app_client
+    payload = make_patient_payload(nss="24242424242", full_name="Paciente Localizado Oficial") | {
+        "histology_subtype": "Adenocarcinoma acinar",
+        "gleason_primary": 4,
+        "gleason_secondary": 3,
+        "isup_grade": 3,
+        "clinical_tstage": "T2b",
+        "nodal_status": "N0",
+        "clinical_stage_group": "IIA",
+        "clinical_risk_group": "intermedio desfavorable",
+    }
+
+    register = client.post("/api/register_patient", json=payload)
+    assert register.status_code == 200
+
+    import tracking_db
+
+    record = tracking_db.get_patient_full_record(register.get_json()["patient_id"])
+    context = build_official_diagnosis_context(
+        patient=record,
+        state="localized_initial",
+        raw_assessment={},
+        display_assessment={},
+        operational_module_label="Enfermedad localizada o regional N1M0",
+    )
+
+    assert context["official_diagnosis_status"] == "complete"
+    assert "Adenocarcinoma acinar de próstata Gleason 7 (4+3)" in context["official_diagnosis"]
+    assert "riesgo intermedio desfavorable" in context["official_diagnosis"]
+    assert "etapa clínica IIA" in context["official_diagnosis"]
+
+
+def test_official_diagnosis_context_falls_back_to_operational_label_when_missing(app_client):
+    client, _ = app_client
+    register = client.post("/api/register_patient", json=make_patient_payload(nss="25252525252", full_name="Paciente Fallback Diagnóstico"))
+    assert register.status_code == 200
+
+    import tracking_db
+
+    record = tracking_db.get_patient_full_record(register.get_json()["patient_id"])
+    context = build_official_diagnosis_context(
+        patient=record,
+        state="localized_initial",
+        raw_assessment={},
+        display_assessment={},
+        operational_module_label="Enfermedad localizada o regional N1M0",
+    )
+
+    assert context["official_diagnosis_status"] == "missing"
+    assert context["official_diagnosis"] == "Enfermedad localizada o regional N1M0"
+
+
 def test_followup_alerts_and_export_flow(app_client):
     client, _ = app_client
     payload = make_patient_payload(nss="33333333333", full_name="Paciente Seguimiento")
@@ -150,6 +244,45 @@ def test_patient_and_alert_routes_return_404_for_missing_patient(app_client):
     export_response = client.get("/api/export/00000000000")
     assert export_response.status_code == 404
     assert export_response.get_json()["success"] is False
+
+
+def test_delete_patient_endpoint_removes_profile_and_related_rows(app_client):
+    client, db_path = app_client
+    payload = make_patient_payload(nss="23232323232", full_name="Paciente Eliminable")
+    register_response = client.post("/api/register_patient", json=payload)
+    patient_id = register_response.get_json()["patient_id"]
+
+    client.post(
+        "/api/add_followup",
+        json={
+            "patient_id": patient_id,
+            "psa": 4.1,
+            "testosterone": 18,
+            "ecog": 1,
+            "pain": 0,
+            "treatment": "ADT",
+            "status": "Estable",
+        },
+    )
+
+    delete_response = client.delete(f"/api/patients/{patient_id}")
+    assert delete_response.status_code == 200
+    delete_payload = delete_response.get_json()
+    assert delete_payload["success"] is True
+    assert delete_payload["deleted"]["patient_id"] == patient_id
+
+    patient_response = client.get(f"/api/patient/{payload['nss']}")
+    assert patient_response.status_code == 404
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM patient_identity WHERE id = ?", (patient_id,))
+    assert cursor.fetchone()[0] == 0
+    cursor.execute("SELECT COUNT(*) FROM clinical_baseline WHERE patient_id = ?", (patient_id,))
+    assert cursor.fetchone()[0] == 0
+    cursor.execute("SELECT COUNT(*) FROM follow_up_visits WHERE patient_id = ?", (patient_id,))
+    assert cursor.fetchone()[0] == 0
+    conn.close()
 
 
 def test_agenda_endpoints_and_stage_visit_bundle_flow(app_client):

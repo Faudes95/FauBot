@@ -1,6 +1,8 @@
 import sqlite3
 import json
 import os
+import shutil
+import re
 from datetime import datetime, timedelta, date
 import logging
 from pathlib import Path
@@ -84,6 +86,54 @@ def patient_exists(patient_id):
     except Exception as e:
         logger.error(f"Error checking patient existence: {e}")
         return False
+
+
+def delete_patient_profile(nss_or_id):
+    conn = _connect()
+    cursor = conn.cursor()
+    identity = _resolve_identity_row(cursor, nss_or_id)
+    if not identity:
+        conn.close()
+        return False, "Paciente no encontrado"
+
+    patient_id = int(identity["id"])
+    nss = str(identity["nss"] or "").strip()
+    full_name = str(identity["full_name"] or "").strip()
+
+    cursor.execute("SELECT id FROM source_documents WHERE patient_id = ?", (patient_id,))
+    document_ids = [int(row["id"]) for row in cursor.fetchall()]
+    if document_ids:
+        placeholders = ",".join(["?"] * len(document_ids))
+        cursor.execute(f"DELETE FROM document_extraction_candidates WHERE document_id IN ({placeholders})", document_ids)
+        cursor.execute(f"DELETE FROM document_verification_tasks WHERE document_id IN ({placeholders})", document_ids)
+        cursor.execute(f"DELETE FROM verified_document_facts WHERE document_id IN ({placeholders})", document_ids)
+
+    table_names = [
+        row["name"]
+        for row in cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        ).fetchall()
+    ]
+    for table_name in table_names:
+        if table_name == "patient_identity":
+            continue
+        columns = [column["name"] for column in cursor.execute(f"PRAGMA table_info({table_name})").fetchall()]
+        if "patient_id" in columns:
+            cursor.execute(f"DELETE FROM {table_name} WHERE patient_id = ?", (patient_id,))
+
+    cursor.execute("DELETE FROM patient_identity WHERE id = ?", (patient_id,))
+    conn.commit()
+    conn.close()
+
+    patient_dir = _document_store().root / f"patient_{patient_id}"
+    if patient_dir.exists():
+        shutil.rmtree(patient_dir, ignore_errors=True)
+
+    return True, {
+        "patient_id": patient_id,
+        "nss": nss,
+        "full_name": full_name,
+    }
 
 
 def _parse_json_blob(value, default):
@@ -486,6 +536,11 @@ def init_tracking_db():
             -- Estadificación
             tnm_stage TEXT,
             gleason_score INTEGER,
+            histology_subtype TEXT,
+            clinical_tstage TEXT,
+            nodal_status TEXT,
+            clinical_stage_group TEXT,
+            clinical_risk_group TEXT,
             metastasis_site TEXT, -- 'Hueso', 'Visceral', 'Ganglio', 'M0'
             metastasis_count INTEGER,
             m_substage_resolved TEXT,
@@ -882,6 +937,7 @@ def init_tracking_db():
             total_cores INTEGER DEFAULT 12,
             positive_cores INTEGER DEFAULT 0,
             max_core_involvement_pct REAL,   -- 0-100
+            histology_subtype TEXT,
             -- Gleason
             gleason_primary INTEGER,
             gleason_secondary INTEGER,
@@ -1606,11 +1662,20 @@ def init_tracking_db():
         "ALTER TABLE clinical_baseline ADD COLUMN metastatic_profile_json TEXT",
         "ALTER TABLE clinical_baseline ADD COLUMN metastasis_assessment_date DATE",
         "ALTER TABLE clinical_baseline ADD COLUMN metastasis_document_source TEXT",
+        "ALTER TABLE clinical_baseline ADD COLUMN histology_subtype TEXT",
+        "ALTER TABLE clinical_baseline ADD COLUMN clinical_tstage TEXT",
+        "ALTER TABLE clinical_baseline ADD COLUMN nodal_status TEXT",
+        "ALTER TABLE clinical_baseline ADD COLUMN clinical_stage_group TEXT",
+        "ALTER TABLE clinical_baseline ADD COLUMN clinical_risk_group TEXT",
     ):
         try:
             c.execute(ddl)
         except sqlite3.OperationalError:
             pass
+    try:
+        c.execute("ALTER TABLE biopsy_details ADD COLUMN histology_subtype TEXT")
+    except sqlite3.OperationalError:
+        pass
 
     # genomic_profile: Biomarcadores emergentes
     for ddl in (
@@ -2345,6 +2410,7 @@ def register_new_patient(data, assessment=None):
             data.get('pain_symptoms'),
             comorbilidades
         ))
+        _persist_official_diagnosis_fields(c, patient_id, data)
 
         # 3. Historial Terapéutico Inicial
         normalized_scheme = normalize_regimen_code(data.get("drug_scheme"))
@@ -2525,6 +2591,124 @@ def _derive_metastatic_payload(data):
     }
 
 
+def _normalize_stage_component(value, prefix):
+    if not _is_present(value):
+        return ""
+    text = str(value).strip().upper()
+    text = text.replace(f"C{prefix}", prefix)
+    match = None
+    if prefix == "T":
+        match = re.search(r"T(X|[0-4][ABC]?)", text)
+    elif prefix == "N":
+        match = re.search(r"N(X|0|1)", text)
+    elif prefix == "M":
+        match = re.search(r"M(X|0|1[ABC]?)", text)
+    if not match:
+        return ""
+    stage = f"{prefix}{match.group(1)}"
+    if stage in {"TX", "NX", "MX"}:
+        return ""
+    return stage[0] + stage[1:].lower() if prefix == "M" else stage
+
+
+def _parse_tnm_stage(value):
+    text = str(value or "")
+    return (
+        _normalize_stage_component(text, "T"),
+        _normalize_stage_component(text, "N"),
+        _normalize_stage_component(text, "M"),
+    )
+
+
+def _official_diagnosis_values(data, existing=None):
+    existing = existing or {}
+    metastatic = _derive_metastatic_payload(data)
+    existing_t, existing_n, existing_m = _parse_tnm_stage(existing.get("tnm_stage"))
+    clinical_tstage = _normalize_stage_component(
+        data.get("clinical_tstage") or existing.get("clinical_tstage") or existing_t,
+        "T",
+    )
+    nodal_status = _normalize_stage_component(
+        data.get("nodal_status") or existing.get("nodal_status") or existing_n,
+        "N",
+    )
+    m_substage = _normalize_stage_component(
+        metastatic.get("m_substage_resolved") or existing.get("m_substage_resolved") or existing_m,
+        "M",
+    )
+    tnm_stage = ""
+    if clinical_tstage or nodal_status or m_substage:
+        tnm_stage = f"{clinical_tstage or 'Tx'}{nodal_status or 'Nx'}{m_substage or 'Mx'}"
+    gleason_primary = _safe_int(data.get("gleason_primary"), None)
+    gleason_secondary = _safe_int(data.get("gleason_secondary"), None)
+    gleason_score = None
+    if gleason_primary is not None and gleason_secondary is not None:
+        gleason_score = gleason_primary + gleason_secondary
+    histology_subtype = str(data.get("histology_subtype") or "").strip() or None
+    clinical_stage_group = str(data.get("clinical_stage_group") or "").strip() or None
+    clinical_risk_group = str(data.get("clinical_risk_group") or "").strip() or None
+    return {
+        "histology_subtype": histology_subtype,
+        "clinical_tstage": clinical_tstage or None,
+        "nodal_status": nodal_status or None,
+        "clinical_stage_group": clinical_stage_group,
+        "clinical_risk_group": clinical_risk_group,
+        "tnm_stage": tnm_stage or None,
+        "gleason_score": gleason_score,
+    }
+
+
+def _persist_official_diagnosis_fields(cursor, patient_id, data):
+    cursor.execute(
+        """
+        SELECT id, tnm_stage, histology_subtype, clinical_tstage, nodal_status, clinical_stage_group, clinical_risk_group, gleason_score
+        FROM clinical_baseline
+        WHERE patient_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (patient_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return
+    existing = {
+        "tnm_stage": row[1],
+        "histology_subtype": row[2],
+        "clinical_tstage": row[3],
+        "nodal_status": row[4],
+        "clinical_stage_group": row[5],
+        "clinical_risk_group": row[6],
+        "gleason_score": row[7],
+    }
+    values = _official_diagnosis_values(data, existing=existing)
+    if not any(_is_present(value) for value in values.values()):
+        return
+    cursor.execute(
+        """
+        UPDATE clinical_baseline
+        SET histology_subtype = COALESCE(?, histology_subtype),
+            clinical_tstage = COALESCE(?, clinical_tstage),
+            nodal_status = COALESCE(?, nodal_status),
+            clinical_stage_group = COALESCE(?, clinical_stage_group),
+            clinical_risk_group = COALESCE(?, clinical_risk_group),
+            tnm_stage = COALESCE(?, tnm_stage),
+            gleason_score = COALESCE(?, gleason_score)
+        WHERE id = ?
+        """,
+        (
+            values.get("histology_subtype"),
+            values.get("clinical_tstage"),
+            values.get("nodal_status"),
+            values.get("clinical_stage_group"),
+            values.get("clinical_risk_group"),
+            values.get("tnm_stage"),
+            values.get("gleason_score"),
+            row[0],
+        ),
+    )
+
+
 def _build_imaging_payload_from_visit(data):
     modality = data.get("imaging_modality")
     if not _is_present(modality):
@@ -2697,9 +2881,19 @@ def _upsert_treatment_history_from_visit(cursor, patient_id, visit_date, data):
 
 def _update_structural_baseline_from_visit(cursor, patient_id, data):
     metastatic = _derive_metastatic_payload(data)
+    diagnosis_fields = (
+        "histology_subtype",
+        "gleason_primary",
+        "gleason_secondary",
+        "isup_grade",
+        "clinical_tstage",
+        "nodal_status",
+        "clinical_stage_group",
+        "clinical_risk_group",
+    )
     if not any(
         _is_present(data.get(field))
-        for field in ("child_pugh_score", "hrr_status", "metastasis_site", "metastasis_count", "m_substage_resolved")
+        for field in ("child_pugh_score", "hrr_status", "metastasis_site", "metastasis_count", "m_substage_resolved", *diagnosis_fields)
     ) and str(metastatic.get("m_substage_resolved") or "M0") == "M0":
         return
     cursor.execute("SELECT id, hrr_status, child_pugh_score FROM clinical_baseline WHERE patient_id = ? ORDER BY id DESC LIMIT 1", (patient_id,))
@@ -2737,6 +2931,7 @@ def _update_structural_baseline_from_visit(cursor, patient_id, data):
                 row[0],
             ),
         )
+        _persist_official_diagnosis_fields(cursor, patient_id, data)
 
 
 def _build_pro_payload_from_visit(data):
@@ -4996,19 +5191,20 @@ def save_biopsy(patient_id, data):
         c.execute('''
             INSERT INTO biopsy_details (
                 patient_id, biopsy_date, biopsy_type, biopsy_context,
-                total_cores, positive_cores, max_core_involvement_pct,
+                total_cores, positive_cores, max_core_involvement_pct, histology_subtype,
                 gleason_primary, gleason_secondary, gleason_tertiary, isup_grade,
                 patron_cribiforme, carcinoma_intraductal,
                 perineural_invasion, lymphovascular_invasion,
                 porcentaje_patron_4, porcentaje_patron_5,
                 upgrade_from_previous, previous_isup, adverse_histology_variant_type,
                 adverse_histology_variant_detail, pathologist_notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             patient_id, data.get('biopsy_date', datetime.now().strftime('%Y-%m-%d')),
             data.get('biopsy_type', 'sistematica'), data.get('biopsy_context', 'diagnostica'),
             _safe_int(data.get('total_cores', 12), 12), _safe_int(data.get('positive_cores', 0), 0),
             _safe_float(data.get('max_core_involvement_pct', 0), 0),
+            data.get('histology_subtype'),
             _safe_int(data.get('gleason_primary'), None), _safe_int(data.get('gleason_secondary'), None),
             data.get('gleason_tertiary'), _safe_int(data.get('isup_grade'), None),
             _safe_int(data.get('patron_cribiforme', 0), 0), _safe_int(data.get('carcinoma_intraductal', 0), 0),
@@ -5018,6 +5214,7 @@ def save_biopsy(patient_id, data):
             data.get('adverse_histology_variant_type'), data.get('adverse_histology_variant_detail'),
             data.get('pathologist_notes')
         ))
+        _persist_official_diagnosis_fields(c, patient_id, data)
         conn.commit()
         conn.close()
         return True
@@ -5263,6 +5460,24 @@ def save_structured_result(patient_id, data):
         return False, "Tipo de resultado no soportado"
     if not success:
         return False, "No fue posible persistir el resultado estructurado"
+    if any(
+        _is_present(payload.get(field))
+        for field in (
+            "histology_subtype",
+            "gleason_primary",
+            "gleason_secondary",
+            "isup_grade",
+            "clinical_tstage",
+            "nodal_status",
+            "clinical_stage_group",
+            "clinical_risk_group",
+        )
+    ):
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        _persist_official_diagnosis_fields(cursor, patient_id, payload)
+        conn.commit()
+        conn.close()
     event_id = record_patient_event(
         patient_id,
         event_type=event_type,

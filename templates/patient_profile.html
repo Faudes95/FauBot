@@ -59,6 +59,138 @@
         .pn-tone-amber { background: linear-gradient(90deg, #b45309, #fbbf24); }
         .pn-tone-orange { background: linear-gradient(90deg, #c2410c, #fb923c); }
         .pn-tone-rose { background: linear-gradient(90deg, #be123c, #fb7185); }
+        .pm-profile-header {
+            position: relative;
+            overflow: hidden;
+            background:
+                radial-gradient(circle at top left, rgba(6, 182, 212, 0.08), transparent 28%),
+                radial-gradient(circle at top right, rgba(26, 111, 196, 0.08), transparent 32%),
+                linear-gradient(180deg, rgba(15, 23, 42, 0.98) 0%, rgba(15, 23, 42, 0.88) 100%);
+        }
+        .pm-profile-header::after,
+        .pm-summary-shell::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            background: linear-gradient(135deg, rgba(255,255,255,0.04), transparent 24%, transparent 76%, rgba(6,182,212,0.04));
+        }
+        .pm-summary-shell {
+            position: relative;
+            overflow: hidden;
+            background:
+                radial-gradient(circle at top right, rgba(6, 182, 212, 0.08), transparent 26%),
+                radial-gradient(circle at 15% 20%, rgba(26, 111, 196, 0.08), transparent 28%),
+                linear-gradient(180deg, rgba(15, 23, 42, 0.98) 0%, rgba(15, 23, 42, 0.9) 100%);
+        }
+        .pm-summary-kicker {
+            color: rgba(103, 232, 249, 0.92);
+            font-size: 0.72rem;
+            font-weight: 650;
+            letter-spacing: 0.28em;
+            text-transform: uppercase;
+        }
+        .pm-summary-title {
+            font-family: "Avenir Next", "SF Pro Display", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+            font-size: clamp(1.4rem, 2.4vw, 2.35rem);
+            font-weight: 700;
+            line-height: 1.05;
+            letter-spacing: -0.04em;
+            color: #fff;
+        }
+        .pm-summary-copy {
+            color: rgba(191, 219, 254, 0.8);
+            font-size: 0.97rem;
+            line-height: 1.72;
+        }
+        .pm-quick-jump {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.65rem;
+        }
+        .pm-quick-jump a {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 9999px;
+            border: 1px solid rgba(51, 65, 85, 0.92);
+            background: rgba(2, 6, 23, 0.45);
+            padding: 0.7rem 0.95rem;
+            color: rgba(226, 232, 240, 0.9);
+            font-size: 0.85rem;
+            font-weight: 550;
+            transition: border-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
+        }
+        .pm-quick-jump a:hover {
+            border-color: rgba(34, 211, 238, 0.5);
+            color: #ecfeff;
+            transform: translateY(-1px);
+        }
+        .pm-focus-tabs {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.7rem;
+        }
+        .pm-focus-tab {
+            border: 1px solid rgba(51, 65, 85, 0.92);
+            border-radius: 9999px;
+            background: rgba(15, 23, 42, 0.68);
+            color: rgba(191, 219, 254, 0.82);
+            padding: 0.72rem 1rem;
+            font-size: 0.84rem;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+            transition: border-color 0.18s ease, background-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
+        }
+        .pm-focus-tab:hover,
+        .pm-focus-tab.is-active {
+            border-color: rgba(34, 211, 238, 0.48);
+            background: rgba(8, 47, 73, 0.65);
+            color: #ecfeff;
+            transform: translateY(-1px);
+        }
+        .pm-focus-panel {
+            display: none;
+        }
+        .pm-focus-panel.is-active {
+            display: block;
+            animation: pm-focus-fade 0.24s ease;
+        }
+        .pm-focus-grid {
+            display: grid;
+            gap: 1rem;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        }
+        .pm-focus-card {
+            border-radius: 1.15rem;
+            border: 1px solid rgba(51, 65, 85, 0.92);
+            background: rgba(2, 6, 23, 0.34);
+            padding: 1rem;
+        }
+        .pm-focus-card h3 {
+            color: rgba(148, 163, 184, 0.9);
+            font-size: 0.72rem;
+            font-weight: 650;
+            letter-spacing: 0.22em;
+            text-transform: uppercase;
+        }
+        .pm-focus-card p,
+        .pm-focus-card li {
+            color: rgba(226, 232, 240, 0.9);
+        }
+        .pm-focus-card ul {
+            margin-top: 0.75rem;
+            padding-left: 1rem;
+            font-size: 0.92rem;
+            line-height: 1.65;
+        }
+        .pm-section-anchor {
+            scroll-margin-top: 8rem;
+        }
+        @keyframes pm-focus-fade {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
     </style>
 {% endblock %}
 
@@ -109,6 +241,8 @@
     {% set clinical_journey_events = profile.clinical_journey_events if profile else [] %}
     {% set psa_observability = profile.psa_observability if profile else {} %}
     {% set agenda_resolution_trace = profile.agenda_resolution_trace if profile else [] %}
+    {% set supporting_trials = evidence_applicability.supporting_trials if evidence_applicability and evidence_applicability.supporting_trials else [] %}
+    {% set focus_primary_trial = supporting_trials[0] if supporting_trials else {} %}
     {% set assessment_display = latest_assessment.display_result if latest_assessment and latest_assessment.display_result else {} %}
     {% set assessment_nccn = assessment_display.get('nccn_primary', {}) if assessment_display else {} %}
     {% set assessment_report = assessment_display.get('report_sections', {}) if assessment_display else {} %}
@@ -117,7 +251,7 @@
         <!-- ═══════════════════════════════════════════════════════════════════ -->
         <!-- 1. HEADER — Identidad + Alertas Activas                          -->
         <!-- ═══════════════════════════════════════════════════════════════════ -->
-        <header class="pn-surface">
+        <header class="pn-surface pm-profile-header">
             <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                 <div>
                     <div class="flex items-center gap-3 mb-1">
@@ -141,6 +275,9 @@
                     <button onclick="exportData()" class="pn-btn pn-btn-secondary px-3 py-2 text-xs flex items-center gap-1">
                         📥 Exportar archivo JSON
                     </button>
+                    <button onclick="deleteCurrentPatient()" class="pn-btn px-3 py-2 text-xs flex items-center gap-1 bg-rose-500/15 border border-rose-500/30 text-rose-200 hover:bg-rose-500/25">
+                        🗑️ Eliminar perfil
+                    </button>
                     <!-- Status -->
                     <div class="text-right">
                         <div class="text-xs text-slate-500 uppercase tracking-wider mb-1">Estado actual</div>
@@ -155,12 +292,16 @@
             {% if clinical_compass.current_diagnosis %}
             <div class="mt-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
                 <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
-                    <div class="text-xs uppercase tracking-wider text-slate-500">Diagnóstico actual</div>
-                    <div class="mt-2 text-sm font-semibold text-white">{{ clinical_compass.current_diagnosis }}</div>
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Diagnóstico oficial</div>
+                    <div class="mt-2 text-sm font-semibold text-white">{{ clinical_compass.official_diagnosis or clinical_compass.current_diagnosis }}</div>
+                    <div class="mt-2 text-[11px] text-slate-500">{{ clinical_compass.official_diagnosis_source_summary }}</div>
                 </div>
                 <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
-                    <div class="text-xs uppercase tracking-wider text-slate-500">Etapa / módulo actual</div>
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Etapa / clasificación operativa</div>
                     <div class="mt-2 text-sm font-semibold text-cyan-200">{{ clinical_compass.current_stage_label }}</div>
+                    {% if clinical_compass.operational_module_label and clinical_compass.operational_module_label != clinical_compass.current_stage_label %}
+                    <div class="mt-1 text-[11px] text-slate-500">{{ clinical_compass.operational_module_label }}</div>
+                    {% endif %}
                 </div>
                 <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
                     <div class="text-xs uppercase tracking-wider text-slate-500">Decisión clínica hoy</div>
@@ -178,6 +319,17 @@
                     <div class="mt-1 text-[11px] text-slate-500">{{ clinical_compass.last_decisive_data.date }}</div>
                 </div>
             </div>
+            {% if clinical_compass.official_diagnosis_status != 'complete' and clinical_compass.official_diagnosis_missing_fields %}
+            <div class="mt-3 rounded-xl border border-amber-500/20 bg-amber-950/10 p-4">
+                <div class="text-xs uppercase tracking-wider text-amber-300">Diagnóstico oficial incompleto</div>
+                <div class="mt-2 text-sm text-slate-200">Faltan datos para cerrar la frase diagnóstica con precisión formal:</div>
+                <ul class="mt-2 space-y-1 text-sm text-slate-300 list-disc pl-5">
+                    {% for field in clinical_compass.official_diagnosis_missing_fields %}
+                    <li>{{ field }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
             {% endif %}
 
             <!-- Alertas Activas -->
@@ -230,6 +382,172 @@
             {% endfor %}
         </section>
         {% endif %}
+
+        <section class="pn-surface pm-summary-shell">
+            <div class="relative z-10 space-y-5">
+                <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-5">
+                    <div class="max-w-4xl">
+                        <p class="pm-summary-kicker">Panel ejecutivo del caso</p>
+                        <h2 class="pm-summary-title mt-3">{{ clinical_compass.official_diagnosis or clinical_compass.current_diagnosis or 'Diagnóstico en consolidación' }}</h2>
+                        <p class="pm-summary-copy mt-3">{{ clinical_compass.current_stage_label or clinical_compass.operational_module_label or 'Clasificación operativa pendiente de consolidación.' }}</p>
+                    </div>
+                    <div class="pm-quick-jump">
+                        <a href="#profile-compass">Brújula</a>
+                        <a href="#profile-tnm">TNM</a>
+                        <a href="#profile-agenda">Agenda</a>
+                        <a href="#profile-documents">Documentos</a>
+                        <a href="#profile-evidence">Evidencia</a>
+                        <a href="#profile-longitudinal">Longitudinal</a>
+                        <a href="#profile-fitness">Fragilidad / fitness</a>
+                        <a href="#profile-adt">ADT</a>
+                    </div>
+                </div>
+
+                <div class="pm-focus-tabs" role="tablist" aria-label="Resumen ejecutivo del perfil">
+                    <button type="button" class="pm-focus-tab is-active" data-focus-tab="focus-now">Ahora</button>
+                    <button type="button" class="pm-focus-tab" data-focus-tab="focus-agenda">Seguimiento</button>
+                    <button type="button" class="pm-focus-tab" data-focus-tab="focus-gaps">Gaps críticos</button>
+                    <button type="button" class="pm-focus-tab" data-focus-tab="focus-evidence">Evidencia</button>
+                </div>
+
+                <div class="space-y-4">
+                    <div id="focus-now" class="pm-focus-panel is-active">
+                        <div class="pm-focus-grid">
+                            <div class="pm-focus-card">
+                                <h3>Diagnóstico / etapa</h3>
+                                <p class="mt-3 text-base font-semibold text-white">{{ clinical_compass.official_diagnosis or clinical_compass.current_diagnosis or 'Diagnóstico en consolidación' }}</p>
+                                <p class="mt-2 text-sm text-slate-300">{{ clinical_compass.current_stage_label or 'Sin etapa reconciliada' }}</p>
+                                {% if clinical_compass.official_diagnosis_status != 'complete' and clinical_compass.official_diagnosis_missing_fields %}
+                                <p class="mt-2 text-xs text-amber-200">Completar: {{ clinical_compass.official_diagnosis_missing_fields | join(', ') }}</p>
+                                {% endif %}
+                            </div>
+                            <div class="pm-focus-card">
+                                <h3>Decisión hoy</h3>
+                                <p class="mt-3 text-sm font-semibold text-white">{{ clinical_compass.primary_clinical_question or next_best_action.title or 'Sin decisión prioritaria estructurada' }}</p>
+                                <p class="mt-2 text-sm text-slate-300">{{ next_best_action.rationale or clinical_compass.recommended_direction or 'El copiloto no ha emitido una dirección adicional.' }}</p>
+                            </div>
+                            <div class="pm-focus-card">
+                                <h3>Último dato decisor</h3>
+                                <p class="mt-3 text-sm font-semibold text-white">{{ clinical_compass.last_decisive_data.label if clinical_compass.last_decisive_data else 'Sin dato decisor principal' }}</p>
+                                <p class="mt-2 text-sm text-slate-300">{{ clinical_compass.last_decisive_data.value if clinical_compass.last_decisive_data else 'Completar captura estructurada.' }}</p>
+                                <p class="mt-2 text-xs text-slate-500">{{ clinical_compass.last_decisive_data.date if clinical_compass.last_decisive_data else '' }}</p>
+                            </div>
+                            <div class="pm-focus-card">
+                                <h3>Seguridad activa</h3>
+                                <ul>
+                                    {% for item in clinical_signals.active_safety[:3] or [] %}
+                                    <li>{{ item }}</li>
+                                    {% else %}
+                                    <li>Sin alertas de seguridad activas estructuradas.</li>
+                                    {% endfor %}
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="focus-agenda" class="pm-focus-panel">
+                        <div class="pm-focus-grid">
+                            <div class="pm-focus-card">
+                                <h3>Próximo hito</h3>
+                                <p class="mt-3 text-base font-semibold text-white">{{ next_due_items[0].title if next_due_items else overdue_items[0].title if overdue_items else 'Sin hitos inmediatos' }}</p>
+                                <p class="mt-2 text-sm text-slate-300">{{ next_due_items[0].due_at if next_due_items else overdue_items[0].due_at if overdue_items else clinical_compass.monitoring_cadence }}</p>
+                            </div>
+                            <div class="pm-focus-card">
+                                <h3>Cadencia</h3>
+                                <p class="mt-3 text-sm font-semibold text-white">{{ agenda_board.stage_protocol.cadence_summary if agenda_board.stage_protocol else clinical_compass.monitoring_cadence }}</p>
+                                <p class="mt-2 text-xs text-slate-500">
+                                    {% if protocol_trace.anchor_date %}Anclado a {{ protocol_trace.anchor_date }} · {{ protocol_trace.anchor_source or 'origen no documentado' }}{% else %}Sin anclaje de protocolo visible{% endif %}
+                                </p>
+                            </div>
+                            <div class="pm-focus-card">
+                                <h3>Due / vencidos</h3>
+                                <ul>
+                                    <li>Due ahora: {{ next_due_items|length }}</li>
+                                    <li>Vencidos: {{ overdue_items|length }}</li>
+                                    <li>Activos: {{ active_agenda_items|length }}</li>
+                                </ul>
+                            </div>
+                            <div class="pm-focus-card">
+                                <h3>Acción rápida</h3>
+                                <p class="mt-3 text-sm text-slate-300">Capture visita o estudio desde la agenda activa para alimentar directamente señales, paneles y siguiente mejor acción.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="focus-gaps" class="pm-focus-panel">
+                        <div class="pm-focus-grid">
+                            <div class="pm-focus-card">
+                                <h3>Dato faltante que cambia conducta</h3>
+                                <ul>
+                                    {% for item in clinical_signals.critical_missing[:4] or [] %}
+                                    <li>{{ item }}</li>
+                                    {% else %}
+                                    <li>Sin dato faltante crítico activo.</li>
+                                    {% endfor %}
+                                </ul>
+                            </div>
+                            <div class="pm-focus-card">
+                                <h3>Captura obligada</h3>
+                                <ul>
+                                    {% for action in missing_input_actions[:4] %}
+                                    <li>{{ action.title }}</li>
+                                    {% else %}
+                                    <li>Sin tareas de captura obligada abiertas.</li>
+                                    {% endfor %}
+                                </ul>
+                            </div>
+                            <div class="pm-focus-card">
+                                <h3>Re-evaluación pendiente</h3>
+                                <ul>
+                                    {% for item in clinical_signals.awaiting_review[:4] or [] %}
+                                    <li>{{ item }}</li>
+                                    {% else %}
+                                    <li>Sin revisiones pendientes estructuradas.</li>
+                                    {% endfor %}
+                                </ul>
+                            </div>
+                            <div class="pm-focus-card">
+                                <h3>Qué podría cambiar el rumbo</h3>
+                                <ul>
+                                    {% for item in clinical_compass.what_could_change_course[:4] or [] %}
+                                    <li>{{ item }}</li>
+                                    {% else %}
+                                    <li>Sin modificadores adicionales documentados.</li>
+                                    {% endfor %}
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="focus-evidence" class="pm-focus-panel">
+                        <div class="pm-focus-grid">
+                            <div class="pm-focus-card">
+                                <h3>Recomendación respaldada</h3>
+                                <p class="mt-3 text-base font-semibold text-white">{{ focus_primary_trial.trial_name if focus_primary_trial else 'Sin estudio priorizado hoy' }}</p>
+                                <p class="mt-2 text-sm text-slate-300">{{ focus_primary_trial.decision_supported if focus_primary_trial else 'La recomendación actual aún no tiene un estudio priorizado en este panel.' }}</p>
+                            </div>
+                            <div class="pm-focus-card">
+                                <h3>Por qué aplica</h3>
+                                <p class="mt-3 text-sm text-slate-300">{{ focus_primary_trial.eligibility_rationale if focus_primary_trial else 'Complete biomarcadores, contexto terapéutico o distribución metastásica para enriquecer esta capa.' }}</p>
+                            </div>
+                            <div class="pm-focus-card">
+                                <h3>Algoritmo principal</h3>
+                                <p class="mt-3 text-base font-semibold text-white">{{ algorithm_panels[0].name if algorithm_panels else 'Sin algoritmo priorizado' }}</p>
+                                <p class="mt-2 text-sm text-slate-300">{{ algorithm_panels[0].clinical_decision_supported if algorithm_panels and algorithm_panels[0].clinical_decision_supported else 'Sin decisión clínica refinada adicional.' }}</p>
+                            </div>
+                            <div class="pm-focus-card">
+                                <h3>Research readiness</h3>
+                                <ul>
+                                    <li>Completitud cohorte: {{ cohort_completeness.summary if cohort_completeness and cohort_completeness.summary is defined else cohort_completeness.status if cohort_completeness else 'Sin dato' }}</li>
+                                    <li>Readiness: {{ research_readiness.status if research_readiness else 'Sin dato' }}</li>
+                                    <li>Endpoint: {{ endpoint_readiness.status if endpoint_readiness else 'Sin dato' }}</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
 
         {% if next_best_action.title or transition_proposals or clinical_signals.critical_missing or clinical_signals.active_safety %}
         <section class="pn-surface border border-cyan-700/30 bg-cyan-950/10">
@@ -343,19 +661,33 @@
         {% endif %}
 
         {% if clinical_compass.current_diagnosis %}
-        <section class="pn-surface border border-emerald-700/40 bg-emerald-950/10">
+        <section id="profile-compass" class="pn-surface pm-section-anchor border border-emerald-700/40 bg-emerald-950/10">
             <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-5">
                 <div class="max-w-4xl">
                     <div class="text-xs uppercase tracking-[0.2em] text-emerald-300">Brújula clínica actual</div>
                     <div class="sr-only">Última evaluación clínica modular</div>
-                    <h2 class="mt-2 text-2xl font-bold text-white">{{ clinical_compass.current_diagnosis }}</h2>
+                    <h2 class="mt-2 text-2xl font-bold text-white">{{ clinical_compass.official_diagnosis or clinical_compass.current_diagnosis }}</h2>
                     <p class="mt-2 text-sm text-slate-300">{{ assessment_nccn.get('resumen_del_caso') or assessment_report.get('summary') or clinical_compass.recommended_direction }}</p>
                     <div class="mt-4 flex flex-wrap gap-2">
                         <span class="px-2.5 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border border-cyan-500/20 bg-cyan-500/10 text-cyan-200">{{ clinical_compass.current_stage_label }}</span>
+                        {% if clinical_compass.operational_module_label and clinical_compass.operational_module_label != clinical_compass.current_stage_label %}
+                        <span class="px-2.5 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border border-slate-600 bg-slate-900/60 text-slate-300">{{ clinical_compass.operational_module_label }}</span>
+                        {% endif %}
                         <span class="px-2.5 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border border-amber-500/20 bg-amber-500/10 text-amber-200">{{ clinical_compass.management_intent_status }}</span>
                         <span class="px-2.5 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border border-slate-600 bg-slate-900/60 text-slate-300">{{ clinical_compass.event_kind_label }}</span>
                         <span class="px-2.5 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border border-emerald-500/20 bg-emerald-500/10 text-emerald-200">Calidad {{ clinical_compass.confidence_category }}</span>
                     </div>
+                    {% if clinical_compass.official_diagnosis_status != 'complete' and clinical_compass.official_diagnosis_missing_fields %}
+                    <div class="mt-4 rounded-xl border border-amber-500/20 bg-amber-950/10 p-4">
+                        <div class="text-xs uppercase tracking-wider text-amber-300">Qué falta para cerrar el diagnóstico oficial</div>
+                        <p class="mt-2 text-xs text-slate-400">{{ clinical_compass.official_diagnosis_source_summary }}</p>
+                        <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                            {% for field in clinical_compass.official_diagnosis_missing_fields %}
+                            <li>{{ field }}</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    {% endif %}
                 </div>
                 <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 xl:max-w-sm">
                     <div class="text-xs uppercase tracking-wider text-slate-500">Dirección clínica recomendada</div>
@@ -447,7 +779,7 @@
         {# ═══ TNM STAGING PANEL ═══ #}
         {% set _tnm_copilot = (profile.copilot or {}) if profile else {} %}
         {% if _tnm_copilot.tnm_staging and _tnm_copilot.tnm_staging.has_data %}
-        <section class="pn-surface">
+        <section id="profile-tnm" class="pn-surface pm-section-anchor">
             <div class="mb-5">
                 <p class="text-[11px] uppercase tracking-[0.24em] text-slate-500">Clasificación Clínica</p>
                 <div class="flex items-center gap-4 mt-2">
@@ -530,7 +862,7 @@
         {% endif %}
 
         {% if stage_specific_panels %}
-        <section class="pn-surface">
+        <section id="profile-stage-panels" class="pn-surface pm-section-anchor">
             <div class="flex items-center justify-between gap-3 mb-4">
                 <h2 class="text-lg font-bold text-white">Paneles clínicos específicos de la etapa</h2>
                 <span class="text-xs text-slate-500 uppercase tracking-[0.18em]">{{ clinical_compass.current_stage_label }}</span>
@@ -594,7 +926,7 @@
         {% endif %}
 
         {% if algorithm_panels %}
-        <section class="pn-surface">
+        <section id="profile-algorithms" class="pn-surface pm-section-anchor">
             <h2 class="text-lg font-bold text-white mb-4">Algoritmos y refinadores aplicables hoy</h2>
             <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {% for algorithm in algorithm_panels %}
@@ -729,7 +1061,7 @@
         </section>
         {% endif %}
 
-        <section class="space-y-6">
+        <section id="profile-agenda" class="space-y-6 pm-section-anchor">
             <div class="pn-surface">
                 <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4 mb-4">
                     <div>
@@ -961,7 +1293,7 @@
             </div>
         </section>
 
-        <section class="pn-surface">
+        <section id="profile-documents" class="pn-surface pm-section-anchor">
             <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4 mb-4">
                 <div>
                     <h2 class="text-lg font-bold text-white">Documentos clínicos y verificación humana</h2>
@@ -1095,7 +1427,7 @@
             </div>
         </section>
 
-        <section class="pn-surface">
+        <section id="profile-evidence" class="pn-surface pm-section-anchor">
             <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 mb-4">
                 <div>
                     <h2 class="text-lg font-bold text-white">Evidencia y estudios pivotales</h2>
@@ -1288,7 +1620,7 @@
             </div>
         </section>
 
-        <section class="pn-surface">
+        <section id="profile-longitudinal" class="pn-surface pm-section-anchor">
             <div class="flex items-center justify-between gap-3 mb-4">
                 <h2 class="text-lg font-bold text-white">Registro longitudinal completo</h2>
                 <div class="flex flex-wrap gap-2">
@@ -1342,7 +1674,7 @@
         </section>
 
         {% if benchmarking_flags %}
-        <details class="pn-accordion pn-surface">
+        <details id="profile-fitness" class="pn-accordion pn-surface pm-section-anchor">
             <summary class="flex items-center justify-between gap-3">
                 <div>
                     <h2 class="text-lg font-bold text-white">Benchmarking operativo del estado actual</h2>
@@ -1370,7 +1702,7 @@
         <!-- 2. PSA CONTROL TOWER                                             -->
         <!-- ═══════════════════════════════════════════════════════════════════ -->
         {% if not diagnostic_state %}
-        <details class="pn-accordion pn-surface">
+        <details id="profile-adt" class="pn-accordion pn-surface pm-section-anchor">
             <summary class="flex items-center justify-between gap-3">
                 <div>
                     <h2 class="text-lg font-bold text-white">📊 Torre de control del antígeno prostático específico</h2>
@@ -1462,7 +1794,7 @@
         <!-- 3. TIMELINE DE ESCENARIOS CLÍNICOS (Patient Journey)              -->
         <!-- ═══════════════════════════════════════════════════════════════════ -->
         {% if not diagnostic_state %}
-        <details class="pn-accordion pn-surface">
+        <details id="profile-therapeutic-fitness" class="pn-accordion pn-surface pm-section-anchor">
             <summary class="flex items-center justify-between gap-3">
                 <div>
                     <h2 class="text-lg font-bold text-white">🗺️ Trayectoria clínica del paciente</h2>
@@ -2980,6 +3312,26 @@
     {% set copilot = profile_view.copilot|default({}) if profile_view else {} %}
     <script>
         const humanizeClinicalText = window.clinicalPresentation?.humanize || ((value) => value);
+        const focusTabs = Array.from(document.querySelectorAll('[data-focus-tab]'));
+        const focusPanels = Array.from(document.querySelectorAll('.pm-focus-panel'));
+
+        function activateFocusPanel(panelId) {
+            focusTabs.forEach((tab) => {
+                tab.classList.toggle('is-active', tab.dataset.focusTab === panelId);
+            });
+            focusPanels.forEach((panel) => {
+                panel.classList.toggle('is-active', panel.id === panelId);
+            });
+        }
+
+        focusTabs.forEach((tab) => {
+            tab.addEventListener('click', () => activateFocusPanel(tab.dataset.focusTab));
+        });
+
+        if (focusTabs.length && focusPanels.length) {
+            activateFocusPanel(focusTabs[0].dataset.focusTab);
+        }
+
         // ── Datos longitudinales reales ──────────────────────────────────────
         const psaObservability = {{ psa_observability|default({}, true)|tojson }};
         const psaPoints = (psaObservability.points || []);
@@ -3975,6 +4327,24 @@
             try {
                 window.open('/api/export/' + encodeURIComponent(_patientKey) + '/csv', '_blank');
             } catch (e) { alert('Error exportando CSV'); }
+        }
+
+        async function deleteCurrentPatient() {
+            const patientId = Number('{{ patient.identity.id }}');
+            const fullName = '{{ patient.identity.full_name|replace("'", "\\'") }}';
+            const confirmed = window.confirm(`Se eliminará el perfil de ${fullName} y todo su longitudinal asociado. Esta acción no se puede deshacer. ¿Desea continuar?`);
+            if (!confirmed) return;
+            try {
+                const response = await fetch(`/api/patients/${patientId}`, { method: 'DELETE' });
+                const result = await response.json();
+                if (!result.success) {
+                    alert('Error: ' + (result.error || 'No fue posible eliminar el perfil.'));
+                    return;
+                }
+                window.location.href = '/patients';
+            } catch (e) {
+                alert('Error de conexión al eliminar el perfil.');
+            }
         }
 
         window.clinicalPresentation?.normalizeDocument();

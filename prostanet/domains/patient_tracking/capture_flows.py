@@ -75,6 +75,14 @@ FIELD_GROUP_HINTS = {
     "weak_grip": ("frailty_fitness", "treatment_fitness"),
     "ecog": ("frailty_fitness", "treatment_fitness"),
     "ecog_score": ("frailty_fitness", "treatment_fitness"),
+    "histology_subtype": ("official_diagnosis", "official_diagnosis"),
+    "gleason_primary": ("official_diagnosis", "official_diagnosis"),
+    "gleason_secondary": ("official_diagnosis", "official_diagnosis"),
+    "isup_grade": ("official_diagnosis", "official_diagnosis"),
+    "clinical_tstage": ("official_diagnosis", "official_diagnosis"),
+    "nodal_status": ("official_diagnosis", "official_diagnosis"),
+    "clinical_stage_group": ("official_diagnosis", "official_diagnosis"),
+    "clinical_risk_group": ("official_diagnosis", "official_diagnosis"),
 }
 
 GROUP_META = {
@@ -113,6 +121,12 @@ GROUP_META = {
         "rationale": "Permite ver si la línea actual mejoró o perdió control del APE y si ya requiere cambio de conducta.",
         "module_owner": "psa_observability",
         "decision_affected": "disease_control",
+    },
+    "official_diagnosis": {
+        "title": "Completar diagnóstico oficial",
+        "rationale": "Permite mostrar un diagnóstico oncológico formal, preciso y trazable en vez de depender solo del módulo clínico operativo.",
+        "module_owner": "official_diagnosis",
+        "decision_affected": "official_diagnosis",
     },
 }
 
@@ -217,6 +231,8 @@ def build_missing_input_capture_bundle(
             add_task(key="biomarker_context", raw_fields=fields, input_group="biomarker_eligibility")
         elif panel_name == "safety_support_context":
             add_task(key="safety_support_context", raw_fields=fields, input_group="adt_safety")
+        elif panel_name == "official_diagnosis":
+            add_task(key="official_diagnosis", raw_fields=fields, input_group="official_diagnosis")
 
     for checkpoint in therapy_checkpoints or []:
         if checkpoint.get("status") != "needs_data":

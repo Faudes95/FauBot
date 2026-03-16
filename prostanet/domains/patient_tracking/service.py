@@ -14,6 +14,13 @@ from prostanet.domains.patient_tracking.therapy_catalog import (
     therapy_catalog_entries,
     therapy_select_options,
 )
+from prostanet.shared.official_diagnosis import (
+    CLINICAL_RISK_GROUP_OPTIONS,
+    CLINICAL_STAGE_GROUP_OPTIONS,
+    CLINICAL_TSTAGE_OPTIONS,
+    HISTOLOGY_SUBTYPE_OPTIONS,
+    NODAL_STATUS_OPTIONS,
+)
 from prostanet.shared.contracts import FieldSpec, RegistrationFragment
 from prostanet.shared.metastatic_profile import (
     BONE_SITE_LABELS,
@@ -215,6 +222,29 @@ def _common_fragment() -> RegistrationFragment:
             _field("low_activity", "Actividad física reducida", "select", options=["", "0", "1"], group="Fragilidad y fitness", group_order=3, clinical_role="decision_refiner"),
             _field("slow_gait", "Marcha lenta", "select", options=["", "0", "1"], group="Fragilidad y fitness", group_order=3, clinical_role="decision_refiner"),
             _field("weak_grip", "Fuerza de prensión baja", "select", options=["", "0", "1"], group="Fragilidad y fitness", group_order=3, clinical_role="decision_refiner"),
+        ],
+    )
+
+
+def _official_diagnosis_fragment() -> RegistrationFragment:
+    return RegistrationFragment(
+        id="fragment_official_diagnosis",
+        title="Diagnóstico oficial y clasificación oncológica",
+        applies_to_states=list(STATE_SCOPE_MAP.keys()),
+        persist_targets=["clinical_baseline", "biopsy_details"],
+        clinical_influence=[
+            "Permite componer el diagnóstico oficial visible del perfil en lugar de usar solo el nombre del módulo clínico.",
+            "Los faltantes se pueden completar después desde visita o verificación documental sin romper el flujo inicial.",
+        ],
+        fields=[
+            _field("histology_subtype", "Subtipo histológico", "select", options=HISTOLOGY_SUBTYPE_OPTIONS, group="Diagnóstico oficial", group_order=1, clinical_role="required"),
+            _field("gleason_primary", "Gleason primario", "select", options=["", "3", "4", "5"], group="Diagnóstico oficial", group_order=1, clinical_role="required"),
+            _field("gleason_secondary", "Gleason secundario", "select", options=["", "3", "4", "5"], group="Diagnóstico oficial", group_order=1, clinical_role="required"),
+            _field("isup_grade", "ISUP / Grade Group", "select", options=["", "1", "2", "3", "4", "5"], group="Diagnóstico oficial", group_order=1, clinical_role="decision_refiner"),
+            _field("clinical_tstage", "T clínico", "select", options=CLINICAL_TSTAGE_OPTIONS, group="TNM clínico", group_order=2, clinical_role="required"),
+            _field("nodal_status", "N clínico", "select", options=NODAL_STATUS_OPTIONS, group="TNM clínico", group_order=2, clinical_role="required"),
+            _field("clinical_stage_group", "Etapa clínica", "select", options=CLINICAL_STAGE_GROUP_OPTIONS, group="TNM clínico", group_order=2, clinical_role="decision_refiner"),
+            _field("clinical_risk_group", "Grupo de riesgo clínico", "select", options=CLINICAL_RISK_GROUP_OPTIONS, group="TNM clínico", group_order=2, clinical_role="decision_refiner"),
         ],
     )
 
@@ -446,7 +476,7 @@ class PatientTrackingService:
     ) -> dict[str, Any]:
         scope = self.scope_for_state(state or module_id)
         config = deepcopy(SCOPE_CONFIG[scope])
-        fragments = [_common_fragment()]
+        fragments = [_common_fragment(), _official_diagnosis_fragment()]
         if scope == "diagnostic":
             fragments.append(_diagnostic_fragment())
         elif scope == "localized":
@@ -502,8 +532,11 @@ class PatientTrackingService:
         merged["assessment_id"] = assessment.get("id")
         merged["assessment_state"] = registration_payload.get("assessment_state") or assessment.get("state") or ""
         merged["assessment_module"] = assessment.get("module_id") or merged.get("assessment_state", "")
+        nccn_primary = (assessment.get("result_snapshot", {}) or {}).get("nccn_primary", {}) or {}
         if not _is_present(merged.get("baseline_psa")) and _is_present(merged.get("psa")):
             merged["baseline_psa"] = merged.get("psa")
+        if not _is_present(merged.get("clinical_risk_group")) and _is_present(nccn_primary.get("risk_group")):
+            merged["clinical_risk_group"] = nccn_primary.get("risk_group")
         return self.canonicalize_payload(merged)
 
     def canonicalize_payload(self, payload: dict[str, Any]) -> dict[str, Any]:

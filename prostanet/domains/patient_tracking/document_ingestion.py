@@ -112,9 +112,14 @@ def _manual_template(document_type: str) -> list[dict[str, Any]]:
     templates = {
         "pathology_report": [
             {"field_name": "biopsy_date", "label": "Fecha de biopsia", "fact_group": "pathology", "target_result_type": "pathology", "field_type": "date"},
+            {"field_name": "histology_subtype", "label": "Subtipo histológico", "fact_group": "pathology", "target_result_type": "pathology", "field_type": "text"},
             {"field_name": "gleason_primary", "label": "Gleason primario", "fact_group": "pathology", "target_result_type": "pathology", "field_type": "number"},
             {"field_name": "gleason_secondary", "label": "Gleason secundario", "fact_group": "pathology", "target_result_type": "pathology", "field_type": "number"},
             {"field_name": "isup_grade", "label": "ISUP / Grade Group", "fact_group": "pathology", "target_result_type": "pathology", "field_type": "number"},
+            {"field_name": "clinical_tstage", "label": "T clínico", "fact_group": "pathology", "target_result_type": "pathology", "field_type": "text"},
+            {"field_name": "nodal_status", "label": "N clínico", "fact_group": "pathology", "target_result_type": "pathology", "field_type": "text"},
+            {"field_name": "clinical_stage_group", "label": "Etapa clínica", "fact_group": "pathology", "target_result_type": "pathology", "field_type": "text"},
+            {"field_name": "clinical_risk_group", "label": "Grupo de riesgo clínico", "fact_group": "pathology", "target_result_type": "pathology", "field_type": "text"},
             {"field_name": "positive_cores", "label": "Cilindros positivos", "fact_group": "pathology", "target_result_type": "pathology", "field_type": "number"},
             {"field_name": "total_cores", "label": "Cilindros totales", "fact_group": "pathology", "target_result_type": "pathology", "field_type": "number"},
             {"field_name": "porcentaje_patron_4", "label": "Porcentaje patrón 4", "fact_group": "pathology", "target_result_type": "pathology", "field_type": "number"},
@@ -377,11 +382,16 @@ def build_document_payload_from_facts(
             "biopsy_date": fact_map.get("biopsy_date"),
             "biopsy_type": fact_map.get("biopsy_type") or "Dirigida + sistemática",
             "biopsy_context": fact_map.get("biopsy_context") or "diagnostica",
+            "histology_subtype": fact_map.get("histology_subtype"),
             "total_cores": _safe_int(fact_map.get("total_cores")),
             "positive_cores": _safe_int(fact_map.get("positive_cores")),
             "gleason_primary": _safe_int(fact_map.get("gleason_primary")),
             "gleason_secondary": _safe_int(fact_map.get("gleason_secondary")),
             "isup_grade": _safe_int(fact_map.get("isup_grade")),
+            "clinical_tstage": fact_map.get("clinical_tstage"),
+            "nodal_status": fact_map.get("nodal_status"),
+            "clinical_stage_group": fact_map.get("clinical_stage_group"),
+            "clinical_risk_group": fact_map.get("clinical_risk_group"),
             "porcentaje_patron_4": _safe_float(fact_map.get("porcentaje_patron_4")),
             "patron_cribiforme": 1 if str(fact_map.get("patron_cribiforme")).lower() in {"1", "true", "si", "yes", "positivo", "presente"} else 0,
             "carcinoma_intraductal": 1 if str(fact_map.get("carcinoma_intraductal")).lower() in {"1", "true", "si", "yes", "positivo", "presente"} else 0,
@@ -564,6 +574,21 @@ def _extract_number(text: str, labels: list[str]) -> float | None:
 
 def _extract_pathology_candidates(text: str, text_pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
+    lower = text.lower()
+    histology_value = ""
+    if "acinar" in lower:
+        histology_value = "Adenocarcinoma acinar"
+    elif "ductal" in lower:
+        histology_value = "Adenocarcinoma ductal"
+    elif "small cell" in lower or "neuroendocr" in lower:
+        histology_value = "Carcinoma neuroendocrino / células pequeñas"
+    elif "mucin" in lower or "coloid" in lower:
+        histology_value = "Adenocarcinoma mucinoso / coloide"
+    elif "sarcom" in lower:
+        histology_value = "Carcinoma sarcomatoide"
+    if histology_value:
+        excerpt, page_ref = _find_excerpt(text_pages, r"(?:acinar|ductal|small cell|neuroendocr|mucin|coloid|sarcom)")
+        candidates.append(_candidate(field_name="histology_subtype", fact_group="pathology", value=histology_value, target_result_type="pathology", confidence=0.86, evidence_excerpt=excerpt, page_ref=page_ref))
     gleason_match = re.search(r"gleason(?:\s+score)?\s*[:=]?\s*(\d)\s*\+\s*(\d)", text, re.IGNORECASE)
     if gleason_match:
         excerpt, page_ref = _find_excerpt(text_pages, r"gleason(?:\s+score)?")
@@ -590,7 +615,6 @@ def _extract_pathology_candidates(text: str, text_pages: list[dict[str, Any]]) -
     if pattern4 is not None:
         excerpt, page_ref = _find_excerpt(text_pages, r"(?:patr[oó]n|pattern)\s*4")
         candidates.append(_candidate(field_name="porcentaje_patron_4", fact_group="pathology", value=pattern4, target_result_type="pathology", confidence=0.82, evidence_excerpt=excerpt, page_ref=page_ref))
-    lower = text.lower()
     if "cribriform" in lower:
         excerpt, page_ref = _find_excerpt(text_pages, r"cribriform")
         candidates.append(_candidate(field_name="patron_cribiforme", fact_group="pathology", value=True, target_result_type="pathology", confidence=0.9, evidence_excerpt=excerpt, page_ref=page_ref))
