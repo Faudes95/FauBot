@@ -31,6 +31,29 @@ class LocalizedInitialService:
         partin = partin_tables(payload)
         msk = kattan_organ_confined(payload)
         as_position = active_surveillance_position(payload, nccn["risk_group"])
+
+        # Multi-protocol AS eligibility via active_surveillance module
+        as_multi_eligibility = []
+        try:
+            from prostanet.domains.patient_tracking.active_surveillance import ActiveSurveillanceService
+            as_multi_eligibility = ActiveSurveillanceService.check_eligibility(payload, "localized_initial")
+            # Enrich as_position with multi-protocol results
+            eligible_protocols = [e.protocol for e in as_multi_eligibility if e.eligible]
+            if eligible_protocols:
+                as_position["multi_protocol_eligible"] = eligible_protocols
+                as_position["multi_protocol_details"] = [
+                    {"protocol": e.protocol, "eligible": e.eligible, "criteria_met": e.criteria_met, "criteria_failed": e.criteria_failed}
+                    for e in as_multi_eligibility
+                ]
+            else:
+                as_position["multi_protocol_eligible"] = []
+                as_position["multi_protocol_details"] = [
+                    {"protocol": e.protocol, "eligible": False, "criteria_failed": e.criteria_failed}
+                    for e in as_multi_eligibility
+                ]
+        except Exception:
+            pass
+
         urinary_qol = float(payload.get("baseline_urinary_qol", 0) or 0)
         sexual_qol = float(payload.get("baseline_sexual_qol", 0) or 0)
         bowel_qol = float(payload.get("baseline_bowel_qol", 0) or 0)

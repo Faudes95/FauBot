@@ -415,3 +415,85 @@ def _months_between(date1: str, date2: str) -> float:
         return delta.days / 30.44
     except (ValueError, TypeError):
         return 0.0
+
+
+# ── Kaplan-Meier visualization (cohort level) ────────────────────────────
+
+@dataclass
+class KaplanMeierData:
+    """Datos para visualización Kaplan-Meier."""
+    endpoint_type: str  # "OS", "rPFS", "MFS", etc.
+    times: list[float]  # tiempos en meses
+    survival_probs: list[float]  # probabilidades de supervivencia
+    n_at_risk: list[int]  # n en riesgo en cada tiempo
+    median_survival: float | None  # mediana en meses
+    confidence_intervals: list[dict[str, float]] | None = None
+    reference_median: float | None = None  # mediana de referencia de ensayos pivotales
+    reference_trial: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "endpoint_type": self.endpoint_type,
+            "times": self.times,
+            "survival_probs": self.survival_probs,
+            "n_at_risk": self.n_at_risk,
+            "median_survival": self.median_survival,
+            "confidence_intervals": self.confidence_intervals,
+            "reference_median": self.reference_median,
+            "reference_trial": self.reference_trial,
+            "has_data": len(self.times) > 0,
+        }
+
+
+def build_kaplan_meier_chart(
+    patients: list[dict[str, Any]],
+    endpoint_type: str,
+    state_filter: str | None = None,
+) -> dict[str, Any]:
+    """
+    Genera datos Kaplan-Meier para una cohorte de pacientes.
+    Delegado al motor de survival_endpoints para el cálculo real.
+
+    Args:
+        patients: Lista de registros completos de pacientes.
+        endpoint_type: Tipo de endpoint ("OS", "rPFS", "MFS", etc.)
+        state_filter: Filtro opcional de estado clínico.
+
+    Returns:
+        Dict con datos KM listos para visualización.
+    """
+    try:
+        from prostanet.domains.patient_tracking.survival_endpoints import SurvivalEndpointService
+
+        # Compute endpoints for all patients
+        all_endpoints = []
+        for patient in patients:
+            state = (patient.get("latest_assessment") or {}).get("state", "")
+            if state_filter and state != state_filter:
+                continue
+            try:
+                status = SurvivalEndpointService.compute_endpoints(patient, state)
+                for ep in status.endpoints:
+                    if ep.endpoint_type == endpoint_type:
+                        all_endpoints.append(ep)
+            except Exception:
+                continue
+
+        if not all_endpoints:
+            return KaplanMeierData(
+                endpoint_type=endpoint_type,
+                times=[], survival_probs=[], n_at_risk=[],
+                median_survival=None,
+            ).to_dict()
+
+        # Use the service's built-in KM calculator
+        km_data = SurvivalEndpointService.generate_kaplan_meier_points(
+            all_endpoints, endpoint_type
+        )
+        return km_data
+    except Exception:
+        return KaplanMeierData(
+            endpoint_type=endpoint_type,
+            times=[], survival_probs=[], n_at_risk=[],
+            median_survival=None,
+        ).to_dict()

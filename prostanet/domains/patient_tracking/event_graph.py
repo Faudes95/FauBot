@@ -5,17 +5,17 @@ from typing import Any
 
 
 STATE_EVENT_EXPECTATIONS = {
-    "diagnostic_workup": ["clinical_baseline", "mri_facts", "diagnostic_plan", "biopsy_trigger", "family_history_detail"],
+    "diagnostic_workup": ["clinical_baseline", "mri_facts", "diagnostic_plan", "biopsy_trigger", "family_history_detail", "structured_biopsy"],
     "post_negative_biopsy_followup": ["clinical_baseline", "mri_facts", "diagnostic_plan", "biopsy_trigger"],
-    "localized_initial": ["clinical_baseline", "biopsy_details", "patient_pros"],
-    "post_prostatectomy": ["clinical_baseline", "surgical_details", "patient_pros"],
-    "recurrence_bcr": ["clinical_baseline", "biochemical_recurrence", "imaging_studies"],
-    "adt_progression_verification": ["clinical_baseline", "imaging_studies"],
-    "mcspc_oligo_metachronous": ["clinical_baseline", "genomic_profile", "treatment_history", "patient_pros"],
-    "mcspc_low_volume_sync_oligo": ["clinical_baseline", "genomic_profile", "treatment_history", "patient_pros"],
-    "mcspc_high_volume": ["clinical_baseline", "genomic_profile", "treatment_history", "patient_pros"],
-    "m0_crpc": ["clinical_baseline", "genomic_profile", "treatment_history", "patient_pros"],
-    "m1_crpc": ["clinical_baseline", "genomic_profile", "treatment_history", "patient_pros", "imaging_studies"],
+    "localized_initial": ["clinical_baseline", "biopsy_details", "patient_pros", "structured_biopsy", "active_surveillance_protocol", "survival_endpoint"],
+    "post_prostatectomy": ["clinical_baseline", "surgical_details", "patient_pros", "radiation_detail", "survival_endpoint"],
+    "recurrence_bcr": ["clinical_baseline", "biochemical_recurrence", "imaging_studies", "radiation_detail", "survival_endpoint"],
+    "adt_progression_verification": ["clinical_baseline", "imaging_studies", "survival_endpoint"],
+    "mcspc_oligo_metachronous": ["clinical_baseline", "genomic_profile", "treatment_history", "patient_pros", "skeletal_event", "radiation_detail", "survival_endpoint", "vital_status_update"],
+    "mcspc_low_volume_sync_oligo": ["clinical_baseline", "genomic_profile", "treatment_history", "patient_pros", "skeletal_event", "radiation_detail", "survival_endpoint", "vital_status_update"],
+    "mcspc_high_volume": ["clinical_baseline", "genomic_profile", "treatment_history", "patient_pros", "skeletal_event", "survival_endpoint", "vital_status_update"],
+    "m0_crpc": ["clinical_baseline", "genomic_profile", "treatment_history", "patient_pros", "survival_endpoint", "vital_status_update"],
+    "m1_crpc": ["clinical_baseline", "genomic_profile", "treatment_history", "patient_pros", "imaging_studies", "skeletal_event", "radiation_detail", "survival_endpoint", "vital_status_update"],
 }
 
 

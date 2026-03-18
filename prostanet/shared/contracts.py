@@ -176,12 +176,19 @@ class AgendaItem:
     state: str
     management_track: str
     due_at: str = ""
+    ideal_due_at: str = ""
+    scheduled_due_at: str = ""
     window_start: str = ""
     window_end: str = ""
+    delay_days: int = 0
+    plan_key: str = ""
+    completed_at: str = ""
     status: str = "scheduled"
     priority: str = "routine"
     summary: str = ""
     required_inputs: list[str] = field(default_factory=list)
+    required: bool = True
+    action_mode: str = "capture"
     completion_rule: dict[str, Any] = field(default_factory=dict)
     evidence_basis: list[str] = field(default_factory=list)
     comparator_basis: list[str] = field(default_factory=list)
@@ -242,6 +249,257 @@ class TherapyCheckpoint:
     last_input_source: str = ""
     last_input_date: str = ""
     changes_recommendation_if_resolved: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class CopilotAlert:
+    alert_key: str
+    category: str
+    decision_domain: str
+    severity: str
+    title: str
+    message: str
+    why_now: str = ""
+    recommended_action: str = ""
+    fields_to_capture: list[str] = field(default_factory=list)
+    detail_items: list[dict[str, Any]] = field(default_factory=list)
+    linked_agenda_ids: list[int] = field(default_factory=list)
+    linked_agenda_keys: list[str] = field(default_factory=list)
+    linked_encounter_keys: list[str] = field(default_factory=list)
+    can_be_resolved_in_visit: bool = False
+    creates_or_links_agenda_item: bool = False
+    action_type: str = "capture"
+    capture_block: str = ""
+    encounter_key: str = ""
+    resolves_decision_domain: str = ""
+    expected_document_type: str = ""
+    resolution_mode: str = ""
+    focus_fields: list[str] = field(default_factory=list)
+    primary_button_label: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class EncounterTask:
+    agenda_id: int | None
+    agenda_key: str
+    title: str
+    item_type: str
+    status: str
+    due_at: str = ""
+    ideal_due_at: str = ""
+    scheduled_due_at: str = ""
+    completed_at: str = ""
+    delay_days: int = 0
+    action_label: str = ""
+    required: bool = True
+    action_mode: str = "capture"
+    expected_document_type: str = ""
+    decision_targets: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class EncounterPlan:
+    encounter_key: str
+    encounter_type: str
+    state: str
+    management_track: str
+    title: str
+    summary: str
+    due_at: str = ""
+    ideal_due_at: str = ""
+    scheduled_due_at: str = ""
+    completed_at: str = ""
+    delay_days: int = 0
+    plan_key: str = ""
+    status: str = "scheduled"
+    priority: str = "routine"
+    visit_modality: str = "clinic"
+    task_count: int = 0
+    required_task_count: int = 0
+    completed_required_task_count: int = 0
+    completion_progress: dict[str, Any] = field(default_factory=dict)
+    tasks: list[EncounterTask] = field(default_factory=list)
+    decision_domains: list[str] = field(default_factory=list)
+    decision_domains_covered: list[str] = field(default_factory=list)
+    guideline_basis: list[str] = field(default_factory=list)
+    alerts_resolved_by_this_encounter: list[str] = field(default_factory=list)
+    alert_count: int = 0
+    anchor_strength: str = "strong"
+    inline_actions_enabled: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["tasks"] = [task.to_dict() for task in self.tasks]
+        return data
+
+
+@dataclass(frozen=True)
+class ScheduleAnchorAssessment:
+    anchor_date: str = ""
+    anchor_source: str = ""
+    strength: str = "strong"
+    is_fallback: bool = False
+    rationale: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class AlertActionPayload:
+    action_type: str = "capture"
+    capture_block: str = ""
+    fields_to_capture: list[str] = field(default_factory=list)
+    encounter_key: str = ""
+    linked_agenda_keys: list[str] = field(default_factory=list)
+    expected_document_type: str = ""
+    resolves_decision_domain: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class ScenarioCadenceRule:
+    scenario_state: str
+    management_track: str
+    phase_label: str
+    guideline_basis: list[str] = field(default_factory=list)
+    anchor_priority: list[str] = field(default_factory=list)
+    cadence_rules: list[str] = field(default_factory=list)
+    encounter_templates: list[str] = field(default_factory=list)
+    required_tasks: list[str] = field(default_factory=list)
+    escalation_rules: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class MasterFollowupPlan:
+    plan_version: str
+    plan_key: str
+    scenario_state: str
+    management_track: str
+    title: str
+    phase_label: str = ""
+    plan_status: str = "active"
+    calendar_horizon_months: int = 12
+    guideline_basis: list[str] = field(default_factory=list)
+    comparator_basis: list[str] = field(default_factory=list)
+    anchor: dict[str, Any] = field(default_factory=dict)
+    scenario_rule: dict[str, Any] = field(default_factory=dict)
+    next_encounter: dict[str, Any] = field(default_factory=dict)
+    timeline: list[dict[str, Any]] = field(default_factory=list)
+    encounter_timeline: list[dict[str, Any]] = field(default_factory=list)
+    inline_actions_enabled: bool = False
+    blocking_alerts: list[dict[str, Any]] = field(default_factory=list)
+    overdue_items: list[dict[str, Any]] = field(default_factory=list)
+    due_items: list[dict[str, Any]] = field(default_factory=list)
+    optional_items: list[dict[str, Any]] = field(default_factory=list)
+    highlight_actions: list[str] = field(default_factory=list)
+    gaps_to_close: list[str] = field(default_factory=list)
+    summary: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class ClinicalFact:
+    fact_key: str
+    category: str
+    value: Any = None
+    fact_date: str = ""
+    source_type: str = ""
+    source_priority: str = ""
+    verified: bool = False
+    payload: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class OutcomeEvent:
+    event_key: str
+    event_type: str
+    scenario_state: str
+    management_track: str
+    axis: str = ""
+    adjudication_status: str = "confirmed"
+    event_date: str = ""
+    source_priority: str = ""
+    decision_impact: str = ""
+    summary: str = ""
+    provisional: bool = False
+    blocking_fields: list[str] = field(default_factory=list)
+    evidence_basis: list[str] = field(default_factory=list)
+    payload: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class AdjudicationStatus:
+    status_key: str
+    title: str
+    rationale: str
+    status: str = "pending"
+    severity: str = "warning"
+    provisional: bool = True
+    decision_domain: str = ""
+    capture_block: str = ""
+    action_type: str = "capture"
+    expected_document_type: str = ""
+    linked_outcome_event: str = ""
+    linked_encounter_key: str = ""
+    linked_agenda_keys: list[str] = field(default_factory=list)
+    fields_to_capture: list[str] = field(default_factory=list)
+    recommended_action: str = ""
+    evidence_basis: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class TrialComparableEndpoint:
+    endpoint_key: str
+    label: str
+    status: str
+    value: Any = None
+    scenario_state: str = ""
+    trial_family: str = ""
+    comparable: bool = False
+    provisional: bool = False
+    details: str = ""
+    evidence_basis: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class BenchmarkSnapshot:
+    benchmark_family: str
+    scenario_state: str
+    management_track: str
+    eligibility_status: str
+    matched_trials: list[str] = field(default_factory=list)
+    endpoint_snapshot: dict[str, Any] = field(default_factory=dict)
+    cohort_flags: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

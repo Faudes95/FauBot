@@ -351,7 +351,7 @@ def patient_profile(nss):
             return "Paciente no encontrado", 404
         tracking_db.refresh_followup_agenda(data)
         tracking_db.refresh_longitudinal_intelligence(nss, force_recompute=False)
-        data = tracking_db.get_patient_history(nss)
+        data = tracking_db.get_patient_full_record(nss) or tracking_db.get_patient_history(nss)
             
         # Calcular edad
         dob_str = data['identity'].get('dob')
@@ -657,14 +657,48 @@ def api_visit_schema(patient_id):
         capture_fields = [field.strip() for field in str(request.args.get("fields") or "").split(",") if field.strip()]
         capture_context = None
         agenda_id = request.args.get("agenda_id")
+        alert_key = str(request.args.get("alert_key") or "").strip()
+        presentation = str(request.args.get("presentation") or "standard").strip() or "standard"
         if agenda_id:
             try:
                 agenda_id_int = int(agenda_id)
             except (TypeError, ValueError):
                 return error_response("agenda_id inválido", 400)
-            agenda_item = next((item for item in (patient.get("agenda_items") or []) if int(item.get("id") or 0) == agenda_id_int), None)
+            agenda_bundle = tracking_db.get_patient_agenda(patient_id) or {}
+            agenda_item = next(
+                (item for item in (agenda_bundle.get("items") or []) if int(item.get("id") or 0) == agenda_id_int),
+                None,
+            )
             if agenda_item is None:
                 return error_response("Item de agenda no encontrado", 404)
+        elif alert_key:
+            bundle = tracking_db.refresh_longitudinal_intelligence(patient_id, force_recompute=False)
+            alert = next((item for item in (bundle.get("copilot_alerts") or []) if str(item.get("alert_key") or "") == alert_key), None)
+            if alert is None:
+                return error_response("Alerta clínica no encontrada", 404)
+            capture_fields = [field for field in (alert.get("fields_to_capture") or []) if str(field or "").strip()]
+            capture_context = {
+                "title": alert.get("title") or "Resolver alerta clínica",
+                "summary": alert.get("message") or "",
+                "rationale": alert.get("why_now") or alert.get("message") or "Completa variables faltantes del flujo clínico.",
+                "recommended_action": alert.get("recommended_action") or "",
+                "decision_affected": alert.get("resolves_decision_domain") or alert.get("decision_domain") or "",
+                "module_owner": alert.get("category") or "",
+                "decision_targets": [alert.get("decision_domain")] if alert.get("decision_domain") else [],
+                "reasoning": [alert.get("recommended_action")] if alert.get("recommended_action") else [],
+                "required_inputs": capture_fields,
+                "linked_agenda_ids": list(alert.get("linked_agenda_ids") or []),
+                "linked_agenda_keys": list(alert.get("linked_agenda_keys") or []),
+                "encounter_key": alert.get("encounter_key") or "",
+                "alert_key": alert_key,
+                "action_type": alert.get("action_type") or "capture",
+                "expected_document_type": alert.get("expected_document_type") or "auto",
+                "form_scope": {
+                    "mode": "capture_block",
+                    "focus": request.args.get("capture_block") or alert.get("capture_block") or "clinical_completion",
+                    "fields": capture_fields,
+                },
+            }
         elif capture_fields:
             capture_context = {
                 "title": request.args.get("capture_title") or "Completar datos críticos",
@@ -683,6 +717,7 @@ def api_visit_schema(patient_id):
             agenda_item=agenda_item,
             field_scope=capture_fields or None,
             capture_context=capture_context,
+            presentation=presentation,
         )
         return jsonify(
             {
@@ -691,6 +726,8 @@ def api_visit_schema(patient_id):
                 "management_track": track,
                 "visit_schema": visit_schema,
                 "agenda_item_context": visit_schema.get("agenda_item_context"),
+                "alert_key": alert_key,
+                "presentation": presentation,
             }
         )
     except Exception as e:
@@ -805,10 +842,11 @@ def api_patient_signals(patient_id):
         patient = tracking_db.get_patient_full_record(patient_id)
         if not patient:
             return error_response("Paciente no encontrado", 404)
-        signals = tracking_db.get_patient_signals(patient_id)
+        bundle = tracking_db.refresh_longitudinal_intelligence(patient_id, force_recompute=False)
+        signals = bundle.get("signals")
         if signals is None:
             return error_response("Paciente no encontrado", 404)
-        bundle = tracking_db.refresh_longitudinal_intelligence(patient_id, force_recompute=False)
+        patient = tracking_db.get_patient_full_record(patient_id) or patient
         from prostanet.shared.presentation_text import (
             humanize_assessment,
             humanize_care_overlays,
@@ -844,6 +882,19 @@ def api_patient_signals(patient_id):
                 "agenda_resolution_trace": profile_view.get("agenda_resolution_trace", []),
                 "therapy_checkpoints": profile_view.get("therapy_checkpoints", []),
                 "evidence_applicability": profile_view.get("evidence_applicability", {}),
+                "master_followup_plan": bundle.get("master_followup_plan", profile_view.get("master_followup_plan", {})),
+                "master_followup_summary": bundle.get("master_followup_summary", profile_view.get("master_followup_summary", {})),
+                "copilot_alerts": bundle.get("copilot_alerts", []),
+                "alert_summary": bundle.get("alert_summary", {}),
+                "encounters": bundle.get("encounters", []),
+                "schedule_anchor_strength": bundle.get("schedule_anchor_strength", "strong"),
+                "outcome_events_summary": bundle.get("outcome_events_summary", profile_view.get("outcome_events_summary", {})),
+                "pending_adjudications": bundle.get("pending_adjudications", profile_view.get("pending_adjudications", [])),
+                "current_response_state": bundle.get("current_response_state", profile_view.get("current_response_state", {})),
+                "current_course_status": bundle.get("current_course_status", profile_view.get("current_course_status", "")),
+                "last_adjudicated_event": bundle.get("last_adjudicated_event", profile_view.get("last_adjudicated_event", {})),
+                "trial_comparable_endpoints": bundle.get("trial_comparable_endpoints", profile_view.get("trial_comparable_endpoints", [])),
+                "current_trial_comparable_profile": bundle.get("current_trial_comparable_profile", profile_view.get("current_trial_comparable_profile", {})),
                 **_reconciled_patient_snapshot(patient),
             }
         )
@@ -1176,8 +1227,10 @@ def api_get_alerts(patient_id):
     try:
         if not patient_exists(patient_id):
             return error_response("Paciente no encontrado", 404)
-        from tracking_db import get_patient_alerts
-        alerts = get_patient_alerts(patient_id)
+        import tracking_db
+
+        tracking_db.refresh_longitudinal_intelligence(patient_id, force_recompute=False)
+        alerts = tracking_db.get_patient_alerts(patient_id)
         return jsonify({"success": True, "alerts": alerts})
     except Exception as e:
         logger.error(f"Error obteniendo alertas: {e}")
@@ -1190,9 +1243,17 @@ def api_check_alerts(patient_id):
     try:
         if not patient_exists(patient_id):
             return error_response("Paciente no encontrado", 404)
-        from tracking_db import check_and_generate_alerts
-        new_alerts = check_and_generate_alerts(patient_id)
-        return jsonify({"success": True, "new_alerts": new_alerts})
+        import tracking_db
+
+        bundle = tracking_db.refresh_longitudinal_intelligence(patient_id, force_recompute=False)
+        return jsonify(
+            {
+                "success": True,
+                "new_alerts": [alert.get("alert_key") or alert.get("title") for alert in bundle.get("copilot_alerts", [])],
+                "alerts": bundle.get("copilot_alerts", []),
+                "alert_summary": bundle.get("alert_summary", {}),
+            }
+        )
     except Exception as e:
         logger.error(f"Error generando alertas: {e}")
         return error_response(str(e), 500)
@@ -1440,11 +1501,11 @@ def api_dashboard_stats():
 
         # Alert counts by type
         c.execute("""SELECT alert_type, COUNT(*) as n FROM smart_alerts
-                     WHERE acknowledged = 0 GROUP BY alert_type""")
+                     WHERE acknowledged = 0 AND COALESCE(active, 1) = 1 GROUP BY alert_type""")
         stats['active_alerts_by_type'] = {r['alert_type']: r['n'] for r in c.fetchall()}
 
         # Total active alerts
-        c.execute("SELECT COUNT(*) as n FROM smart_alerts WHERE acknowledged = 0")
+        c.execute("SELECT COUNT(*) as n FROM smart_alerts WHERE acknowledged = 0 AND COALESCE(active, 1) = 1")
         stats['total_active_alerts'] = c.fetchone()['n']
 
         # Data completeness
@@ -1654,14 +1715,14 @@ def api_list_patients():
     """Retorna lista de pacientes registrados."""
     try:
         import sqlite3
-        conn = sqlite3.connect('prostanet_tracking.db')
+        conn = sqlite3.connect(app.config["DB_PATH"])
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
         c.execute("""
             SELECT pi.id, pi.nss, pi.full_name, pi.dob, pi.diagnosis_date,
                    cb.baseline_psa, cb.metastasis_site, cb.volume_disease, cb.ecog_score,
                    (SELECT COUNT(*) FROM follow_up_visits fv WHERE fv.patient_id = pi.id) as visit_count,
-                   (SELECT COUNT(*) FROM smart_alerts sa WHERE sa.patient_id = pi.id AND sa.acknowledged = 0) as alert_count
+                   (SELECT COUNT(*) FROM smart_alerts sa WHERE sa.patient_id = pi.id AND sa.acknowledged = 0 AND COALESCE(sa.active, 1) = 1) as alert_count
             FROM patient_identity pi
             LEFT JOIN clinical_baseline cb ON cb.patient_id = pi.id
             ORDER BY pi.created_at DESC

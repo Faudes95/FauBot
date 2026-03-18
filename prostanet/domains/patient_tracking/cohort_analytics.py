@@ -117,6 +117,16 @@ def compute_patient_endpoint_readiness(patient: dict[str, Any], state: str) -> d
         "line_duration": any(_is_present(item.get("start_date")) and _is_present(item.get("end_date")) for item in treatments) or len(treatments) > 0,
         "psa_kinetics": sum(1 for item in biomarker_longitudinal if item.get("biomarker_type") == "PSA") >= 2 or sum(1 for item in followups if _is_present(item.get("psa_current"))) >= 2,
         "radiographic_progression": bool(imaging and latest_followup.get("disease_status")),
+        # ── Endpoints de supervivencia (Fase 6.1) ──
+        "overall_survival": bool(identity.get("diagnosis_date")) and _is_present(patient.get("vital_status")),
+        "rpfs": bool(treatments) and state in {"mcspc_oligo_metachronous", "mcspc_low_volume_sync_oligo", "mcspc_high_volume", "m0_crpc", "m1_crpc"},
+        "mfs": bool(identity.get("diagnosis_date")) and state in {"localized_initial", "post_prostatectomy", "recurrence_bcr", "m0_crpc"},
+        "ttsre": bool(patient.get("skeletal_events")) or (state in {"mcspc_high_volume", "m1_crpc"} and bool(imaging)),
+        # ── Vigilancia activa KPIs (Fase 6.1) ──
+        "as_conversion_rate": bool(patient.get("active_surveillance") and patient.get("active_surveillance", {}).get("exit_reason") if isinstance(patient.get("active_surveillance"), dict) else False),
+        "as_time_on_protocol": bool(patient.get("active_surveillance") and identity.get("diagnosis_date")),
+        # ── Biopsia estructurada (Fase 6.1) ──
+        "structured_biopsy_available": any(isinstance(b, dict) and b.get("systematic_cores") for b in biopsies) if biopsies else False,
     }
     ready_count = sum(1 for value in endpoints.values() if value)
     return {

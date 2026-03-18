@@ -5,6 +5,11 @@ from copy import deepcopy
 from datetime import date, datetime, timedelta
 from typing import Any
 
+from prostanet.domains.patient_tracking.encounter_planner import (
+    action_mode_for_task,
+    build_encounter_plans,
+    is_required_task,
+)
 from prostanet.domains.patient_tracking.therapy_catalog import therapy_select_options
 from prostanet.shared.contracts import (
     AgendaItem,
@@ -118,6 +123,14 @@ def _parse_date(value: Any) -> date | None:
 
 def _fmt_date(value: date | None) -> str:
     return value.isoformat() if value else ""
+
+
+def longitudinal_item_sort_key(item: dict[str, Any]) -> tuple[str, str, str, str]:
+    ideal_due_at = str(item.get("ideal_due_at") or item.get("due_at") or "")[:10]
+    scheduled_due_at = str(item.get("scheduled_due_at") or item.get("due_at") or "")[:10]
+    encounter_type = str(item.get("encounter_type") or item.get("item_type") or "")
+    title = str(item.get("title") or "")
+    return (ideal_due_at, scheduled_due_at, encounter_type, title)
 
 
 def _add_months(base: date, months: int) -> date:
@@ -699,9 +712,17 @@ def _filter_fields(sections: list[dict[str, Any]], field_names: list[str], requi
     return filtered_sections
 
 
-def _agenda_item_field_names(item: dict[str, Any]) -> list[str]:
+def _agenda_item_field_names(item: dict[str, Any], *, exact_required_only: bool = False) -> list[str]:
     item_type = str(item.get("item_type") or "")
     agenda_key = str(item.get("agenda_key") or "")
+    required_inputs = [
+        field
+        for field in list(item.get("required_inputs") or [])
+        if field and not str(field).startswith("source_document:")
+    ]
+    if exact_required_only and required_inputs:
+        return list(dict.fromkeys(required_inputs))
+
     base_fields = ["visit_date"]
     by_type = {
         "therapy_review": [
@@ -838,7 +859,7 @@ def _agenda_item_field_names(item: dict[str, Any]) -> list[str]:
             )
     else:
         base_fields.extend(by_type.get(item_type, ["clinician_notes"]))
-    base_fields.extend(item.get("required_inputs") or [])
+    base_fields.extend(required_inputs)
     return list(dict.fromkeys(field for field in base_fields if field and not str(field).startswith("source_document:")))
 
 
@@ -863,21 +884,45 @@ def build_visit_schema(
     agenda_item: dict[str, Any] | None = None,
     field_scope: list[str] | None = None,
     capture_context: dict[str, Any] | None = None,
+    presentation: str = "standard",
 ) -> dict[str, Any]:
     sections = _build_visit_sections(state, management_track)
     agenda_item_context = None
+    presentation_mode = "standard"
+    focus_fields = list(dict.fromkeys(field_scope or []))
+    fixed_context = {}
+    auto_visit_date = ""
+    allow_visit_date_override = False
     if agenda_item:
-        sections = _filter_fields(
-            sections,
-            _agenda_item_field_names(agenda_item),
-            agenda_item.get("required_inputs", []),
-        )
+        inline_task = presentation == "inline_task"
+        scoped_fields = _agenda_item_field_names(agenda_item, exact_required_only=inline_task)
+        if inline_task:
+            scoped_fields = [field for field in scoped_fields if field not in {"visit_date", "clinician_notes"}]
+        sections = _filter_fields(sections, scoped_fields, agenda_item.get("required_inputs", []))
         agenda_item_context = _build_agenda_item_form_context(agenda_item)
+        if inline_task:
+            agenda_item_context["mode"] = "inline_task"
+            presentation_mode = "inline_task"
+            focus_fields = list(dict.fromkeys(scoped_fields))
+            fixed_context = {
+                "title": agenda_item_context.get("title", ""),
+                "summary": agenda_item_context.get("summary", ""),
+                "why_now": "Completar esta subtarea actualiza el encounter y recalcula el plan maestro.",
+                "decision_targets": list(agenda_item_context.get("decision_targets") or []),
+                "recommended_action": agenda_item.get("action_label") or "Completar la subtarea seleccionada.",
+            }
+            auto_visit_date = date.today().isoformat()
+            allow_visit_date_override = True
     elif field_scope:
-        scoped_fields = list(dict.fromkeys(["visit_date", *field_scope, "clinician_notes"]))
+        alert_capture = bool(capture_context and capture_context.get("alert_key"))
+        scoped_fields = (
+            list(dict.fromkeys(field_scope))
+            if alert_capture
+            else list(dict.fromkeys(["visit_date", *field_scope, "clinician_notes"]))
+        )
         sections = _filter_fields(sections, scoped_fields, field_scope)
         agenda_item_context = {
-            "mode": "capture_block",
+            "mode": "mini_capture" if alert_capture else "capture_block",
             "title": capture_context.get("title") if capture_context else "Completar datos críticos",
             "summary": capture_context.get("rationale") if capture_context else "Completa variables críticas del flujo clínico.",
             "required_inputs": scoped_fields,
@@ -887,14 +932,53 @@ def build_visit_schema(
             "form_scope": capture_context.get("form_scope") if capture_context else {"mode": "capture_block"},
             "reasoning": [capture_context.get("rationale")] if capture_context and capture_context.get("rationale") else [],
             "blockers": [],
+            "linked_agenda_ids": list(capture_context.get("linked_agenda_ids") or []) if capture_context else [],
+            "linked_agenda_keys": list(capture_context.get("linked_agenda_keys") or []) if capture_context else [],
+            "encounter_key": capture_context.get("encounter_key") if capture_context else "",
+            "alert_key": capture_context.get("alert_key") if capture_context else "",
+            "action_type": capture_context.get("action_type") if capture_context else "capture",
+            "expected_document_type": capture_context.get("expected_document_type") if capture_context else "auto",
         }
+        presentation_mode = "mini_capture" if alert_capture else "standard"
+        focus_fields = list(dict.fromkeys(field_scope or []))
+        fixed_context = {
+            "title": agenda_item_context.get("title", ""),
+            "summary": agenda_item_context.get("summary", ""),
+            "why_now": capture_context.get("rationale") if capture_context else "",
+            "decision_targets": list(agenda_item_context.get("decision_targets") or []),
+            "recommended_action": capture_context.get("recommended_action") if capture_context and capture_context.get("recommended_action") else "Guardar la captura mínima para recalcular alertas, agenda y siguiente mejor acción.",
+        }
+        auto_visit_date = date.today().isoformat()
+        allow_visit_date_override = True
+    focus_fields = [
+        str(field.get("name") or "")
+        for section in sections
+        for field in list(section.get("fields") or [])
+        if str(field.get("name") or "")
+    ] or focus_fields
     return VisitBundle(
         state=state,
         management_track=management_track,
         sections=sections,
     ).to_dict() | {
         "agenda_item_context": agenda_item_context,
-        "submission_mode": "item_scoped" if agenda_item else "full_track",
+        "presentation_mode": presentation_mode,
+        "focus_fields": focus_fields,
+        "task_scope": {
+            "agenda_key": agenda_item.get("agenda_key", "") if agenda_item else "",
+            "title": agenda_item.get("title", "") if agenda_item else "",
+            "action_mode": agenda_item.get("action_mode", "") if agenda_item else "",
+        },
+        "fixed_context": fixed_context,
+        "auto_visit_date": auto_visit_date,
+        "allow_visit_date_override": allow_visit_date_override,
+        "encounter_key": agenda_item.get("encounter_key", "") if agenda_item else (capture_context.get("encounter_key", "") if capture_context else ""),
+        "plan_key": agenda_item.get("plan_key", "") if agenda_item else "",
+        "submission_mode": (
+            "item_scoped"
+            if agenda_item or field_scope or capture_context
+            else "full_track"
+        ),
     }
 
 
@@ -946,12 +1030,26 @@ def _agenda_item(
         state=state,
         management_track=management_track,
         due_at=_fmt_date(due_at),
+        ideal_due_at=_fmt_date(due_at),
+        scheduled_due_at=_fmt_date(due_at),
+        completed_at="",
         window_start=_fmt_date(window_start),
         window_end=_fmt_date(window_end),
+        delay_days=0,
+        plan_key="",
         status=status,
         priority=priority,
         summary=summary,
         required_inputs=required_inputs or [],
+        required=is_required_task({"item_type": item_type}, state),
+        action_mode=action_mode_for_task(
+            {
+                "item_type": item_type,
+                "required_inputs": required_inputs or [],
+                "completion_rule": completion_rule or {},
+                "form_scope": form_scope or {"mode": "full_track"},
+            }
+        ),
         completion_rule=completion_rule or {},
         evidence_basis=evidence_basis or [],
         comparator_basis=comparator_basis or [],
@@ -971,14 +1069,23 @@ def agenda_item_to_scheduled_event(item: dict[str, Any]) -> dict[str, Any]:
     guideline = " · ".join(str(entry) for entry in evidence_basis[:2]) if evidence_basis else ""
     return {
         "event_type": CANONICAL_SCHEDULE_EVENT_TYPES.get(item.get("item_type"), item.get("item_type")),
+        "schedule_key": item.get("agenda_key"),
+        "encounter_key": item.get("encounter_key"),
         "label": item.get("title"),
         "management_track": item.get("management_track"),
         "due_date": item.get("due_at"),
+        "ideal_due_at": item.get("ideal_due_at") or item.get("due_at"),
+        "scheduled_due_at": item.get("scheduled_due_at") or item.get("due_at"),
+        "delay_days": int(item.get("delay_days") or 0),
+        "plan_key": item.get("plan_key", ""),
+        "completed_at": item.get("completed_at", ""),
         "guideline": guideline,
         "agenda_key": item.get("agenda_key"),
         "summary": item.get("summary", ""),
         "priority": item.get("priority", "routine"),
         "required_inputs": item.get("required_inputs", []),
+        "required": bool(item.get("required", True)),
+        "action_mode": item.get("action_mode", action_mode_for_task(item)),
         "status": item.get("status", "scheduled"),
         "title": item.get("title"),
         "decision_targets": item.get("decision_targets", []),
@@ -989,6 +1096,46 @@ def agenda_item_to_scheduled_event(item: dict[str, Any]) -> dict[str, Any]:
         "reasoning": item.get("reasoning", []),
         "blockers": item.get("blockers", []),
     }
+
+
+def enrich_agenda_board_with_encounters(
+    agenda_board: dict[str, Any],
+    state: str,
+    management_track: str,
+) -> dict[str, Any]:
+    items = [dict(item) for item in (agenda_board.get("items") or [])]
+    encounters = build_encounter_plans(
+        items,
+        state=state,
+        management_track=management_track,
+        protocol_trace=agenda_board.get("protocol_trace") or {},
+    )
+    encounter_by_agenda_key = {
+        str(task.get("agenda_key") or ""): str(encounter.get("encounter_key") or "")
+        for encounter in encounters
+        for task in (encounter.get("tasks") or [])
+        if str(task.get("agenda_key") or "")
+    }
+    enriched_items = []
+    for item in items:
+        enriched = dict(item)
+        enriched["encounter_key"] = encounter_by_agenda_key.get(str(item.get("agenda_key") or ""), "")
+        enriched_items.append(enriched)
+    enriched_items.sort(key=longitudinal_item_sort_key)
+    actionable_encounters = [
+        encounter
+        for encounter in encounters
+        if str(encounter.get("status") or "scheduled") not in {"completed", "cancelled", "superseded"}
+    ]
+    preferred_next_encounter = next(
+        (encounter for encounter in actionable_encounters if str(encounter.get("visit_modality") or "") != "async"),
+        actionable_encounters[0] if actionable_encounters else {},
+    )
+    agenda_board["items"] = enriched_items
+    agenda_board["active_items"] = enriched_items
+    agenda_board["encounters"] = encounters
+    agenda_board["next_encounter"] = preferred_next_encounter
+    return agenda_board
 
 
 def build_protocol_comparators(state: str, management_track: str) -> list[dict[str, Any]]:
@@ -1140,6 +1287,16 @@ def build_stage_protocol(state: str, management_track: str, patient: dict[str, A
             evidence_basis=["NCCN 2026", "EAU 2026 recurrencia", "FDA EMBARK"],
             comparator_basis=[],
         ).to_dict()
+    if state == "adt_progression_verification":
+        return StageProtocolDefinition(
+            state=state,
+            management_track=management_track,
+            title="Confirmación de progresión bajo ADT",
+            cadence_summary="Confirmación corta con testosterona, backbone ADT, revisión terapéutica e imagen convencional en 2-6 semanas.",
+            purpose="Confirmar progresión real bajo castración antes de escalar a una nueva etapa sistémica.",
+            evidence_basis=["NCCN 2026", "EAU 2026 avanzada", "PCWG3"],
+            comparator_basis=[],
+        ).to_dict()
     if state in ADVANCED_STATES:
         return StageProtocolDefinition(
             state=state,
@@ -1281,6 +1438,37 @@ def _localized_agenda(patient: dict[str, Any], state: str, track: str) -> list[d
                 ),
             ]
         )
+        # Enrich with AS protocol schedule from active_surveillance module
+        try:
+            from prostanet.domains.patient_tracking.active_surveillance import ActiveSurveillanceService
+            as_data = {}
+            as_data.update(identity)
+            as_data.update(patient.get("baseline", {}) or {})
+            as_data.update(patient.get("prior_history", {}) or {})
+            if patient.get("follow_ups"):
+                as_data.update(patient["follow_ups"][-1])
+            as_protocol = ActiveSurveillanceService.build_as_protocol(as_data, state)
+            if as_protocol and as_protocol.schedule:
+                for sched_item in as_protocol.schedule:
+                    if sched_item.status == "overdue":
+                        items.append(
+                            _agenda_item(
+                                f"{state}:{track}:as_{sched_item.item_type}_{sched_item.due_date}",
+                                sched_item.item_type,
+                                f"[VA Protocolo] {sched_item.title}",
+                                state,
+                                track,
+                                _parse_date(sched_item.due_date) or base_date,
+                                0,
+                                priority="high",
+                                summary=f"Item vencido del protocolo de vigilancia activa: {sched_item.title}",
+                                required_inputs=[],
+                                evidence_basis=sched_item.evidence_basis if hasattr(sched_item, "evidence_basis") else ["NCCN 2026 AS"],
+                                generated_from_event="as_protocol_schedule",
+                            )
+                        )
+        except Exception:
+            pass
     elif track == "pre_surgery":
         items.extend(
             [
@@ -1443,6 +1631,10 @@ def _advanced_agenda(patient: dict[str, Any], state: str, track: str) -> list[di
     interval_days = 60
     lab_interval_days = 60
     imaging_interval_days = 120
+    if state == "adt_progression_verification":
+        interval_days = 21
+        lab_interval_days = 21
+        imaging_interval_days = 42
     if track == "on_docetaxel":
         interval_days = 21
         lab_interval_days = 21
@@ -1728,7 +1920,7 @@ def build_agenda_items(patient: dict[str, Any], state: str, management_track: st
     else:
         items = _advanced_agenda(patient, state, management_track)
     items.extend(_document_agenda_items(patient, state, management_track))
-    return items
+    return sorted(items, key=longitudinal_item_sort_key)
 
 
 def _document_agenda_items(patient: dict[str, Any], state: str, management_track: str) -> list[dict[str, Any]]:
@@ -1946,7 +2138,8 @@ def build_agenda_board(patient: dict[str, Any], state: str, management_track: st
     protocol = build_stage_protocol(state, management_track, patient)
     therapy_checkpoints = build_therapy_checkpoints(patient, state, management_track)
     protocol_trace = build_protocol_trace(patient, state, management_track, raw_assessment)
-    return {
+    board = {
+        "state": state,
         "management_track": management_track,
         "management_track_label": MANAGEMENT_TRACK_LABELS.get(management_track, management_track),
         "stage_protocol": protocol,
@@ -1961,3 +2154,4 @@ def build_agenda_board(patient: dict[str, Any], state: str, management_track: st
         "protocol_comparators": build_protocol_comparators(state, management_track),
         "visit_schema": build_visit_schema(state, management_track),
     }
+    return enrich_agenda_board_with_encounters(board, state, management_track)

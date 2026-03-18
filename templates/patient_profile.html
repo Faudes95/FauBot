@@ -59,6 +59,17 @@
         .pn-tone-amber { background: linear-gradient(90deg, #b45309, #fbbf24); }
         .pn-tone-orange { background: linear-gradient(90deg, #c2410c, #fb923c); }
         .pn-tone-rose { background: linear-gradient(90deg, #be123c, #fb7185); }
+        .pm-mini-modal-shell {
+            width: min(100%, 34rem);
+        }
+        .pm-mini-capture-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 1rem;
+        }
+        .pm-mini-capture-grid .md\:col-span-2 {
+            grid-column: span 1 / span 1;
+        }
         .pm-profile-header {
             position: relative;
             overflow: hidden;
@@ -210,6 +221,8 @@
     {% set profile_sources = profile.source_citations if profile else [] %}
     {% set longitudinal_sections = profile.longitudinal_sections if profile else [] %}
     {% set agenda_board = profile.agenda_board if profile and profile.agenda_board is defined else {} %}
+    {% set master_followup_plan = profile.master_followup_plan if profile and profile.master_followup_plan is defined else {} %}
+    {% set master_followup_summary = profile.master_followup_summary if profile and profile.master_followup_summary is defined else {} %}
     {% set next_due_items = profile.next_due_items if profile else [] %}
     {% set overdue_items = profile.overdue_items if profile else [] %}
     {% set visit_schema = visit_schema if visit_schema is defined and visit_schema else (profile.visit_schema if profile and profile.visit_schema is defined else {}) %}
@@ -228,7 +241,15 @@
     {% set evidence_applicability = profile.evidence_applicability if profile else {} %}
     {% set active_agenda_items = profile.active_agenda_items if profile else [] %}
     {% set archived_agenda_items = profile.archived_agenda_items if profile else [] %}
+    {% set encounters = profile.encounters if profile else [] %}
+    {% set next_encounter = profile.next_encounter if profile else {} %}
     {% set patient_kpis = profile.patient_kpis if profile else [] %}
+    {% set current_course_status = profile.current_course_status if profile else '' %}
+    {% set last_adjudicated_event = profile.last_adjudicated_event if profile else {} %}
+    {% set pending_adjudications = profile.pending_adjudications if profile else [] %}
+    {% set current_response_state = profile.current_response_state if profile else {} %}
+    {% set trial_comparable_endpoints = profile.trial_comparable_endpoints if profile else [] %}
+    {% set current_trial_comparable_profile = profile.current_trial_comparable_profile if profile else {} %}
     {% set module_data_contracts = profile.module_data_contracts if profile else [] %}
     {% set cohort_completeness = profile.cohort_completeness if profile else {} %}
     {% set research_readiness = profile.research_readiness if profile else {} %}
@@ -383,7 +404,47 @@
         </section>
         {% endif %}
 
-        <section class="pn-surface pm-summary-shell">
+        {% if current_course_status or last_adjudicated_event or pending_adjudications or current_trial_comparable_profile %}
+        <section class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+            <div class="pn-surface">
+                <div class="text-xs uppercase tracking-wider text-slate-500">Curso de enfermedad</div>
+                <div class="mt-2 text-sm font-semibold text-white">{{ current_course_status or 'Sin estado adjudicado aún.' }}</div>
+                {% if current_response_state.label %}
+                <div class="mt-2 text-xs text-cyan-200">Respuesta actual: {{ current_response_state.label }}</div>
+                {% endif %}
+            </div>
+            <div class="pn-surface">
+                <div class="text-xs uppercase tracking-wider text-slate-500">Último evento adjudicado</div>
+                <div class="mt-2 text-sm font-semibold text-white">{{ last_adjudicated_event.summary if last_adjudicated_event else 'Sin evento adjudicado visible' }}</div>
+                <div class="mt-2 text-xs text-slate-400">
+                    {{ last_adjudicated_event.event_date if last_adjudicated_event and last_adjudicated_event.event_date else '' }}
+                    {% if last_adjudicated_event and last_adjudicated_event.axis %} · {{ last_adjudicated_event.axis }}{% endif %}
+                </div>
+            </div>
+            <div class="pn-surface">
+                <div class="text-xs uppercase tracking-wider text-slate-500">Adjudicaciones pendientes</div>
+                <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                    {% for item in pending_adjudications[:3] %}
+                    <li>{{ item.title }}</li>
+                    {% else %}
+                    <li>Sin adjudicaciones pendientes críticas.</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            <div class="pn-surface">
+                <div class="text-xs uppercase tracking-wider text-slate-500">Perfil trial-like actual</div>
+                <div class="mt-2 text-sm font-semibold text-white">{{ current_trial_comparable_profile.benchmark_family if current_trial_comparable_profile else 'Sin familia comparable priorizada' }}</div>
+                <div class="mt-2 text-xs text-slate-400">
+                    {{ current_trial_comparable_profile.eligibility_status if current_trial_comparable_profile else '' }}
+                    {% if current_trial_comparable_profile and current_trial_comparable_profile.matched_trials %}
+                    · {{ current_trial_comparable_profile.matched_trials | join(', ') }}
+                    {% endif %}
+                </div>
+            </div>
+        </section>
+        {% endif %}
+
+        <section id="profile-executive-summary" class="pn-surface pm-summary-shell">
             <div class="relative z-10 space-y-5">
                 <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-5">
                     <div class="max-w-4xl">
@@ -550,7 +611,7 @@
         </section>
 
         {% if next_best_action.title or transition_proposals or clinical_signals.critical_missing or clinical_signals.active_safety %}
-        <section class="pn-surface border border-cyan-700/30 bg-cyan-950/10">
+        <section id="profile-next-best-action" class="pn-surface border border-cyan-700/30 bg-cyan-950/10">
             <div class="grid grid-cols-1 xl:grid-cols-4 gap-4">
                 <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4 xl:col-span-2">
                     <div class="text-xs uppercase tracking-wider text-slate-500">Siguiente mejor acción</div>
@@ -1065,47 +1126,264 @@
             <div class="pn-surface">
                 <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4 mb-4">
                     <div>
-                        <h2 class="text-lg font-bold text-white">Agenda clínica por etapa</h2>
+                        <h2 class="text-lg font-bold text-white">Plan maestro de seguimiento protocolizado</h2>
                         <p class="mt-1 text-sm text-slate-400">
-                            {{ agenda_board.stage_protocol.title if agenda_board.stage_protocol else 'Agenda activa de seguimiento' }}
+                            {{ master_followup_plan.title if master_followup_plan else (agenda_board.stage_protocol.title if agenda_board.stage_protocol else 'Agenda activa de seguimiento') }}
                             {% if agenda_board.management_track_label %} · {{ agenda_board.management_track_label }}{% endif %}
                         </p>
+                        {% if master_followup_plan.phase_label or master_followup_plan.guideline_basis %}
+                        <div class="mt-3 flex flex-wrap items-center gap-2">
+                            {% if master_followup_plan.phase_label %}
+                            <span class="rounded-full border border-cyan-500/20 bg-cyan-500/10 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-cyan-200">{{ master_followup_plan.phase_label }}</span>
+                            {% endif %}
+                            <span class="rounded-full border border-slate-700 bg-slate-950/50 px-3 py-1 text-[11px] text-slate-300">{{ master_followup_plan.calendar_horizon_months or 12 }} meses</span>
+                            {% for item in (master_followup_plan.guideline_basis or [])[:3] %}
+                            <span class="rounded-full border border-slate-700 bg-slate-950/50 px-3 py-1 text-[11px] text-slate-300">{{ item }}</span>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
                     </div>
                     <button onclick="openVisitModal()" class="pn-btn pn-btn-primary px-3 py-2 text-xs">
                         + Completar visita / estudio
                     </button>
                 </div>
 
-                <div class="grid grid-cols-1 md:grid-cols-4 gap-3 mb-5">
-                    <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
-                        <div class="text-xs uppercase tracking-wider text-slate-500">Próximo hito</div>
-                        <div class="mt-2 text-sm font-semibold text-white">{{ (next_due_items[0].title if next_due_items else overdue_items[0].title if overdue_items else 'Sin hitos inmediatos') }}</div>
-                        <div class="mt-1 text-xs text-slate-400">{{ (next_due_items[0].due_at if next_due_items else overdue_items[0].due_at if overdue_items else '') }}</div>
+                <div class="grid grid-cols-1 xl:grid-cols-12 gap-4 mb-5">
+                    <div class="xl:col-span-8 rounded-2xl border border-cyan-500/20 bg-gradient-to-br from-cyan-950/20 via-slate-950/70 to-slate-950/80 p-5">
+                        <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+                            <div>
+                                <div class="text-xs uppercase tracking-[0.18em] text-cyan-300">Qué toca ahora</div>
+                                <div class="mt-2 text-xl font-semibold text-white">{{ next_encounter.title if next_encounter else (master_followup_summary.headline if master_followup_summary else 'Sin encounter priorizado') }}</div>
+                                <p class="mt-2 text-sm text-slate-300">{{ next_encounter.summary if next_encounter else (agenda_board.stage_protocol.purpose if agenda_board.stage_protocol else clinical_compass.monitoring_cadence) }}</p>
+                                <div class="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                                    <span>Ideal {{ next_encounter.ideal_due_at or next_encounter.due_at or master_followup_summary.next_encounter_due_at or 'Sin fecha exacta' }}</span>
+                                    {% if next_encounter.scheduled_due_at and next_encounter.scheduled_due_at != (next_encounter.ideal_due_at or next_encounter.due_at) %}
+                                    <span>·</span>
+                                    <span>Programada {{ next_encounter.scheduled_due_at }}</span>
+                                    {% endif %}
+                                    <span>·</span>
+                                    <span>{{ next_encounter.visit_modality or 'clinic' }}</span>
+                                    <span>·</span>
+                                    <span>{{ next_encounter.status or 'scheduled' }}</span>
+                                    {% if next_encounter.delay_days %}
+                                    <span>·</span>
+                                    <span>Desvío {{ next_encounter.delay_days }} día(s)</span>
+                                    {% endif %}
+                                    {% if master_followup_plan.anchor.strength %}
+                                    <span>·</span>
+                                    <span>Anclaje {{ master_followup_plan.anchor.strength }}</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-3 gap-3 min-w-[260px]">
+                                <div class="rounded-xl border border-slate-700 bg-slate-950/50 p-3">
+                                    <div class="text-[11px] uppercase tracking-[0.16em] text-slate-500">Vencidos</div>
+                                    <div class="mt-2 text-2xl font-semibold text-amber-300">{{ master_followup_summary.overdue_count if master_followup_summary else overdue_items|length }}</div>
+                                </div>
+                                <div class="rounded-xl border border-slate-700 bg-slate-950/50 p-3">
+                                    <div class="text-[11px] uppercase tracking-[0.16em] text-slate-500">Due ahora</div>
+                                    <div class="mt-2 text-2xl font-semibold text-cyan-200">{{ master_followup_summary.due_now_count if master_followup_summary else next_due_items|length }}</div>
+                                </div>
+                                <div class="rounded-xl border border-slate-700 bg-slate-950/50 p-3">
+                                    <div class="text-[11px] uppercase tracking-[0.16em] text-slate-500">Bloqueos</div>
+                                    <div class="mt-2 text-2xl font-semibold text-rose-200">{{ master_followup_summary.blocking_alert_count if master_followup_summary else 0 }}</div>
+                                </div>
+                            </div>
+                        </div>
+                        {% if master_followup_plan.highlight_actions %}
+                        <div class="mt-4 grid gap-2 md:grid-cols-2">
+                            {% for action in master_followup_plan.highlight_actions[:4] %}
+                            <div class="rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-3 text-sm text-slate-200">{{ action }}</div>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
                     </div>
-                    <div class="rounded-xl border border-amber-500/20 bg-amber-950/20 p-4">
-                        <div class="text-xs uppercase tracking-wider text-slate-500">Vencidos</div>
-                        <div class="mt-2 text-2xl font-semibold text-amber-300">{{ overdue_items|length }}</div>
-                        <div class="mt-1 text-xs text-slate-400">Requieren acción prioritaria</div>
+                    <div class="xl:col-span-4 rounded-2xl border border-slate-700 bg-slate-900/50 p-4">
+                        <div class="text-xs uppercase tracking-wider text-slate-500">Cadencia y anclaje</div>
+                        <div class="mt-3 text-sm font-semibold text-white">{{ agenda_board.stage_protocol.cadence_summary if agenda_board.stage_protocol else clinical_compass.monitoring_cadence }}</div>
+                        {% if master_followup_plan.anchor.anchor_date %}
+                        <div class="mt-2 text-[11px] text-slate-500">
+                            Anclado a {{ master_followup_plan.anchor.anchor_date }} · {{ master_followup_plan.anchor.anchor_source or 'origen no documentado' }}
+                            {% if master_followup_plan.anchor.is_fallback %} · fallback{% endif %}
+                        </div>
+                        {% endif %}
+                        {% if master_followup_plan.gaps_to_close %}
+                        <div class="mt-4 text-xs uppercase tracking-wider text-slate-500">Gaps a cerrar</div>
+                        <ul class="mt-2 space-y-2 text-sm text-amber-200 list-disc pl-5">
+                            {% for gap in master_followup_plan.gaps_to_close[:4] %}
+                            <li>{{ gap }}</li>
+                            {% endfor %}
+                        </ul>
+                        {% endif %}
                     </div>
-                    <div class="rounded-xl border border-cyan-500/20 bg-cyan-950/20 p-4">
-                        <div class="text-xs uppercase tracking-wider text-slate-500">Due ahora</div>
-                        <div class="mt-2 text-2xl font-semibold text-cyan-200">{{ next_due_items|length }}</div>
-                        <div class="mt-1 text-xs text-slate-400">Dentro de la ventana esperada</div>
-                    </div>
-                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
-                    <div class="text-xs uppercase tracking-wider text-slate-500">Cadencia primaria</div>
-                    <div class="mt-2 text-sm text-white">{{ agenda_board.stage_protocol.cadence_summary if agenda_board.stage_protocol else clinical_compass.monitoring_cadence }}</div>
-                    {% if protocol_trace.anchor_date %}
-                    <div class="mt-2 text-[11px] text-slate-500">
-                        Anclado a {{ protocol_trace.anchor_date }} · {{ protocol_trace.anchor_source or 'origen no documentado' }}
-                        {% if protocol_trace.anchor_is_fallback %} · fallback{% endif %}
-                    </div>
-                    {% endif %}
                 </div>
-            </div>
 
                 <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
                     <div class="rounded-2xl border border-slate-700 bg-slate-900/50 p-4 xl:col-span-2">
+                        {% if next_encounter %}
+                        <div class="mb-4 rounded-2xl border border-cyan-500/20 bg-cyan-950/10 p-4">
+                            <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                                <div>
+                                    <div class="text-xs uppercase tracking-[0.18em] text-cyan-300">Encuentro recomendado</div>
+                                    <div class="mt-2 text-lg font-semibold text-white">{{ next_encounter.title }}</div>
+                                    <p class="mt-2 text-sm text-slate-300">{{ next_encounter.summary }}</p>
+                                    <div class="mt-2 text-xs text-slate-400">
+                                        Ideal {{ next_encounter.ideal_due_at or next_encounter.due_at or 'Sin fecha exacta' }}
+                                        {% if next_encounter.scheduled_due_at and next_encounter.scheduled_due_at != (next_encounter.ideal_due_at or next_encounter.due_at) %}
+                                         · Programada {{ next_encounter.scheduled_due_at }}
+                                        {% endif %}
+                                         · {{ next_encounter.visit_modality }} · {{ next_encounter.status }}
+                                        {% if next_encounter.delay_days %} · Desvío {{ next_encounter.delay_days }} día(s){% endif %}
+                                    </div>
+                                </div>
+                                <div class="rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-right">
+                                    <div class="text-[11px] uppercase tracking-[0.16em] text-slate-500">Subtareas</div>
+                                    <div class="mt-1 text-2xl font-semibold text-cyan-200">{{ next_encounter.task_count }}</div>
+                                </div>
+                            </div>
+                            {% if next_encounter.tasks %}
+                            <div class="mt-4 grid gap-2 md:grid-cols-2">
+                                {% for task in next_encounter.tasks %}
+                                <div class="rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-3">
+                                    <div class="flex items-center justify-between gap-3">
+                                        <div class="text-sm font-medium text-white">{{ task.title }}</div>
+                                        <span class="text-[11px] uppercase tracking-[0.16em] text-slate-500">{{ task.status }}</span>
+                                    </div>
+                                    {% if task.due_at %}
+                                    <div class="mt-1 text-xs text-slate-400">{{ task.due_at }}</div>
+                                    {% endif %}
+                                </div>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+                        {% endif %}
+                        {% set followup_timeline = master_followup_plan.timeline or master_followup_plan.encounter_timeline %}
+                        {% if followup_timeline %}
+                        <div class="mb-4 rounded-2xl border border-slate-700 bg-slate-950/30 p-4">
+                            <div class="flex flex-wrap items-center justify-between gap-3">
+                                <div class="text-xs uppercase tracking-wider text-slate-500">Calendario fijo de seguimiento</div>
+                                <div class="text-[11px] text-slate-500">Cronología ideal {{ master_followup_plan.calendar_horizon_months or 12 }} meses</div>
+                            </div>
+                            <div class="mt-4 space-y-3">
+                                {% for encounter in followup_timeline %}
+                                {% set encounter_dom_key = (encounter.encounter_key or ('encounter-' ~ loop.index))|replace(':', '-')|replace('/', '-') %}
+                                <details class="rounded-xl border border-slate-800 bg-slate-950/40 px-4 py-3" data-encounter-card data-encounter-key="{{ encounter.encounter_key }}" {% if next_encounter and encounter.encounter_key == next_encounter.encounter_key %}open{% endif %}>
+                                    <summary class="list-none cursor-pointer">
+                                        <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                                            <div>
+                                                <div class="flex items-center gap-2 flex-wrap">
+                                                    <div class="text-sm font-semibold text-white">{{ encounter.title }}</div>
+                                                    <span class="rounded-full border border-slate-700 bg-slate-950/50 px-2 py-1 text-[11px] uppercase tracking-[0.16em] text-slate-400">{{ encounter.status }}</span>
+                                                    {% if encounter.inline_actions_enabled %}
+                                                    <span class="rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2 py-1 text-[11px] uppercase tracking-[0.16em] text-cyan-200">Inline</span>
+                                                    {% endif %}
+                                                </div>
+                                                <div class="mt-2 text-xs text-slate-400">
+                                                    Ideal {{ encounter.ideal_due_at or encounter.due_at or 'Sin fecha exacta' }}
+                                                    {% if encounter.scheduled_due_at and encounter.scheduled_due_at != (encounter.ideal_due_at or encounter.due_at) %}
+                                                     · Programada {{ encounter.scheduled_due_at }}
+                                                    {% endif %}
+                                                    {% if encounter.completed_at %} · Completada {{ encounter.completed_at }}{% endif %}
+                                                    {% if encounter.delay_days %} · Desvío {{ encounter.delay_days }} día(s){% endif %}
+                                                    {% if encounter.visit_modality %} · {{ encounter.visit_modality }}{% endif %}
+                                                </div>
+                                                {% if encounter.summary %}
+                                                <p class="mt-2 text-sm text-slate-300">{{ encounter.summary }}</p>
+                                                {% endif %}
+                                            </div>
+                                            <div class="grid grid-cols-2 gap-3 min-w-[220px]">
+                                                <div class="rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2">
+                                                    <div class="text-[11px] uppercase tracking-[0.16em] text-slate-500">Progreso</div>
+                                                    <div class="mt-1 text-lg font-semibold text-cyan-200">{{ encounter.completion_progress.label if encounter.completion_progress else (encounter.completed_required_task_count ~ '/' ~ encounter.required_task_count) }}</div>
+                                                </div>
+                                                <div class="rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2">
+                                                    <div class="text-[11px] uppercase tracking-[0.16em] text-slate-500">Subtareas</div>
+                                                    <div class="mt-1 text-lg font-semibold text-white">{{ encounter.task_count }}</div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </summary>
+                                    <div class="mt-4 space-y-3">
+                                        {% if encounter.guideline_basis %}
+                                        <div class="text-[11px] text-cyan-200">{{ encounter.guideline_basis|join(' · ') }}</div>
+                                        {% endif %}
+                                        {% if encounter.alerts_resolved_by_this_encounter %}
+                                        <div class="text-[11px] text-amber-200">Resuelve: {{ encounter.alerts_resolved_by_this_encounter|join(', ') }}</div>
+                                        {% endif %}
+                                        <div class="space-y-2">
+                                            {% for task in encounter.tasks %}
+                                            {% set task_dom_key = (task.agenda_key or ('task-' ~ loop.index))|replace(':', '-')|replace('/', '-') %}
+                                            <div class="rounded-xl border border-slate-800 bg-slate-950/30 px-4 py-3">
+                                                <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                                                    <div class="min-w-0">
+                                                        <div class="flex items-center gap-2 flex-wrap">
+                                                            <div class="text-sm font-medium text-white">{{ task.title }}</div>
+                                                            <span class="rounded-full border border-slate-700 bg-slate-950/50 px-2 py-1 text-[11px] uppercase tracking-[0.16em] text-slate-400">{{ task.status }}</span>
+                                                            <span class="rounded-full border {{ 'border-cyan-500/20 bg-cyan-500/10 text-cyan-200' if task.required else 'border-slate-700 bg-slate-950/50 text-slate-400' }} px-2 py-1 text-[11px] uppercase tracking-[0.16em]">
+                                                                {{ 'Obligatoria' if task.required else 'Opcional' }}
+                                                            </span>
+                                                        </div>
+                                                        <div class="mt-2 text-xs text-slate-400">
+                                                            Ideal {{ task.ideal_due_at or task.due_at or 'Sin fecha exacta' }}
+                                                            {% if task.scheduled_due_at and task.scheduled_due_at != (task.ideal_due_at or task.due_at) %}
+                                                             · Programada {{ task.scheduled_due_at }}
+                                                            {% endif %}
+                                                            {% if task.completed_at %} · Completada {{ task.completed_at }}{% endif %}
+                                                            {% if task.delay_days %} · Desvío {{ task.delay_days }} día(s){% endif %}
+                                                        </div>
+                                                        {% if task.decision_targets %}
+                                                        <div class="mt-2 text-[11px] text-slate-500">Decisión: {{ task.decision_targets|join(', ') }}</div>
+                                                        {% endif %}
+                                                    </div>
+                                                    <div class="flex flex-wrap gap-2 items-start shrink-0">
+                                                        {% if task.status != 'completed' and task.action_mode == 'capture' and task.agenda_id %}
+                                                        <button
+                                                            type="button"
+                                                            class="pn-btn pn-btn-primary px-3 py-2 text-xs"
+                                                            data-inline-task-toggle
+                                                            data-encounter-key="{{ encounter.encounter_key }}"
+                                                            data-agenda-key="{{ task.agenda_key }}"
+                                                            data-default-label="Completar ahora"
+                                                            onclick='openInlineEncounterTask({{ encounter.encounter_key|tojson }}, {{ task.agenda_key|tojson }}, {{ task.agenda_id|tojson }}, {{ task.action_mode|tojson }}, {{ task.expected_document_type|tojson }})'
+                                                        >
+                                                            Completar ahora
+                                                        </button>
+                                                        {% elif task.status != 'completed' and task.action_mode == 'document' and task.agenda_id %}
+                                                        <button
+                                                            type="button"
+                                                            class="pn-btn pn-btn-primary px-3 py-2 text-xs"
+                                                            data-inline-task-toggle
+                                                            data-encounter-key="{{ encounter.encounter_key }}"
+                                                            data-agenda-key="{{ task.agenda_key }}"
+                                                            data-default-label="Subir documento"
+                                                            onclick='openInlineEncounterTask({{ encounter.encounter_key|tojson }}, {{ task.agenda_key|tojson }}, {{ task.agenda_id|tojson }}, {{ task.action_mode|tojson }}, {{ task.expected_document_type|tojson }})'
+                                                        >
+                                                            Subir documento
+                                                        </button>
+                                                        {% elif task.status != 'completed' and task.action_mode == 'manual' and task.agenda_id %}
+                                                        <button type="button" class="pn-btn pn-btn-secondary px-3 py-2 text-xs" onclick="completeAgendaItem({{ task.agenda_id }})">
+                                                            Marcar completado
+                                                        </button>
+                                                        {% endif %}
+                                                    </div>
+                                                </div>
+                                                <div
+                                                    id="encounter-inline-{{ encounter_dom_key }}-{{ task_dom_key }}"
+                                                    data-inline-task-container
+                                                    data-encounter-key="{{ encounter.encounter_key }}"
+                                                    data-agenda-key="{{ task.agenda_key }}"
+                                                    class="hidden mt-3"
+                                                ></div>
+                                            </div>
+                                            {% endfor %}
+                                        </div>
+                                    </div>
+                                </details>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endif %}
                         <div class="text-xs uppercase tracking-wider text-slate-500">Items activos de agenda</div>
                         <div class="mt-4 space-y-3">
                             {% for item in active_agenda_items[:6] %}
@@ -1119,7 +1397,16 @@
                                             </span>
                                         </div>
                                         <p class="mt-2 text-sm text-slate-300">{{ item.summary }}</p>
-                                        <div class="mt-2 text-xs text-slate-400">Ventana {{ item.window_start }} a {{ item.window_end }}</div>
+                                        <div class="mt-2 text-xs text-slate-400">
+                                            Ideal {{ item.ideal_due_at or item.due_at or item.window_start or 'Sin fecha exacta' }}
+                                            {% if item.scheduled_due_at and item.scheduled_due_at != (item.ideal_due_at or item.due_at or item.window_start) %}
+                                             · Programada {{ item.scheduled_due_at }}
+                                            {% endif %}
+                                            {% if item.delay_days %} · Desvío {{ item.delay_days }} día(s){% endif %}
+                                        </div>
+                                        {% if item.window_start or item.window_end %}
+                                        <div class="mt-1 text-xs text-slate-500">Ventana {{ item.window_start }} a {{ item.window_end }}</div>
+                                        {% endif %}
                                         {% if item.required_inputs %}
                                         <div class="mt-2 text-xs text-slate-500">Inputs esperados: {{ item.required_inputs|join(', ') }}</div>
                                         {% endif %}
@@ -1160,7 +1447,14 @@
                                         <div class="text-sm text-white">{{ item.title }}</div>
                                         <span class="text-[11px] uppercase tracking-[0.18em] text-slate-500">{{ item.status }}</span>
                                     </div>
-                                    <div class="mt-1 text-xs text-slate-500">{{ item.due_at }}{% if item.completed_at %} · completado {{ item.completed_at }}{% endif %}</div>
+                                    <div class="mt-1 text-xs text-slate-500">
+                                        Ideal {{ item.ideal_due_at or item.due_at or 'Sin fecha exacta' }}
+                                        {% if item.scheduled_due_at and item.scheduled_due_at != (item.ideal_due_at or item.due_at) %}
+                                         · Programada {{ item.scheduled_due_at }}
+                                        {% endif %}
+                                        {% if item.completed_at %} · completado {{ item.completed_at }}{% endif %}
+                                        {% if item.delay_days %} · Desvío {{ item.delay_days }} día(s){% endif %}
+                                    </div>
                                 </div>
                                 {% endfor %}
                             </div>
@@ -2374,7 +2668,7 @@
         {% set copilot = profile.copilot|default({}) %}
 
         {% if copilot.clinical_alerts or copilot.overdue_alerts %}
-        <details class="pn-accordion pn-surface border border-red-700/30" open>
+        <details id="copilot-alerts-panel" class="pn-accordion pn-surface border border-red-700/30" open>
             <summary class="flex items-center justify-between gap-3">
                 <div>
                     <h2 class="text-lg font-bold text-white">Alertas clínicas del copiloto</h2>
@@ -2386,7 +2680,7 @@
             </summary>
             <div class="mt-4 space-y-2">
                 {% for alert in copilot.clinical_alerts %}
-                <div class="flex items-start gap-3 px-4 py-3 rounded-lg border
+                <div data-alert="{{ alert.alert_key or loop.index }}" class="flex items-start gap-3 px-4 py-3 rounded-lg border
                     {{ 'bg-red-900/20 border-red-500/30' if alert.severity == 'critical' else 'bg-yellow-900/20 border-yellow-500/30' if alert.severity == 'warning' else 'bg-blue-900/20 border-blue-500/30' }}">
                     <span class="{{ 'text-red-400 alert-pulse' if alert.severity == 'critical' else 'text-yellow-400' if alert.severity == 'warning' else 'text-blue-400' }} text-base mt-0.5">
                         {% if alert.severity == 'critical' %}!!{% elif alert.severity == 'warning' %}!{% else %}i{% endif %}
@@ -2400,14 +2694,23 @@
                         {% if alert.guideline_reference %}
                         <div class="text-[11px] text-slate-500 mt-1">{{ alert.guideline_reference }}</div>
                         {% endif %}
+                        {% if alert.fields_to_capture %}
+                        <div class="mt-2 text-[11px] text-slate-400">Captura esperada: {{ alert.fields_to_capture|join(', ') }}</div>
+                        {% endif %}
+                        {% if alert.linked_encounter_keys %}
+                        <div class="mt-2 text-[11px] text-cyan-200">Encounter vinculado: {{ alert.linked_encounter_keys|join(', ') }}</div>
+                        {% endif %}
                     </div>
-                    <div class="text-right shrink-0">
+                    <div class="text-right shrink-0 space-y-2">
                         {% if alert.triggering_value %}
                         <div class="text-xs font-mono text-white">{{ alert.triggering_value }}</div>
                         {% endif %}
                         {% if alert.threshold %}
                         <div class="text-[11px] text-slate-500">Umbral: {{ alert.threshold }}</div>
                         {% endif %}
+                        <button type="button" class="pn-btn pn-btn-primary px-3 py-2 text-xs" onclick="handleCopilotAlert('{{ alert.alert_key }}')">
+                            {{ alert.primary_button_label or 'Completar dato faltante' }}
+                        </button>
                     </div>
                 </div>
                 {% endfor %}
@@ -3183,12 +3486,66 @@
                 <input type="hidden" id="visitTrackInput" name="management_track" value="{{ agenda_board.management_track }}">
                 <input type="hidden" id="agendaIdsInput" name="agenda_ids">
                 <input type="hidden" id="agendaSubmissionModeInput" name="agenda_submission_mode" value="full_track">
+                <input type="hidden" id="visitEncounterKeyInput" name="encounter_key" value="">
+                <input type="hidden" id="visitPlanKeyInput" name="plan_key" value="{{ master_followup_plan.plan_key or '' }}">
+                <input type="hidden" id="visitAlertKeysInput" name="alert_keys_resolved" value="[]">
 
                 <div id="visitSchemaSections" class="space-y-4"></div>
 
                 <div class="flex justify-end gap-3 mt-6">
                     <button type="button" onclick="closeVisitModal()" class="pn-btn pn-btn-secondary px-4 py-2">Cancelar</button>
                     <button id="visitSubmitButton" type="submit" class="pn-btn pn-btn-primary px-4 py-2">Guardar visita por etapa</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="miniCaptureModal" class="fixed inset-0 bg-black/80 hidden items-center justify-center z-50 backdrop-blur-sm">
+        <div class="pn-modal-shell pm-mini-modal-shell mx-4 p-6 max-h-[90vh] overflow-y-auto">
+            <div class="flex items-start justify-between gap-4">
+                <div>
+                    <div class="text-xs uppercase tracking-[0.18em] text-cyan-300">Completar dato faltante</div>
+                    <h2 id="miniCaptureTitle" class="mt-2 text-xl font-bold text-white">Resolver alerta clínica</h2>
+                    <p id="miniCaptureReason" class="mt-2 text-sm text-slate-300"></p>
+                </div>
+                <button type="button" onclick="closeMiniCaptureModal()" class="pn-btn pn-btn-secondary px-3 py-2 text-xs">Cerrar</button>
+            </div>
+
+            <div id="miniCaptureDecision" class="mt-4 rounded-xl border border-cyan-500/20 bg-cyan-950/10 px-4 py-3 text-sm text-cyan-100 hidden"></div>
+
+            <form id="miniCaptureForm" class="mt-5 space-y-4">
+                <input type="hidden" name="patient_id" value="{{ patient.identity.id }}">
+                <input type="hidden" id="miniCaptureStateInput" name="state" value="{{ latest_assessment.state if latest_assessment else patient.prior_history.current_state }}">
+                <input type="hidden" id="miniCaptureTrackInput" name="management_track" value="{{ agenda_board.management_track }}">
+                <input type="hidden" id="miniCaptureAgendaIdsInput" name="agenda_ids">
+                <input type="hidden" id="miniCaptureSubmissionModeInput" name="agenda_submission_mode" value="item_scoped">
+                <input type="hidden" id="miniCaptureEncounterKeyInput" name="encounter_key" value="">
+                <input type="hidden" id="miniCapturePlanKeyInput" name="plan_key" value="{{ master_followup_plan.plan_key or '' }}">
+                <input type="hidden" id="miniCaptureAlertKeysInput" name="alert_keys_resolved" value="[]">
+                <input type="hidden" id="miniCaptureVisitDateInput" name="visit_date" value="">
+
+                <div id="miniCaptureSchemaSections" class="pm-mini-capture-grid"></div>
+
+                <div id="miniCaptureDateWrap" class="hidden rounded-xl border border-slate-700 bg-slate-950/30 p-4">
+                    <label class="block text-xs font-medium text-slate-400 mb-2">Ajustar fecha de captura</label>
+                    <input id="miniCaptureVisitDateOverride" type="date" class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
+                </div>
+
+                <details class="rounded-xl border border-slate-700 bg-slate-950/30 p-4">
+                    <summary class="text-xs uppercase tracking-[0.18em] text-slate-400">Notas clínicas opcionales</summary>
+                    <div class="mt-3">
+                        <textarea id="miniCaptureNotesInput" name="clinician_notes" rows="3" class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2" placeholder="Anotar contexto adicional si aplica"></textarea>
+                    </div>
+                </details>
+
+                <div class="flex justify-between gap-3 mt-6">
+                    <button type="button" id="miniCaptureAdjustDateButton" onclick="toggleMiniCaptureDateOverride()" class="pn-btn pn-btn-secondary px-4 py-2 text-xs">
+                        Ajustar fecha
+                    </button>
+                    <div class="flex gap-3">
+                        <button type="button" onclick="closeMiniCaptureModal()" class="pn-btn pn-btn-secondary px-4 py-2">Cancelar</button>
+                        <button id="miniCaptureSubmitButton" type="submit" class="pn-btn pn-btn-primary px-4 py-2">Guardar dato faltante</button>
+                    </div>
                 </div>
             </form>
         </div>
@@ -3312,10 +3669,9 @@
     {% set copilot = profile_view.copilot|default({}) if profile_view else {} %}
     <script>
         const humanizeClinicalText = window.clinicalPresentation?.humanize || ((value) => value);
-        const focusTabs = Array.from(document.querySelectorAll('[data-focus-tab]'));
-        const focusPanels = Array.from(document.querySelectorAll('.pm-focus-panel'));
-
         function activateFocusPanel(panelId) {
+            const focusTabs = Array.from(document.querySelectorAll('[data-focus-tab]'));
+            const focusPanels = Array.from(document.querySelectorAll('.pm-focus-panel'));
             focusTabs.forEach((tab) => {
                 tab.classList.toggle('is-active', tab.dataset.focusTab === panelId);
             });
@@ -3324,13 +3680,18 @@
             });
         }
 
-        focusTabs.forEach((tab) => {
-            tab.addEventListener('click', () => activateFocusPanel(tab.dataset.focusTab));
-        });
-
-        if (focusTabs.length && focusPanels.length) {
-            activateFocusPanel(focusTabs[0].dataset.focusTab);
+        function initializeFocusTabs() {
+            const focusTabs = Array.from(document.querySelectorAll('[data-focus-tab]'));
+            const focusPanels = Array.from(document.querySelectorAll('.pm-focus-panel'));
+            focusTabs.forEach((tab) => {
+                tab.addEventListener('click', () => activateFocusPanel(tab.dataset.focusTab));
+            });
+            if (focusTabs.length && focusPanels.length) {
+                activateFocusPanel(focusTabs[0].dataset.focusTab);
+            }
         }
+
+        initializeFocusTabs();
 
         // ── Datos longitudinales reales ──────────────────────────────────────
         const psaObservability = {{ psa_observability|default({}, true)|tojson }};
@@ -3740,6 +4101,9 @@
         // ── Modal Logic ───────────────────────────────────────────────────────
         const defaultVisitSchema = {{ visit_schema|default({}, true)|tojson }};
         const defaultAgendaItemContext = {{ agenda_item_form_context|default({}, true)|tojson }};
+        let copilotAlerts = {{ (copilot.clinical_alerts or [])|tojson }};
+        let defaultPlanKey = {{ ((profile_view.master_followup_plan.plan_key if profile_view and profile_view.master_followup_plan is defined else ''))|tojson }};
+        let masterFollowupPlanPayload = {{ ((profile_view.master_followup_plan if profile_view and profile_view.master_followup_plan is defined else {}))|tojson }};
 
         function escapeHtml(value) {
             return String(value ?? '')
@@ -3791,6 +4155,7 @@
 
         function renderVisitField(field) {
             const required = field.required ? 'required' : '';
+            const defaultValue = field.default ?? '';
             const label = `
                 <label class="block text-xs font-medium text-slate-400 mb-1">
                     ${escapeHtml(field.label || '')}
@@ -3799,23 +4164,24 @@
             `;
             let control = '';
             if (field.field_type === 'select') {
-                const options = renderSelectOptions(field.options || [], field.default ?? '');
+                const options = renderSelectOptions(field.options || [], defaultValue);
                 control = `<select name="${escapeHtml(field.name)}" data-field-type="select" class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">${options}</select>`;
             } else if (field.field_type === 'textarea') {
-                control = `<textarea name="${escapeHtml(field.name)}" data-field-type="textarea" rows="3" class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2"></textarea>`;
+                control = `<textarea name="${escapeHtml(field.name)}" data-field-type="textarea" rows="3" class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">${escapeHtml(defaultValue)}</textarea>`;
             } else if (field.field_type === 'checkbox') {
                 control = `
                     <label class="flex items-center gap-2 text-sm text-slate-300">
-                        <input type="checkbox" name="${escapeHtml(field.name)}" data-field-type="checkbox" class="rounded bg-slate-700 border-slate-600">
+                        <input type="checkbox" name="${escapeHtml(field.name)}" data-field-type="checkbox" class="rounded bg-slate-700 border-slate-600" ${defaultValue ? 'checked' : ''}>
                         Sí
                     </label>
                 `;
             } else if (field.field_type === 'multi_select') {
+                const selectedValues = Array.isArray(defaultValue) ? defaultValue.map(String) : [];
                 control = `
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-2 rounded border border-slate-700 bg-slate-900/40 p-3">
                         ${(field.options || []).map((option) => `
                             <label class="flex items-center gap-2 text-sm text-slate-300">
-                                <input type="checkbox" name="${escapeHtml(field.name)}" value="${escapeHtml(option)}" data-field-type="multi_select" class="rounded bg-slate-700 border-slate-600">
+                                <input type="checkbox" name="${escapeHtml(field.name)}" value="${escapeHtml(option)}" data-field-type="multi_select" class="rounded bg-slate-700 border-slate-600" ${selectedValues.includes(String(option)) ? 'checked' : ''}>
                                 ${escapeHtml(option)}
                             </label>
                         `).join('')}
@@ -3824,7 +4190,8 @@
             } else {
                 const inputType = field.field_type === 'number' ? 'number' : field.field_type === 'date' ? 'date' : 'text';
                 const step = field.field_type === 'number' ? 'step="0.01"' : '';
-                control = `<input type="${inputType}" ${step} name="${escapeHtml(field.name)}" data-field-type="${escapeHtml(field.field_type || 'text')}" ${required} class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">`;
+                const value = defaultValue !== '' ? `value="${escapeHtml(defaultValue)}"` : '';
+                control = `<input type="${inputType}" ${step} name="${escapeHtml(field.name)}" data-field-type="${escapeHtml(field.field_type || 'text')}" ${required} ${value} class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">`;
             }
             const help = field.help_text ? `<div class="mt-1 text-[11px] text-slate-500">${escapeHtml(field.help_text)}</div>` : '';
             return `
@@ -3836,11 +4203,26 @@
             `;
         }
 
+        function buildSchemaSectionsMarkup(sections) {
+            return (sections || []).map((section, index) => `
+                <div class="pt-3 border-t border-slate-700 ${index === 0 ? 'first:border-t-0 first:pt-0' : ''}">
+                    <div class="mb-3">
+                        <div class="text-sm font-semibold text-white">${escapeHtml(section.title || '')}</div>
+                        ${section.subtitle ? `<div class="mt-1 text-xs text-slate-400">${escapeHtml(section.subtitle)}</div>` : ''}
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        ${(section.fields || []).map(renderVisitField).join('')}
+                    </div>
+                </div>
+            `).join('');
+        }
+
         function renderVisitSchema(schema, agendaContext = null) {
             const sectionsHost = document.getElementById('visitSchemaSections');
             const stateInput = document.getElementById('visitStateInput');
             const trackInput = document.getElementById('visitTrackInput');
             const submitModeInput = document.getElementById('agendaSubmissionModeInput');
+            const planKeyInput = document.getElementById('visitPlanKeyInput');
             const trackLabel = document.getElementById('visitModalTrackLabel');
             const contextBox = document.getElementById('visitModalContext');
             const contextTitle = document.getElementById('visitModalContextTitle');
@@ -3852,23 +4234,14 @@
             if (stateInput) stateInput.value = schema.state || '{{ latest_assessment.state if latest_assessment else patient.prior_history.current_state }}';
             if (trackInput) trackInput.value = schema.management_track || '{{ agenda_board.management_track }}';
             if (submitModeInput) submitModeInput.value = schema.submission_mode || 'full_track';
+            if (planKeyInput) planKeyInput.value = schema.plan_key || defaultPlanKey;
             if (trackLabel) {
                 trackLabel.textContent = schema.submission_mode === 'item_scoped'
                     ? 'Captura dirigida por item de agenda'
                     : '{{ agenda_board.management_track_label or clinical_compass.current_stage_label }}';
             }
 
-            const sections = (schema.sections || []).map((section, index) => `
-                <div class="pt-3 border-t border-slate-700 ${index === 0 ? 'first:border-t-0 first:pt-0' : ''}">
-                    <div class="mb-3">
-                        <div class="text-sm font-semibold text-white">${escapeHtml(section.title || '')}</div>
-                        ${section.subtitle ? `<div class="mt-1 text-xs text-slate-400">${escapeHtml(section.subtitle)}</div>` : ''}
-                    </div>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        ${(section.fields || []).map(renderVisitField).join('')}
-                    </div>
-                </div>
-            `).join('');
+            const sections = buildSchemaSectionsMarkup(schema.sections || []);
             sectionsHost.innerHTML = sections || '<div class="rounded-xl border border-slate-700 bg-slate-950/40 p-4 text-sm text-slate-300">No hay variables configuradas para esta captura.</div>';
 
             if (agendaContext && (agendaContext.mode === 'item_scoped' || agendaContext.mode === 'capture_block')) {
@@ -3905,6 +4278,93 @@
             }
         }
 
+        function renderMiniCaptureSchema(schema, alertPayload = null) {
+            const sectionsHost = document.getElementById('miniCaptureSchemaSections');
+            const title = document.getElementById('miniCaptureTitle');
+            const reason = document.getElementById('miniCaptureReason');
+            const decisionBox = document.getElementById('miniCaptureDecision');
+            const stateInput = document.getElementById('miniCaptureStateInput');
+            const trackInput = document.getElementById('miniCaptureTrackInput');
+            const submissionModeInput = document.getElementById('miniCaptureSubmissionModeInput');
+            const planKeyInput = document.getElementById('miniCapturePlanKeyInput');
+            const visitDateInput = document.getElementById('miniCaptureVisitDateInput');
+            const visitDateOverride = document.getElementById('miniCaptureVisitDateOverride');
+            const dateWrap = document.getElementById('miniCaptureDateWrap');
+            const adjustDateButton = document.getElementById('miniCaptureAdjustDateButton');
+            const submitButton = document.getElementById('miniCaptureSubmitButton');
+
+            if (stateInput) stateInput.value = schema.state || '{{ latest_assessment.state if latest_assessment else patient.prior_history.current_state }}';
+            if (trackInput) trackInput.value = schema.management_track || '{{ agenda_board.management_track }}';
+            if (submissionModeInput) submissionModeInput.value = schema.submission_mode || 'item_scoped';
+            if (planKeyInput) planKeyInput.value = schema.plan_key || defaultPlanKey;
+            if (visitDateInput) visitDateInput.value = schema.auto_visit_date || new Date().toISOString().slice(0, 10);
+            if (visitDateOverride) visitDateOverride.value = visitDateInput?.value || '';
+
+            sectionsHost.innerHTML = buildSchemaSectionsMarkup(schema.sections || [])
+                || '<div class="rounded-xl border border-slate-700 bg-slate-950/40 p-4 text-sm text-slate-300">No hay variables configuradas para esta alerta.</div>';
+
+            const fixedContext = schema.fixed_context || {};
+            if (title) title.textContent = fixedContext.title || alertPayload?.title || 'Resolver alerta clínica';
+            if (reason) reason.textContent = fixedContext.summary || alertPayload?.message || 'Completa el dato faltante para recalcular el flujo clínico.';
+
+            const decisionTargets = fixedContext.decision_targets || [];
+            const recommendedAction = fixedContext.recommended_action || alertPayload?.recommended_action || '';
+            if (decisionBox) {
+                const parts = [];
+                if (decisionTargets.length) parts.push(`Decisión afectada: ${decisionTargets.join(', ')}`);
+                if (recommendedAction) parts.push(recommendedAction);
+                if (parts.length) {
+                    decisionBox.classList.remove('hidden');
+                    decisionBox.textContent = parts.join(' · ');
+                } else {
+                    decisionBox.classList.add('hidden');
+                    decisionBox.textContent = '';
+                }
+            }
+
+            const allowVisitDateOverride = Boolean(schema.allow_visit_date_override);
+            if (dateWrap) {
+                dateWrap.classList.add('hidden');
+            }
+            if (adjustDateButton) {
+                adjustDateButton.classList.toggle('hidden', !allowVisitDateOverride);
+                adjustDateButton.textContent = 'Ajustar fecha';
+            }
+            if (submitButton) {
+                submitButton.textContent = alertPayload?.primary_button_label || 'Guardar dato faltante';
+            }
+        }
+
+        function setVisitHiddenContext({ agendaIds = [], encounterKey = '', planKey = '', alertKeys = [] } = {}) {
+            const agendaInput = document.getElementById('agendaIdsInput');
+            if (agendaInput) agendaInput.value = JSON.stringify(agendaIds || []);
+            const encounterInput = document.getElementById('visitEncounterKeyInput');
+            if (encounterInput) encounterInput.value = encounterKey || '';
+            const planKeyInput = document.getElementById('visitPlanKeyInput');
+            if (planKeyInput) planKeyInput.value = planKey || defaultPlanKey;
+            const alertInput = document.getElementById('visitAlertKeysInput');
+            if (alertInput) alertInput.value = JSON.stringify(alertKeys || []);
+            const submissionModeInput = document.getElementById('agendaSubmissionModeInput');
+            if (submissionModeInput) {
+                submissionModeInput.value = (agendaIds || []).length ? 'item_scoped' : 'full_track';
+            }
+        }
+
+        function setMiniCaptureHiddenContext({ agendaIds = [], encounterKey = '', planKey = '', alertKeys = [] } = {}) {
+            const agendaInput = document.getElementById('miniCaptureAgendaIdsInput');
+            if (agendaInput) agendaInput.value = JSON.stringify(agendaIds || []);
+            const encounterInput = document.getElementById('miniCaptureEncounterKeyInput');
+            if (encounterInput) encounterInput.value = encounterKey || '';
+            const planKeyInput = document.getElementById('miniCapturePlanKeyInput');
+            if (planKeyInput) planKeyInput.value = planKey || defaultPlanKey;
+            const alertInput = document.getElementById('miniCaptureAlertKeysInput');
+            if (alertInput) alertInput.value = JSON.stringify(alertKeys || []);
+            const submissionModeInput = document.getElementById('miniCaptureSubmissionModeInput');
+            if (submissionModeInput) {
+                submissionModeInput.value = (agendaIds || []).length ? 'item_scoped' : 'mini_capture';
+            }
+        }
+
         function buildCaptureQuery(captureContext = null) {
             if (!captureContext || !(captureContext.raw_fields || []).length) {
                 return '';
@@ -3919,33 +4379,61 @@
             return `?${params.toString()}`;
         }
 
-        async function loadVisitSchema(agendaId = null, captureContext = null) {
-            if (!agendaId && !captureContext) {
+        async function loadVisitSchema({ agendaId = null, captureContext = null, alertKey = '', renderMode = 'full', alertPayload = null, presentation = 'standard' } = {}) {
+            if (!agendaId && !captureContext && !alertKey) {
+                if (renderMode === 'mini') {
+                    renderMiniCaptureSchema(defaultVisitSchema, alertPayload);
+                    return { success: true, visit_schema: defaultVisitSchema, agenda_item_context: defaultAgendaItemContext };
+                }
+                if (renderMode === 'none') {
+                    return { success: true, visit_schema: defaultVisitSchema, agenda_item_context: defaultAgendaItemContext };
+                }
                 renderVisitSchema(defaultVisitSchema, defaultAgendaItemContext);
-                return;
+                return { success: true, visit_schema: defaultVisitSchema, agenda_item_context: defaultAgendaItemContext };
             }
-            const url = agendaId
-                ? `/api/patients/{{ patient.identity.id }}/visit-schema?agenda_id=${agendaId}`
-                : `/api/patients/{{ patient.identity.id }}/visit-schema${buildCaptureQuery(captureContext)}`;
+            let url = `/api/patients/{{ patient.identity.id }}/visit-schema`;
+            if (agendaId) {
+                const params = new URLSearchParams();
+                params.set('agenda_id', agendaId);
+                if (presentation && presentation !== 'standard') {
+                    params.set('presentation', presentation);
+                }
+                url += `?${params.toString()}`;
+            } else if (alertKey) {
+                const params = new URLSearchParams();
+                params.set('alert_key', alertKey);
+                if (captureContext?.capture_block) {
+                    params.set('capture_block', captureContext.capture_block);
+                }
+                if (presentation && presentation !== 'standard') {
+                    params.set('presentation', presentation);
+                }
+                url += `?${params.toString()}`;
+            } else {
+                url += buildCaptureQuery(captureContext);
+            }
             const resp = await fetch(url);
             const result = await resp.json();
             if (!result.success) {
                 throw new Error(result.error || 'No fue posible cargar el schema del item.');
             }
-            renderVisitSchema(result.visit_schema || {}, result.agenda_item_context || null);
+            if (renderMode === 'mini') {
+                renderMiniCaptureSchema(result.visit_schema || {}, alertPayload);
+            } else if (renderMode !== 'none') {
+                renderVisitSchema(result.visit_schema || {}, result.agenda_item_context || null);
+            }
+            return result;
         }
 
         async function openVisitModal(agendaId = null, captureContext = null) {
-            const agendaInput = document.getElementById('agendaIdsInput');
-            if (agendaInput) {
-                agendaInput.value = agendaId ? JSON.stringify([agendaId]) : '[]';
-            }
-            const submissionModeInput = document.getElementById('agendaSubmissionModeInput');
-            if (submissionModeInput) {
-                submissionModeInput.value = agendaId ? 'item_scoped' : 'full_track';
-            }
+            setVisitHiddenContext({
+                agendaIds: agendaId ? [agendaId] : [],
+                encounterKey: '',
+                planKey: defaultPlanKey,
+                alertKeys: [],
+            });
             try {
-                await loadVisitSchema(agendaId, captureContext);
+                await loadVisitSchema({ agendaId, captureContext, renderMode: 'full' });
             } catch (err) {
                 alert('Error: ' + err.message);
                 return;
@@ -3953,9 +4441,442 @@
             document.getElementById('addVisitModal').classList.remove('hidden');
             document.getElementById('addVisitModal').classList.add('flex');
         }
+
         function closeVisitModal() {
             document.getElementById('addVisitModal').classList.add('hidden');
             document.getElementById('addVisitModal').classList.remove('flex');
+            setVisitHiddenContext({ agendaIds: [], encounterKey: '', planKey: defaultPlanKey, alertKeys: [] });
+        }
+
+        function openMiniCaptureModal() {
+            document.getElementById('miniCaptureModal').classList.remove('hidden');
+            document.getElementById('miniCaptureModal').classList.add('flex');
+        }
+
+        function closeMiniCaptureModal() {
+            document.getElementById('miniCaptureModal').classList.add('hidden');
+            document.getElementById('miniCaptureModal').classList.remove('flex');
+            setMiniCaptureHiddenContext({ agendaIds: [], encounterKey: '', planKey: defaultPlanKey, alertKeys: [] });
+            const notes = document.getElementById('miniCaptureNotesInput');
+            if (notes) notes.value = '';
+            const dateWrap = document.getElementById('miniCaptureDateWrap');
+            if (dateWrap) dateWrap.classList.add('hidden');
+            const adjustDateButton = document.getElementById('miniCaptureAdjustDateButton');
+            if (adjustDateButton) adjustDateButton.textContent = 'Ajustar fecha';
+        }
+
+        function toggleMiniCaptureDateOverride() {
+            const wrap = document.getElementById('miniCaptureDateWrap');
+            const button = document.getElementById('miniCaptureAdjustDateButton');
+            if (!wrap || !button) return;
+            const isHidden = wrap.classList.contains('hidden');
+            wrap.classList.toggle('hidden', !isHidden);
+            button.textContent = isHidden ? 'Ocultar ajuste de fecha' : 'Ajustar fecha';
+        }
+
+        function scrollToAgendaPlan() {
+            const section = document.getElementById('profile-agenda');
+            if (!section) return;
+            section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            section.classList.add('ring-2', 'ring-cyan-500/40');
+            window.setTimeout(() => section.classList.remove('ring-2', 'ring-cyan-500/40'), 1800);
+        }
+
+        function safeDomToken(value) {
+            return String(value ?? '').replace(/[^a-zA-Z0-9_-]/g, '-');
+        }
+
+        function syncSectionFromDocument(doc, sectionId) {
+            const current = document.getElementById(sectionId);
+            const next = doc.getElementById(sectionId);
+            if (current && next) {
+                current.replaceWith(next);
+                return;
+            }
+            if (current && !next) {
+                current.remove();
+            }
+        }
+
+        async function refreshProfileSurfaces({ scrollAgenda = false } = {}) {
+            const response = await fetch(window.location.pathname, {
+                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            });
+            if (!response.ok) {
+                throw new Error('No fue posible refrescar el perfil.');
+            }
+            const html = await response.text();
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            [
+                'profile-executive-summary',
+                'profile-next-best-action',
+                'profile-agenda',
+                'copilot-alerts-panel',
+                'profile-documents',
+            ].forEach((sectionId) => syncSectionFromDocument(doc, sectionId));
+            initializeFocusTabs();
+            initializeDocumentUploadForm();
+
+            try {
+                const signalsResp = await fetch(`/api/patients/{{ patient.identity.id }}/signals`);
+                const signalsPayload = await signalsResp.json();
+                if (signalsPayload?.success) {
+                    copilotAlerts = signalsPayload.copilot_alerts || [];
+                    masterFollowupPlanPayload = signalsPayload.master_followup_plan || {};
+                    defaultPlanKey = masterFollowupPlanPayload.plan_key || defaultPlanKey;
+                }
+            } catch (error) {
+                console.warn('No fue posible refrescar el estado del copiloto.', error);
+            }
+
+            const visitPlanInput = document.getElementById('visitPlanKeyInput');
+            if (visitPlanInput && !visitPlanInput.value) {
+                visitPlanInput.value = defaultPlanKey || '';
+            }
+            const miniPlanInput = document.getElementById('miniCapturePlanKeyInput');
+            if (miniPlanInput && !miniPlanInput.value) {
+                miniPlanInput.value = defaultPlanKey || '';
+            }
+
+            if (scrollAgenda) {
+                scrollToAgendaPlan();
+            }
+        }
+
+        function currentFollowupTimeline() {
+            return masterFollowupPlanPayload.timeline || masterFollowupPlanPayload.encounter_timeline || [];
+        }
+
+        function findEncounterByKey(encounterKey) {
+            return currentFollowupTimeline().find((encounter) => String(encounter.encounter_key || '') === String(encounterKey || '')) || null;
+        }
+
+        function findEncounterTask(encounterKey, agendaKey) {
+            const encounter = findEncounterByKey(encounterKey);
+            if (!encounter) return null;
+            return (encounter.tasks || []).find((task) => String(task.agenda_key || '') === String(agendaKey || '')) || null;
+        }
+
+        function findInlineTaskContainer(encounterKey, agendaKey) {
+            return Array.from(document.querySelectorAll('[data-inline-task-container]')).find((node) => {
+                return node.dataset.encounterKey === String(encounterKey || '') && node.dataset.agendaKey === String(agendaKey || '');
+            }) || null;
+        }
+
+        function findInlineTaskToggle(encounterKey, agendaKey) {
+            return Array.from(document.querySelectorAll('[data-inline-task-toggle]')).find((node) => {
+                return node.dataset.encounterKey === String(encounterKey || '') && node.dataset.agendaKey === String(agendaKey || '');
+            }) || null;
+        }
+
+        function closeEncounterInlineTask(encounterKey) {
+            Array.from(document.querySelectorAll('[data-inline-task-container]')).forEach((node) => {
+                if (node.dataset.encounterKey !== String(encounterKey || '')) return;
+                node.classList.add('hidden');
+                node.innerHTML = '';
+            });
+            Array.from(document.querySelectorAll('[data-inline-task-toggle]')).forEach((button) => {
+                if (button.dataset.encounterKey !== String(encounterKey || '')) return;
+                button.dataset.expanded = 'false';
+                button.textContent = button.dataset.defaultLabel || button.textContent;
+            });
+        }
+
+        function findRelevantAlertKeysForTask(encounterKey, task, focusFields = []) {
+            return (copilotAlerts || []).filter((alert) => {
+                if (!alert?.alert_key) return false;
+                const linkedAgenda = Array.isArray(alert.linked_agenda_ids) && task?.agenda_id != null
+                    ? alert.linked_agenda_ids.includes(task.agenda_id)
+                    : false;
+                const sameEncounter = String(alert.encounter_key || '') === String(encounterKey || '');
+                const overlap = !(focusFields || []).length
+                    || (alert.fields_to_capture || []).some((field) => (focusFields || []).includes(field));
+                return overlap && (linkedAgenda || sameEncounter);
+            }).map((alert) => alert.alert_key);
+        }
+
+        function buildInlineTaskFormMarkup(schema, task, encounterKey) {
+            const focusFields = schema.focus_fields || [];
+            const resolvedAlertKeys = findRelevantAlertKeysForTask(encounterKey, task, focusFields);
+            const agendaIds = task?.agenda_id != null ? [task.agenda_id] : [];
+            const fixedContext = schema.fixed_context || {};
+            const visitDate = schema.auto_visit_date || new Date().toISOString().slice(0, 10);
+            return `
+                <div class="rounded-xl border border-cyan-500/20 bg-cyan-950/10 p-4">
+                    <div class="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                            <div class="text-xs uppercase tracking-[0.18em] text-cyan-300">Subtarea clínica</div>
+                            <div class="mt-1 text-sm font-semibold text-white">${escapeHtml(task?.title || fixedContext.title || 'Captura dirigida')}</div>
+                            <p class="mt-2 text-xs text-slate-300">${escapeHtml(fixedContext.why_now || fixedContext.summary || 'Complete solo los datos faltantes de esta subtarea.')}</p>
+                        </div>
+                        <button type="button" class="pn-btn pn-btn-secondary px-3 py-2 text-xs" onclick='closeEncounterInlineTask(${JSON.stringify(encounterKey)})'>Cerrar</button>
+                    </div>
+                    <form class="mt-4 space-y-4" data-inline-task-form onsubmit="submitInlineTaskForm(event, this)">
+                        <input type="hidden" name="patient_id" value="{{ patient.identity.id }}">
+                        <input type="hidden" name="state" value="${escapeHtml(schema.state || '{{ latest_assessment.state if latest_assessment else patient.prior_history.current_state }}')}">
+                        <input type="hidden" name="management_track" value="${escapeHtml(schema.management_track || '{{ agenda_board.management_track }}')}">
+                        <input type="hidden" name="agenda_ids" value='${escapeHtml(JSON.stringify(agendaIds))}'>
+                        <input type="hidden" name="agenda_submission_mode" value="${escapeHtml(schema.submission_mode || 'item_scoped')}">
+                        <input type="hidden" name="encounter_key" value="${escapeHtml(encounterKey || '')}">
+                        <input type="hidden" name="plan_key" value="${escapeHtml(schema.plan_key || defaultPlanKey || '')}">
+                        <input type="hidden" name="alert_keys_resolved" value='${escapeHtml(JSON.stringify(resolvedAlertKeys))}'>
+                        <input type="hidden" name="visit_date" value="${escapeHtml(visitDate)}">
+                        <div class="space-y-4">${buildSchemaSectionsMarkup(schema.sections || [])}</div>
+                        <div class="hidden rounded-xl border border-slate-700 bg-slate-950/30 p-4" data-inline-date-wrap>
+                            <label class="block text-xs font-medium text-slate-400 mb-2">Ajustar fecha de captura</label>
+                            <input name="visit_date_override" type="date" value="${escapeHtml(visitDate)}" class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2">
+                        </div>
+                        <details class="rounded-xl border border-slate-700 bg-slate-950/30 p-4">
+                            <summary class="text-xs uppercase tracking-[0.18em] text-slate-400">Notas clínicas opcionales</summary>
+                            <div class="mt-3">
+                                <textarea name="clinician_notes" rows="3" class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2" placeholder="Anotar contexto adicional si aplica"></textarea>
+                            </div>
+                        </details>
+                        <div class="flex flex-wrap items-center justify-between gap-3">
+                            <button type="button" class="pn-btn pn-btn-secondary px-4 py-2 text-xs" onclick="toggleInlineTaskDateOverride(this)">Ajustar fecha</button>
+                            <button type="submit" data-inline-submit class="pn-btn pn-btn-primary px-4 py-2 text-xs">Guardar subtarea</button>
+                        </div>
+                    </form>
+                </div>
+            `;
+        }
+
+        function buildInlineDocumentTaskMarkup(task, encounterKey, expectedDocumentType = '') {
+            const documentType = expectedDocumentType || task?.expected_document_type || 'auto';
+            const sourceDate = task?.scheduled_due_at || task?.ideal_due_at || new Date().toISOString().slice(0, 10);
+            return `
+                <div class="rounded-xl border border-cyan-500/20 bg-cyan-950/10 p-4">
+                    <div class="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                            <div class="text-xs uppercase tracking-[0.18em] text-cyan-300">Subtarea documental</div>
+                            <div class="mt-1 text-sm font-semibold text-white">${escapeHtml(task?.title || 'Documento clínico')}</div>
+                            <p class="mt-2 text-xs text-slate-300">Suba el documento exacto esperado para completar esta subtarea sin salir del plan maestro.</p>
+                        </div>
+                        <button type="button" class="pn-btn pn-btn-secondary px-3 py-2 text-xs" onclick='closeEncounterInlineTask(${JSON.stringify(encounterKey)})'>Cerrar</button>
+                    </div>
+                    <form class="mt-4 space-y-3" data-inline-document-form onsubmit="submitInlineDocumentTask(event, this)">
+                        <input type="hidden" name="agenda_id" value="${escapeHtml(String(task?.agenda_id ?? ''))}">
+                        <input type="hidden" name="agenda_key" value="${escapeHtml(task?.agenda_key || '')}">
+                        <input type="hidden" name="encounter_key" value="${escapeHtml(encounterKey || '')}">
+                        <input type="hidden" name="plan_key" value="${escapeHtml(defaultPlanKey || '')}">
+                        <div>
+                            <label class="text-xs text-slate-400">Título clínico</label>
+                            <input type="text" name="title" value="${escapeHtml(task?.title || 'Documento clínico')}" class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm text-white">
+                        </div>
+                        <div>
+                            <label class="text-xs text-slate-400">Tipo documental esperado</label>
+                            <select name="document_type" class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm text-white">
+                                <option value="auto" ${documentType === 'auto' ? 'selected' : ''}>Detectar automáticamente</option>
+                                <option value="pathology_report" ${documentType === 'pathology_report' ? 'selected' : ''}>Reporte histopatológico / biopsia</option>
+                                <option value="laboratory_bundle" ${documentType === 'laboratory_bundle' ? 'selected' : ''}>Paquete de laboratorios</option>
+                                <option value="imaging_report" ${documentType === 'imaging_report' ? 'selected' : ''}>Reporte de imagen</option>
+                                <option value="genomic_report" ${documentType === 'genomic_report' ? 'selected' : ''}>Reporte molecular / genómico</option>
+                                <option value="surgery_summary" ${documentType === 'surgery_summary' ? 'selected' : ''}>Resumen quirúrgico</option>
+                                <option value="radiotherapy_summary" ${documentType === 'radiotherapy_summary' ? 'selected' : ''}>Resumen de radioterapia</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="text-xs text-slate-400">Fecha fuente</label>
+                            <input type="date" name="source_date" value="${escapeHtml(sourceDate)}" class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm text-white">
+                        </div>
+                        <div>
+                            <label class="text-xs text-slate-400">Archivo</label>
+                            <input type="file" name="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.txt" class="mt-1 block w-full text-sm text-slate-300" required>
+                        </div>
+                        <div class="flex justify-end gap-3">
+                            <button type="submit" data-inline-submit class="pn-btn pn-btn-primary px-4 py-2 text-xs">Subir documento</button>
+                        </div>
+                    </form>
+                </div>
+            `;
+        }
+
+        function renderInlineTaskSchema(encounterKey, task, schema) {
+            const container = findInlineTaskContainer(encounterKey, task?.agenda_key || '');
+            if (!container) return;
+            container.innerHTML = buildInlineTaskFormMarkup(schema, task, encounterKey);
+            container.classList.remove('hidden');
+            const details = container.closest('details');
+            if (details) {
+                details.open = true;
+            }
+        }
+
+        function renderInlineDocumentTask(encounterKey, task, expectedDocumentType = '') {
+            const container = findInlineTaskContainer(encounterKey, task?.agenda_key || '');
+            if (!container) return;
+            container.innerHTML = buildInlineDocumentTaskMarkup(task, encounterKey, expectedDocumentType);
+            container.classList.remove('hidden');
+            const details = container.closest('details');
+            if (details) {
+                details.open = true;
+            }
+        }
+
+        function toggleInlineTaskDateOverride(button) {
+            const form = button.closest('form');
+            const wrap = form?.querySelector('[data-inline-date-wrap]');
+            if (!wrap) return;
+            const isHidden = wrap.classList.contains('hidden');
+            wrap.classList.toggle('hidden', !isHidden);
+            button.textContent = isHidden ? 'Ocultar fecha' : 'Ajustar fecha';
+        }
+
+        function collectInlineTaskFormData(form) {
+            const data = {};
+            const elements = [...form.querySelectorAll('[name]')];
+            const multiNames = [...new Set(elements.filter((el) => el.dataset.fieldType === 'multi_select').map((el) => el.name))];
+
+            for (const name of multiNames) {
+                data[name] = elements.filter((el) => el.name === name && el.checked).map((el) => el.value);
+            }
+
+            for (const element of elements) {
+                if (!element.name || element.dataset.fieldType === 'multi_select' || element.name === 'visit_date_override') continue;
+                const fieldType = element.dataset.fieldType || element.type;
+                if (fieldType === 'checkbox') {
+                    data[element.name] = element.checked ? 1 : 0;
+                    continue;
+                }
+                if (fieldType === 'number') {
+                    data[element.name] = element.value === '' ? '' : Number(element.value);
+                    continue;
+                }
+                data[element.name] = element.value;
+            }
+
+            const overrideWrap = form.querySelector('[data-inline-date-wrap]');
+            const overrideInput = form.querySelector('input[name="visit_date_override"]');
+            if (overrideWrap && !overrideWrap.classList.contains('hidden') && overrideInput?.value) {
+                data.visit_date = overrideInput.value;
+            }
+
+            try {
+                data.agenda_ids = JSON.parse(form.querySelector('input[name="agenda_ids"]')?.value || '[]');
+            } catch (error) {
+                data.agenda_ids = [];
+            }
+            try {
+                data.alert_keys_resolved = JSON.parse(form.querySelector('input[name="alert_keys_resolved"]')?.value || '[]');
+            } catch (error) {
+                data.alert_keys_resolved = [];
+            }
+            return data;
+        }
+
+        async function openInlineEncounterTask(encounterKey, agendaKey, agendaId, actionMode = 'capture', expectedDocumentType = '') {
+            const button = findInlineTaskToggle(encounterKey, agendaKey);
+            const container = findInlineTaskContainer(encounterKey, agendaKey);
+            const task = findEncounterTask(encounterKey, agendaKey) || {
+                agenda_id: agendaId,
+                agenda_key: agendaKey,
+                title: 'Subtarea clínica',
+                action_mode: actionMode,
+                expected_document_type: expectedDocumentType,
+            };
+            if (!container || !button) return;
+            if (!container.classList.contains('hidden')) {
+                closeEncounterInlineTask(encounterKey);
+                return;
+            }
+            closeEncounterInlineTask(encounterKey);
+            button.dataset.expanded = 'true';
+            button.textContent = 'Ocultar editor';
+
+            if (actionMode === 'document') {
+                renderInlineDocumentTask(encounterKey, task, expectedDocumentType);
+                return;
+            }
+            if (actionMode === 'manual') {
+                await completeAgendaItem(agendaId);
+                return;
+            }
+
+            try {
+                const result = await loadVisitSchema({
+                    agendaId,
+                    renderMode: 'none',
+                    presentation: 'inline_task',
+                });
+                renderInlineTaskSchema(encounterKey, task, result.visit_schema || {});
+            } catch (error) {
+                button.textContent = button.dataset.defaultLabel || 'Completar ahora';
+                button.dataset.expanded = 'false';
+                window.alert('Error: ' + error.message);
+            }
+        }
+
+        function primeDocumentFlow(alert) {
+            const section = document.getElementById('profile-documents');
+            if (section) {
+                section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                section.classList.add('ring-2', 'ring-cyan-500/40');
+                window.setTimeout(() => section.classList.remove('ring-2', 'ring-cyan-500/40'), 1800);
+            }
+            const documentTypeInput = document.querySelector('#documentUploadForm select[name="document_type"]');
+            if (documentTypeInput && alert?.expected_document_type) {
+                documentTypeInput.value = alert.expected_document_type;
+            }
+        }
+
+        async function handleCopilotAlert(alertKey) {
+            const alertPayload = copilotAlerts.find((item) => item.alert_key === alertKey);
+            if (!alertPayload) {
+                window.alert('No fue posible localizar la alerta clínica.');
+                return;
+            }
+            if ((alertPayload.action_type || 'capture') === 'document') {
+                primeDocumentFlow(alertPayload);
+                return;
+            }
+            if ((alertPayload.resolution_mode || '') === 'review') {
+                scrollToAgendaPlan();
+                return;
+            }
+            if ((alertPayload.resolution_mode || '') === 'mini_capture') {
+                setMiniCaptureHiddenContext({
+                    agendaIds: alertPayload.linked_agenda_ids || [],
+                    encounterKey: alertPayload.encounter_key || '',
+                    planKey: defaultPlanKey,
+                    alertKeys: [alertPayload.alert_key],
+                });
+                try {
+                    await loadVisitSchema({
+                        alertKey,
+                        captureContext: {
+                            capture_block: alertPayload.capture_block || 'clinical_completion',
+                        },
+                        renderMode: 'mini',
+                        alertPayload,
+                    });
+                } catch (err) {
+                    window.alert('Error: ' + err.message);
+                    return;
+                }
+                openMiniCaptureModal();
+                return;
+            }
+            setVisitHiddenContext({
+                agendaIds: alertPayload.linked_agenda_ids || [],
+                encounterKey: alertPayload.encounter_key || '',
+                planKey: defaultPlanKey,
+                alertKeys: [alertPayload.alert_key],
+            });
+            try {
+                await loadVisitSchema({
+                    alertKey,
+                    captureContext: {
+                        capture_block: alertPayload.capture_block || 'clinical_completion',
+                    },
+                    renderMode: 'full',
+                });
+            } catch (err) {
+                window.alert('Error: ' + err.message);
+                return;
+            }
+            document.getElementById('addVisitModal').classList.remove('hidden');
+            document.getElementById('addVisitModal').classList.add('flex');
         }
 
         function collectVisitFormData(form) {
@@ -3986,7 +4907,114 @@
             } catch (e) {
                 data.agenda_ids = [];
             }
+            try {
+                data.alert_keys_resolved = JSON.parse(document.getElementById('visitAlertKeysInput')?.value || '[]');
+            } catch (e) {
+                data.alert_keys_resolved = [];
+            }
             return data;
+        }
+
+        function collectMiniCaptureFormData(form) {
+            const data = {};
+            const elements = [...form.querySelectorAll('[name]')];
+            const multiNames = [...new Set(elements.filter(el => el.dataset.fieldType === 'multi_select').map(el => el.name))];
+
+            for (const name of multiNames) {
+                data[name] = elements.filter(el => el.name === name && el.checked).map(el => el.value);
+            }
+
+            for (const element of elements) {
+                if (!element.name || element.dataset.fieldType === 'multi_select') continue;
+                const fieldType = element.dataset.fieldType || element.type;
+                if (fieldType === 'checkbox') {
+                    data[element.name] = element.checked ? 1 : 0;
+                    continue;
+                }
+                if (fieldType === 'number') {
+                    data[element.name] = element.value === '' ? '' : Number(element.value);
+                    continue;
+                }
+                data[element.name] = element.value;
+            }
+
+            const overrideInput = document.getElementById('miniCaptureVisitDateOverride');
+            const hiddenVisitDate = document.getElementById('miniCaptureVisitDateInput');
+            const overrideWrap = document.getElementById('miniCaptureDateWrap');
+            if (overrideWrap && !overrideWrap.classList.contains('hidden') && overrideInput?.value) {
+                data.visit_date = overrideInput.value;
+            } else if (hiddenVisitDate?.value) {
+                data.visit_date = hiddenVisitDate.value;
+            }
+
+            try {
+                data.agenda_ids = JSON.parse(document.getElementById('miniCaptureAgendaIdsInput')?.value || '[]');
+            } catch (e) {
+                data.agenda_ids = [];
+            }
+            try {
+                data.alert_keys_resolved = JSON.parse(document.getElementById('miniCaptureAlertKeysInput')?.value || '[]');
+            } catch (e) {
+                data.alert_keys_resolved = [];
+            }
+            return data;
+        }
+
+        async function submitVisitPayload(data) {
+            const resp = await fetch(`/api/patients/{{ patient.identity.id }}/visits`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            return resp.json();
+        }
+
+        async function submitInlineTaskForm(event, form) {
+            event.preventDefault();
+            const submitButton = form.querySelector('[data-inline-submit]');
+            if (submitButton) submitButton.disabled = true;
+            const data = collectInlineTaskFormData(form);
+            try {
+                const result = await submitVisitPayload(data);
+                if (!result.success) {
+                    throw new Error(result.error || 'No fue posible guardar la subtarea.');
+                }
+                await refreshProfileSurfaces({ scrollAgenda: true });
+            } catch (error) {
+                window.alert('Error: ' + error.message);
+            } finally {
+                if (submitButton) submitButton.disabled = false;
+            }
+        }
+
+        async function submitInlineDocumentTask(event, form) {
+            event.preventDefault();
+            const submitButton = form.querySelector('[data-inline-submit]');
+            if (submitButton) submitButton.disabled = true;
+            const formData = new FormData(form);
+            const agendaId = Number(formData.get('agenda_id') || 0);
+            try {
+                const resp = await fetch(`/api/patients/{{ patient.identity.id }}/documents`, {
+                    method: 'POST',
+                    body: formData,
+                });
+                const result = await resp.json();
+                if (!result.success) {
+                    throw new Error(result.error || 'No fue posible subir el documento requerido.');
+                }
+                if (agendaId) {
+                    await fetch(`/api/patients/{{ patient.identity.id }}/agenda/${agendaId}/complete`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({}),
+                    });
+                }
+                await refreshProfileSurfaces({ scrollAgenda: true });
+            } catch (error) {
+                window.alert('Error: ' + error.message);
+            } finally {
+                if (submitButton) submitButton.disabled = false;
+            }
         }
 
         async function completeAgendaItem(agendaId) {
@@ -3998,7 +5026,7 @@
                 });
                 const result = await resp.json();
                 if (result.success) {
-                    location.reload();
+                    await refreshProfileSurfaces({ scrollAgenda: true });
                     return;
                 }
                 alert('Error: ' + (result.error || 'No fue posible completar el item.'));
@@ -4016,7 +5044,7 @@
                 });
                 const result = await resp.json();
                 if (result.success) {
-                    location.reload();
+                    await refreshProfileSurfaces({ scrollAgenda: true });
                     return;
                 }
                 alert('Error: ' + (result.error || 'No fue posible confirmar la transición.'));
@@ -4032,13 +5060,27 @@
                 e.preventDefault();
                 const data = collectVisitFormData(e.target);
                 try {
-                    const resp = await fetch(`/api/patients/{{ patient.identity.id }}/visits`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(data)
-                    });
-                    const result = await resp.json();
-                    if (result.success) { location.reload(); }
+                    const result = await submitVisitPayload(data);
+                    if (result.success) {
+                        closeVisitModal();
+                        await refreshProfileSurfaces({ scrollAgenda: true });
+                    }
+                    else { alert('Error: ' + result.error); }
+                } catch (err) { alert('Error de conexión'); }
+            });
+        }
+
+        const miniCaptureForm = document.getElementById('miniCaptureForm');
+        if (miniCaptureForm) {
+            miniCaptureForm.addEventListener('submit', async function(e) {
+                e.preventDefault();
+                const data = collectMiniCaptureFormData(e.target);
+                try {
+                    const result = await submitVisitPayload(data);
+                    if (result.success) {
+                        closeMiniCaptureModal();
+                        await refreshProfileSurfaces({ scrollAgenda: true });
+                    }
                     else { alert('Error: ' + result.error); }
                 } catch (err) { alert('Error de conexión'); }
             });
@@ -4124,8 +5166,12 @@
             } catch (err) { alert('Error de conexión'); }
         });
 
-        const documentUploadForm = document.getElementById('documentUploadForm');
-        if (documentUploadForm) {
+        function initializeDocumentUploadForm() {
+            const documentUploadForm = document.getElementById('documentUploadForm');
+            if (!documentUploadForm || documentUploadForm.dataset.bound === 'true') {
+                return;
+            }
+            documentUploadForm.dataset.bound = 'true';
             documentUploadForm.addEventListener('submit', async function(e) {
                 e.preventDefault();
                 const formData = new FormData(e.target);
@@ -4136,7 +5182,7 @@
                     });
                     const result = await resp.json();
                     if (result.success) {
-                        location.reload();
+                        await refreshProfileSurfaces({ scrollAgenda: true });
                         return;
                     }
                     alert('Error: ' + (result.error || 'No fue posible subir el documento.'));
@@ -4145,6 +5191,8 @@
                 }
             });
         }
+
+        initializeDocumentUploadForm();
 
         async function extractDocument(documentId) {
             try {
@@ -4155,7 +5203,7 @@
                 });
                 const result = await resp.json();
                 if (result.success) {
-                    location.reload();
+                    await refreshProfileSurfaces({ scrollAgenda: true });
                     return;
                 }
                 alert('Error: ' + (result.error || 'No fue posible extraer candidatos.'));

@@ -20,6 +20,153 @@ def make_patient_payload(nss="12345678901", full_name="Paciente Demo"):
     }
 
 
+def _seed_latest_assessment_state(db_path, patient_id, state, module_id=None):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO clinical_assessments (
+            module_id, state, input_snapshot, result_snapshot, guideline_versions, status, patient_id
+        ) VALUES (?, ?, ?, ?, ?, 'linked', ?)
+        """,
+        (
+            module_id or state,
+            state,
+            json.dumps({}),
+            json.dumps({}),
+            json.dumps({}),
+            patient_id,
+        ),
+    )
+    cursor.execute(
+        "UPDATE prior_clinical_history SET current_state = ? WHERE patient_id = ?",
+        (state, patient_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _insert_postlocal_bcr_context(db_path, patient_id, *, surgery_date="2024-01-15", bcr_date="2026-03-01", bcr_psa=0.42, psadt=8.0):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO surgical_details (
+            patient_id, surgery_date, surgery_type, pathological_stage
+        ) VALUES (?, ?, 'RP_robotica', 'pT2')
+        """,
+        (patient_id, surgery_date),
+    )
+    cursor.execute(
+        """
+        INSERT INTO biochemical_recurrence (
+            patient_id, primary_treatment, primary_treatment_date, bcr_detected,
+            bcr_date, bcr_psa, bcr_definition, psadt_at_bcr
+        ) VALUES (?, 'RP', ?, 1, ?, ?, 'AUA_0.2', ?)
+        """,
+        (patient_id, surgery_date, bcr_date, bcr_psa, psadt),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _insert_treatment_line(db_path, patient_id, *, line_of_therapy, drug_scheme, start_date, end_date=None, context="metastatic"):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO treatment_history (
+            patient_id, line_of_therapy, drug_scheme, start_date, end_date, outcome, regimen_json, line_of_therapy_context
+        ) VALUES (?, ?, ?, ?, ?, 'Ongoing', ?, ?)
+        """,
+        (
+            patient_id,
+            line_of_therapy,
+            drug_scheme,
+            start_date,
+            end_date,
+            json.dumps(
+                {
+                    "line_of_therapy_number": line_of_therapy,
+                    "drug_scheme": drug_scheme,
+                    "drug_scheme_label": drug_scheme,
+                    "line_of_therapy_context": context,
+                }
+            ),
+            context,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _insert_genomic_profile(db_path, patient_id, *, test_date="2026-03-05", hrr="Positivo", brca2="Positivo", msi="Estable"):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO genomic_profile (
+            patient_id, test_date, test_type, brca2_status, msi_status, hrr_overall
+        ) VALUES (?, ?, 'Panel_HRR', ?, ?, ?)
+        """,
+        (patient_id, test_date, brca2, msi, hrr),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _insert_psma_imaging(db_path, patient_id, *, study_date="2026-03-07", psma_positive=True):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO imaging_studies (
+            patient_id, study_date, study_type, psma_result, findings_json
+        ) VALUES (?, ?, 'PSMA PET/CT', ?, ?)
+        """,
+        (
+            patient_id,
+            study_date,
+            "positivo" if psma_positive else "negativo",
+            json.dumps(
+                {
+                    "lesion_locations": ["hueso", "ganglios"],
+                    "psma_total_lesions": 2,
+                }
+            ),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _update_latest_assessment_input(db_path, patient_id, payload):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT id, input_snapshot
+        FROM clinical_assessments
+        WHERE patient_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (patient_id,),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        conn.close()
+        raise AssertionError("No latest assessment found to update")
+    current_snapshot = json.loads(row[1] or "{}")
+    current_snapshot.update(payload)
+    cursor.execute(
+        "UPDATE clinical_assessments SET input_snapshot = ? WHERE id = ?",
+        (json.dumps(current_snapshot), row[0]),
+    )
+    conn.commit()
+    conn.close()
+
+
 def test_register_patient_returns_real_id_and_persists_core_tables(app_client):
     client, db_path = app_client
     payload = make_patient_payload()
@@ -230,6 +377,427 @@ def test_followup_alerts_and_export_flow(app_client):
     assert csv_rows[0]["n_followups"] == "1"
 
 
+def test_alerts_endpoint_matches_signals_copilot_alerts(app_client):
+    client, _ = app_client
+    register = client.post("/api/register_patient", json=make_patient_payload(nss="34343434343", full_name="Paciente Alertas Canonicas"))
+    patient_id = register.get_json()["patient_id"]
+
+    signals_response = client.get(f"/api/patients/{patient_id}/signals")
+    alerts_response = client.get(f"/api/alerts/{patient_id}")
+
+    assert signals_response.status_code == 200
+    assert alerts_response.status_code == 200
+
+    signal_alerts = signals_response.get_json()["copilot_alerts"]
+    api_alerts = alerts_response.get_json()["alerts"]
+
+    assert signal_alerts
+    assert {item["alert_key"] for item in signal_alerts} == {item["alert_key"] for item in api_alerts}
+
+
+def test_schedule_persists_distinct_supportive_care_items_with_distinct_schedule_keys(app_client):
+    client, db_path = app_client
+    register = client.post("/api/register_patient", json=make_patient_payload(nss="35353535353", full_name="Paciente Schedule Keys"))
+    patient_id = register.get_json()["patient_id"]
+
+    import tracking_db
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    tracking_db._upsert_scheduled_events(
+        cursor,
+        patient_id,
+        "systemic_surveillance",
+        [
+            {
+                "schedule_key": "state:track:bone_support",
+                "encounter_key": "encounter:support",
+                "event_type": "supportive_care",
+                "label": "Salud ósea y soporte",
+                "management_track": "systemic_surveillance",
+                "due_date": "2026-03-20",
+                "guideline": "NCCN 2026",
+            },
+            {
+                "schedule_key": "state:track:frailty_fitness",
+                "encounter_key": "encounter:support",
+                "event_type": "supportive_care",
+                "label": "Fragilidad y fitness terapéutica",
+                "management_track": "systemic_surveillance",
+                "due_date": "2026-03-20",
+                "guideline": "EAU 2026",
+            },
+        ],
+    )
+    conn.commit()
+    cursor.execute(
+        """
+        SELECT id, schedule_key, label
+        FROM scheduled_events
+        WHERE patient_id = ?
+        ORDER BY id ASC
+        """,
+        (patient_id,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    assert len(rows) == 2
+    assert rows[0][0] != rows[1][0]
+    assert {row[1] for row in rows} == {"state:track:bone_support", "state:track:frailty_fitness"}
+
+
+def test_agenda_and_schedule_expose_encounters(app_client):
+    client, _ = app_client
+    register = client.post("/api/register_patient", json=make_patient_payload(nss="36363636363", full_name="Paciente Encounters"))
+    patient_id = register.get_json()["patient_id"]
+
+    agenda_response = client.get("/api/patients/36363636363/agenda")
+    schedule_response = client.get(f"/api/patients/{patient_id}/schedule")
+
+    assert agenda_response.status_code == 200
+    assert schedule_response.status_code == 200
+
+    agenda_payload = agenda_response.get_json()["agenda"]
+    schedule_payload = schedule_response.get_json()
+
+    assert agenda_payload["encounters"]
+    assert schedule_payload["scheduled_encounters"]
+    assert schedule_payload["next_encounter"]
+
+
+def test_adt_progression_verification_groups_confirmation_encounter_and_fuses_alerts(app_client):
+    client, db_path = app_client
+    register = client.post("/api/register_patient", json=make_patient_payload(nss="37373737373", full_name="Paciente ADT Progression"))
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "adt_progression_verification")
+
+    schedule_response = client.get(f"/api/patients/{patient_id}/schedule?track=systemic_surveillance")
+    signals_response = client.get(f"/api/patients/{patient_id}/signals")
+
+    assert schedule_response.status_code == 200
+    assert signals_response.status_code == 200
+
+    schedule_payload = schedule_response.get_json()
+    encounters = schedule_payload["scheduled_encounters"]
+    confirmation = next(enc for enc in encounters if enc["encounter_type"] == "progression_confirmation")
+
+    assert confirmation["title"] == "Cita de confirmación de progresión bajo ADT"
+    task_types = {task["item_type"] for task in confirmation["tasks"]}
+    assert {"therapy_review", "lab_panel", "imaging"} <= task_types
+    assert schedule_payload["schedule_anchor_strength"] == "weak"
+
+    signal_alerts = signals_response.get_json()["copilot_alerts"]
+    assert sum(1 for alert in signal_alerts if alert["decision_domain"] == "systemic_sequencing") <= 1
+
+
+def test_schedule_exposes_master_followup_plan_for_phase_one_scenarios(app_client):
+    client, db_path = app_client
+    register = client.post("/api/register_patient", json=make_patient_payload(nss="38383838383", full_name="Paciente Plan Maestro"))
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "adt_progression_verification")
+
+    schedule_response = client.get(f"/api/patients/{patient_id}/schedule?track=systemic_surveillance")
+    assert schedule_response.status_code == 200
+
+    payload = schedule_response.get_json()
+    master_plan = payload["master_followup_plan"]
+
+    assert master_plan["scenario_state"] == "adt_progression_verification"
+    assert master_plan["guideline_basis"]
+    assert master_plan["next_encounter"]
+    assert master_plan["summary"]["headline"]
+    assert master_plan["plan_key"]
+    assert master_plan["plan_status"] in {"active", "provisional"}
+    assert master_plan["calendar_horizon_months"] == 12
+    assert master_plan["timeline"]
+    assert master_plan["inline_actions_enabled"] is True
+    timeline_dates = [item["ideal_due_at"] for item in master_plan["timeline"] if item.get("ideal_due_at")]
+    assert timeline_dates == sorted(timeline_dates)
+    assert all("scheduled_due_at" in item for item in master_plan["timeline"])
+    assert all("completion_progress" in item for item in master_plan["timeline"])
+    assert all("inline_actions_enabled" in item for item in master_plan["timeline"])
+    assert any(item["tasks"] for item in master_plan["timeline"])
+    first_task = next(task for item in master_plan["timeline"] for task in item["tasks"])
+    assert {"required", "action_mode", "completed_at"} <= set(first_task.keys())
+    assert payload["plan_version"]
+    assert payload["calendar_horizon_months"] == 12
+    assert payload["timeline"]
+
+
+def test_completed_inline_task_remains_visible_and_counts_toward_encounter_progress(app_client):
+    client, db_path = app_client
+    register = client.post("/api/register_patient", json=make_patient_payload(nss="38383838384", full_name="Paciente Progreso Encounter"))
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "adt_progression_verification")
+
+    agenda_response = client.get(f"/api/patients/{patient_id}/agenda?track=systemic_surveillance")
+    assert agenda_response.status_code == 200
+    agenda = agenda_response.get_json()["agenda"]
+    lab_item = next(item for item in agenda["items"] if item["agenda_key"] == "adt_progression_verification:systemic_surveillance:labs")
+
+    visit_response = client.post(
+        f"/api/patients/{patient_id}/visits",
+        json={
+            "agenda_ids": [lab_item["id"]],
+            "agenda_submission_mode": "item_scoped",
+            "visit_date": "2026-03-20",
+            "state": "adt_progression_verification",
+            "management_track": "systemic_surveillance",
+            "psa": 6.4,
+            "testosterone": 18,
+            "alp": 120,
+            "ldh": 200,
+            "hemoglobin": 13.2,
+        },
+    )
+    assert visit_response.status_code == 200
+
+    schedule_response = client.get(f"/api/patients/{patient_id}/schedule?track=systemic_surveillance")
+    assert schedule_response.status_code == 200
+    encounter = next(
+        item
+        for item in schedule_response.get_json()["scheduled_encounters"]
+        if item["encounter_key"] == "adt_progression_verification:systemic_surveillance:progression_confirmation"
+    )
+    completed_lab_task = next(task for task in encounter["tasks"] if task["agenda_key"] == lab_item["agenda_key"])
+
+    assert encounter["completion_progress"]["label"] == "1/3"
+    assert encounter["completed_required_task_count"] == 1
+    assert completed_lab_task["status"] == "completed"
+    assert completed_lab_task["completed_at"]
+
+
+def test_alert_key_opens_directed_visit_schema_with_capture_context(app_client):
+    client, db_path = app_client
+    register = client.post("/api/register_patient", json=make_patient_payload(nss="39393939393", full_name="Paciente Alerta Dirigida"))
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "adt_progression_verification")
+
+    signals_response = client.get(f"/api/patients/{patient_id}/signals")
+    assert signals_response.status_code == 200
+    alerts = signals_response.get_json()["copilot_alerts"]
+    capture_alert = next(alert for alert in alerts if alert["fields_to_capture"])
+
+    schema_response = client.get(f"/api/patients/{patient_id}/visit-schema?alert_key={capture_alert['alert_key']}")
+    assert schema_response.status_code == 200
+
+    payload = schema_response.get_json()
+    visit_schema = payload["visit_schema"]
+    agenda_context = payload["agenda_item_context"]
+    field_names = {
+        field["name"]
+        for section in visit_schema["sections"]
+        for field in section["fields"]
+    }
+
+    assert visit_schema["submission_mode"] == "item_scoped"
+    assert visit_schema["presentation_mode"] == "mini_capture"
+    assert visit_schema["focus_fields"] == capture_alert["fields_to_capture"]
+    assert visit_schema["auto_visit_date"]
+    assert visit_schema["allow_visit_date_override"] is True
+    assert agenda_context["mode"] == "mini_capture"
+    assert agenda_context["alert_key"] == capture_alert["alert_key"]
+    assert agenda_context["action_type"] == capture_alert["action_type"]
+    assert set(capture_alert["fields_to_capture"]) == field_names
+    assert "visit_date" not in field_names
+    assert "clinician_notes" not in field_names
+
+
+def test_signals_expose_outcome_adjudication_bundle(app_client):
+    client, db_path = app_client
+    register = client.post("/api/register_patient", json=make_patient_payload(nss="39494949494", full_name="Paciente Bundle Outcomes"))
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "adt_progression_verification")
+
+    followup_response = client.post(
+        "/api/add_followup",
+        json={
+            "patient_id": patient_id,
+            "psa": 6.8,
+            "testosterone": 124,
+            "treatment": "ADT",
+            "status": "Progresión radiográfica",
+        },
+    )
+    assert followup_response.status_code == 200
+
+    response = client.get(f"/api/patients/{patient_id}/signals")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    summary = payload["outcome_events_summary"]
+
+    assert summary["total"] >= 1
+    assert "castration_resistance" in summary["by_axis"]
+    assert payload["pending_adjudications"]
+    assert payload["current_course_status"]
+    assert isinstance(payload["trial_comparable_endpoints"], list)
+
+
+def test_bcr_without_imaging_stays_non_metastatic_and_pending_restaging(app_client):
+    client, db_path = app_client
+    register = client.post("/api/register_patient", json=make_patient_payload(nss="39595959595", full_name="Paciente BCR High Risk"))
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "recurrence_bcr")
+    _insert_postlocal_bcr_context(db_path, patient_id, bcr_psa=0.42, psadt=8.0)
+
+    response = client.get(f"/api/patients/{patient_id}/outcomes")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    event_types = {item["event_type"] for item in payload["outcome_events"]}
+    pending_keys = {item["status_key"] for item in payload["pending_adjudications"]}
+
+    assert {"bcr_detected", "high_risk_bcr", "salvage_window_open"} <= event_types
+    assert "radiographic_progression" not in event_types
+    assert any(key.endswith("salvage_imaging") for key in pending_keys)
+    assert payload["current_trial_comparable_profile"]["benchmark_family"] == "EMBARK_like"
+    assert "alto riesgo" in payload["current_course_status"].lower()
+
+
+def test_crpc_not_confirmed_without_castrate_testosterone(app_client):
+    client, db_path = app_client
+    register = client.post("/api/register_patient", json=make_patient_payload(nss="39696969696", full_name="Paciente CRPC Pendiente"))
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "adt_progression_verification")
+
+    followup_response = client.post(
+        "/api/add_followup",
+        json={
+            "patient_id": patient_id,
+            "psa": 6.2,
+            "testosterone": 120,
+            "treatment": "ADT",
+            "status": "Progresión radiográfica",
+        },
+    )
+    assert followup_response.status_code == 200
+
+    response = client.get(f"/api/patients/{patient_id}/outcomes")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    event_types = {item["event_type"] for item in payload["outcome_events"]}
+
+    assert "crpc_confirmation_pending" in event_types
+    assert "crpc_confirmed" not in event_types
+    assert any("crpc_confirmation" in item["status_key"] for item in payload["pending_adjudications"])
+    assert "pendiente" in payload["current_course_status"].lower()
+
+
+def test_mhspc_psa_milestones_surface_trial_comparable_endpoints(app_client):
+    client, db_path = app_client
+    payload = make_patient_payload(nss="39797979797", full_name="Paciente mHSPC Milestones")
+    payload["baseline_psa"] = 100.0
+    register = client.post("/api/register_patient", json=payload)
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "mcspc_high_volume")
+
+    followup_response = client.post(
+        "/api/add_followup",
+        json={
+            "patient_id": patient_id,
+            "psa": 5.0,
+            "testosterone": 18,
+            "treatment": "Abiraterona + ADT",
+            "status": "Respuesta parcial",
+        },
+    )
+    assert followup_response.status_code == 200
+
+    response = client.get(f"/api/patients/{patient_id}/outcomes")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    endpoints = {
+        item["endpoint_key"]: item
+        for item in payload["trial_comparable_endpoints"]
+    }
+
+    assert endpoints["psa50"]["status"] == "complete"
+    assert endpoints["psa90"]["status"] == "complete"
+    assert payload["current_trial_comparable_profile"]["benchmark_family"] == "ARANOTE_ARASENS_PEACE1_like"
+    assert "respuesta bioquímica profunda" in payload["current_course_status"].lower()
+
+
+def test_m1_crpc_psmafore_like_profile_detected(app_client):
+    client, db_path = app_client
+    register = client.post("/api/register_patient", json=make_patient_payload(nss="39898989898", full_name="Paciente PSMAfore"))
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "m1_crpc")
+    _update_latest_assessment_input(db_path, patient_id, {"psma_positive": "1", "m_substage_resolved": "M1b"})
+    _insert_treatment_line(
+        db_path,
+        patient_id,
+        line_of_therapy=1,
+        drug_scheme="ADT_ABIRATERONE",
+        start_date="2025-01-15",
+        context="mCRPC_post_ARPI_pre_taxane",
+    )
+    _insert_psma_imaging(db_path, patient_id, psma_positive=True)
+
+    response = client.get(f"/api/patients/{patient_id}/outcomes")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    event_types = {item["event_type"] for item in payload["outcome_events"]}
+
+    assert "psma_positive_pathway" in event_types
+    assert payload["current_trial_comparable_profile"]["benchmark_family"] == "PSMAfore_like"
+    assert "PSMAfore" in payload["current_trial_comparable_profile"]["matched_trials"]
+
+
+def test_schedule_exposes_pending_adjudication_tasks_and_outcome_anchor(app_client):
+    client, db_path = app_client
+    register = client.post("/api/register_patient", json=make_patient_payload(nss="39999999990", full_name="Paciente Outcome Anchor"))
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "recurrence_bcr")
+    _insert_postlocal_bcr_context(db_path, patient_id, bcr_psa=0.38, psadt=7.5)
+
+    response = client.get(f"/api/patients/{patient_id}/schedule")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["pending_adjudication_tasks"]
+    assert payload["outcome_anchor"]["event_type"] in {"high_risk_bcr", "salvage_window_open", "bcr_detected"}
+    assert payload["current_course_status"]
+
+
+def test_cohort_benchmarks_endpoint_aggregates_trial_like_families(app_client):
+    client, db_path = app_client
+
+    bcr_register = client.post("/api/register_patient", json=make_patient_payload(nss="39999999991", full_name="Paciente Cohorte BCR"))
+    bcr_id = bcr_register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, bcr_id, "recurrence_bcr")
+    _insert_postlocal_bcr_context(db_path, bcr_id, bcr_psa=0.44, psadt=8.0)
+
+    crpc_register = client.post("/api/register_patient", json=make_patient_payload(nss="39999999992", full_name="Paciente Cohorte PSMA"))
+    crpc_id = crpc_register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, crpc_id, "m1_crpc")
+    _update_latest_assessment_input(db_path, crpc_id, {"psma_positive": "1", "m_substage_resolved": "M1b"})
+    _insert_treatment_line(
+        db_path,
+        crpc_id,
+        line_of_therapy=1,
+        drug_scheme="ADT_ABIRATERONE",
+        start_date="2025-01-15",
+        context="mCRPC_post_ARPI_pre_taxane",
+    )
+
+    response = client.get("/api/cohorts/benchmarks")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    families = payload["benchmark_families"]
+
+    assert payload["total_patients"] >= 2
+    assert "EMBARK_like" in families
+    assert "PSMAfore_like" in families
+    assert families["EMBARK_like"]["matched"] >= 1
+    assert families["PSMAfore_like"]["matched"] >= 1
+
+
 def test_patient_and_alert_routes_return_404_for_missing_patient(app_client):
     client, _ = app_client
 
@@ -391,6 +959,67 @@ def test_visit_schema_filters_fields_for_item_scoped_arpi_bundle(app_client):
     assert payload["agenda_item_context"]["decision_targets"] == ["arpi_safety", "supportive_care", "treatment_tolerability"]
 
 
+def test_visit_schema_supports_inline_task_presentation_for_item_scoped_arpi_bundle(app_client):
+    client, db_path = app_client
+    register = client.post("/api/register_patient", json=make_patient_payload(nss="45454545456", full_name="Paciente Inline Agenda"))
+    patient_id = register.get_json()["patient_id"]
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO follow_up_visits (
+            patient_id, visit_date, psa_current, testosterone_current, current_treatment,
+            disease_status, ecog_current, agenda_context_json, visit_bundle_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            patient_id,
+            "2026-03-15",
+            3.4,
+            18.0,
+            "Abiraterona + ADT",
+            "Seguimiento estable",
+            1,
+            json.dumps({}),
+            json.dumps({}),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    agenda = client.get(f"/api/patients/{patient_id}/agenda").get_json()["agenda"]
+    arpi_item = next(item for item in agenda["items"] if item["title"] == "Bundle de seguridad ARPI")
+
+    schema_response = client.get(f"/api/patients/{patient_id}/visit-schema?agenda_id={arpi_item['id']}&presentation=inline_task")
+    assert schema_response.status_code == 200
+    payload = schema_response.get_json()
+    schema = payload["visit_schema"]
+    field_names = {
+        field["name"]
+        for section in schema["sections"]
+        for field in section["fields"]
+    }
+
+    assert schema["presentation_mode"] == "inline_task"
+    assert schema["submission_mode"] == "item_scoped"
+    assert schema["task_scope"]["agenda_key"] == arpi_item["agenda_key"]
+    assert schema["task_scope"]["action_mode"] == arpi_item["action_mode"]
+    assert schema["encounter_key"] == arpi_item["encounter_key"]
+    assert schema["plan_key"]
+    assert schema["auto_visit_date"]
+    assert schema["allow_visit_date_override"] is True
+    assert "visit_date" not in field_names
+    assert "clinician_notes" not in field_names
+    assert set(schema["focus_fields"]) == field_names
+    assert field_names == {
+        field
+        for field in arpi_item["required_inputs"]
+        if field and not str(field).startswith("source_document:")
+    }
+    assert payload["agenda_item_context"]["mode"] == "inline_task"
+
+
 def test_visit_schema_supports_capture_block_for_missing_inputs(app_client):
     client, _ = app_client
     register = client.post("/api/register_patient", json=make_patient_payload(nss="45555555555", full_name="Paciente Captura Dirigida"))
@@ -440,6 +1069,23 @@ def test_visit_schema_uses_canonical_regimen_dropdown_for_advanced_tracks(app_cl
     assert "ADT_ABIRATERONE" in option_values
     assert "ADT_ENZALUTAMIDE" in option_values
     assert "ADT_DOCETAXEL_DAROLUTAMIDE" not in option_values
+
+
+def test_agenda_route_exposes_required_action_mode_and_completed_at(app_client):
+    client, db_path = app_client
+    register = client.post("/api/register_patient", json=make_patient_payload(nss="45555555559", full_name="Paciente Agenda Enriquecida"))
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "adt_progression_verification")
+
+    agenda_response = client.get(f"/api/patients/{patient_id}/agenda")
+    assert agenda_response.status_code == 200
+    agenda = agenda_response.get_json()["agenda"]
+
+    assert agenda["items"]
+    assert all({"required", "action_mode", "completed_at"} <= set(item.keys()) for item in agenda["items"])
+    assert agenda["encounters"]
+    first_task = next(task for encounter in agenda["encounters"] for task in encounter["tasks"])
+    assert {"required", "action_mode", "completed_at"} <= set(first_task.keys())
 
 
 def test_visit_schema_includes_structured_metastatic_distribution_for_advanced_tracks(app_client):

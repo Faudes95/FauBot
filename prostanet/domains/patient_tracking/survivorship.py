@@ -88,6 +88,24 @@ class SurvivorshipCarePlan:
         treatments_received = cls._identify_treatments(prior)
         late_effects = cls._applicable_late_effects(treatments_received)
 
+        # Enrich with RT-specific toxicity data from radiotherapy_detail module
+        try:
+            from prostanet.domains.patient_tracking.radiotherapy_detail import RadiotherapyDetailService
+            rt_summary = RadiotherapyDetailService.build_rt_history(patient)
+            if rt_summary and rt_summary.courses:
+                for course in rt_summary.courses:
+                    for tox in course.toxicity:
+                        if tox.phase == "late" and tox.grade >= 2:
+                            late_effects.append({
+                                "effect": f"Toxicidad {tox.domain} tardía grado {tox.grade} — curso {course.modality}",
+                                "monitoring": f"Evaluación {tox.domain} cada 3-6 meses",
+                                "intervention": tox.details or "Según protocolo institucional",
+                                "treatment_source": "radiation_detail",
+                                "documented_grade": tox.grade,
+                            })
+        except Exception:
+            pass
+
         return {
             "generated_date": date.today().isoformat(),
             "patient_age": identity.get("age") or identity.get("edad"),

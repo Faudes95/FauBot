@@ -321,10 +321,15 @@ def _hydrate_scheduled_event_rows(rows):
         item = dict(row)
         item["completed"] = bool(item.get("completed"))
         item["overdue_alert_sent"] = bool(item.get("overdue_alert_sent"))
+        item["plan_key"] = item.get("plan_key") or ""
+        item["ideal_due_at"] = str(item.get("ideal_due_at") or item.get("due_date") or "")[:10]
+        item["scheduled_due_at"] = str(item.get("scheduled_due_at") or item.get("due_date") or "")[:10]
+        item["delay_days"] = int(item.get("delay_days") or 0)
+        item["completed_at"] = str(item.get("completed_date") or "")[:10]
         if item["completed"]:
             item["status"] = "completed"
         else:
-            due_date = str(item.get("due_date") or "")[:10]
+            due_date = str(item.get("scheduled_due_at") or item.get("due_date") or "")[:10]
             if due_date == today_iso:
                 item["status"] = "due_today"
             elif due_date and due_date < today_iso:
@@ -333,6 +338,24 @@ def _hydrate_scheduled_event_rows(rows):
                 item["status"] = "scheduled"
         events.append(item)
     return events
+
+
+def _hydrate_alert_rows(rows):
+    alerts = []
+    for row in rows:
+        item = dict(row)
+        payload = _parse_json_blob(item.get("data_json"), {})
+        if isinstance(payload, dict):
+            for key, value in payload.items():
+                if key not in {"id", "patient_id"}:
+                    item[key] = value
+        item["message"] = item.get("message") or item.get("description") or ""
+        item["category"] = item.get("category") or item.get("alert_type") or ""
+        if not item.get("decision_domain") and isinstance(payload, dict):
+            item["decision_domain"] = payload.get("decision_domain", "")
+        item["detail_items"] = item.get("detail_items") or (payload.get("detail_items", []) if isinstance(payload, dict) else [])
+        alerts.append(item)
+    return alerts
 
 
 def _hydrate_response_assessment_rows(rows):
@@ -446,6 +469,44 @@ def _hydrate_signal_rows(rows):
         item["mcode_projection"] = _parse_json_blob(item.pop("mcode_projection_json", None), {})
         signals.append(item)
     return signals
+
+
+def _hydrate_outcome_rows(rows):
+    outcomes = []
+    for row in rows:
+        item = dict(row)
+        item["provisional"] = bool(item.get("provisional"))
+        item["active"] = bool(item.get("active", 1))
+        item["blocking_fields"] = _parse_json_blob(item.pop("blocking_fields_json", None), [])
+        item["evidence_basis"] = _parse_json_blob(item.pop("evidence_basis_json", None), [])
+        item["payload"] = _parse_json_blob(item.pop("payload_json", None), {})
+        outcomes.append(item)
+    return outcomes
+
+
+def _hydrate_adjudication_snapshot_rows(rows):
+    snapshots = []
+    for row in rows:
+        item = dict(row)
+        item["current_response_state"] = _parse_json_blob(item.pop("current_response_state_json", None), {})
+        item["last_adjudicated_event"] = _parse_json_blob(item.pop("last_adjudicated_event_json", None), {})
+        item["pending_adjudications"] = _parse_json_blob(item.pop("pending_adjudications_json", None), [])
+        item["outcome_events_summary"] = _parse_json_blob(item.pop("outcome_events_summary_json", None), {})
+        item["milestone_plan"] = _parse_json_blob(item.pop("milestone_plan_json", None), [])
+        item["outcome_anchor"] = _parse_json_blob(item.pop("outcome_anchor_json", None), {})
+        snapshots.append(item)
+    return snapshots
+
+
+def _hydrate_trial_benchmark_snapshot_rows(rows):
+    snapshots = []
+    for row in rows:
+        item = dict(row)
+        item["current_trial_profile"] = _parse_json_blob(item.pop("current_trial_profile_json", None), {})
+        item["trial_endpoints"] = _parse_json_blob(item.pop("trial_endpoints_json", None), [])
+        item["benchmark_snapshot"] = _parse_json_blob(item.pop("benchmark_snapshot_json", None), {})
+        snapshots.append(item)
+    return snapshots
 
 
 def _hydrate_transition_rows(rows):
@@ -1144,18 +1205,32 @@ def init_tracking_db():
         CREATE TABLE IF NOT EXISTS smart_alerts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             patient_id INTEGER,
+            alert_key TEXT,
             alert_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             alert_type TEXT,                 -- 'psa_rising', 'psadt_critical', 'upgrade_biopsy', 'ecog_decline', 'bcr_detected', 'as_exit', 'overdue_visit'
+            decision_domain TEXT,
             severity TEXT,                   -- 'info', 'warning', 'critical'
             title TEXT,
             description TEXT,
             data_json TEXT,                  -- JSON con datos relevantes
+            source_snapshot_id INTEGER,
+            active BOOLEAN DEFAULT 1,
             acknowledged BOOLEAN DEFAULT 0,
             acknowledged_by TEXT,
             acknowledged_date TIMESTAMP,
             FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
         )
     ''')
+    for ddl in (
+        "ALTER TABLE smart_alerts ADD COLUMN alert_key TEXT",
+        "ALTER TABLE smart_alerts ADD COLUMN decision_domain TEXT",
+        "ALTER TABLE smart_alerts ADD COLUMN source_snapshot_id INTEGER",
+        "ALTER TABLE smart_alerts ADD COLUMN active BOOLEAN DEFAULT 1",
+    ):
+        try:
+            c.execute(ddl)
+        except sqlite3.OperationalError:
+            pass
 
     # ── 17. EVALUACIONES CLÍNICAS MODULARES ────────────────────────────────
     c.execute('''
@@ -1487,10 +1562,16 @@ def init_tracking_db():
         CREATE TABLE IF NOT EXISTS scheduled_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             patient_id INTEGER NOT NULL,
+            schedule_key TEXT,
+            encounter_key TEXT,
+            plan_key TEXT,
             event_type TEXT NOT NULL,
             label TEXT,
             management_track TEXT,
             due_date DATE NOT NULL,
+            ideal_due_at DATE,
+            scheduled_due_at DATE,
+            delay_days INTEGER DEFAULT 0,
             guideline TEXT,
             completed INTEGER DEFAULT 0,
             completed_date DATE,
@@ -1500,6 +1581,18 @@ def init_tracking_db():
             FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
         )
     ''')
+    for ddl in (
+        "ALTER TABLE scheduled_events ADD COLUMN schedule_key TEXT",
+        "ALTER TABLE scheduled_events ADD COLUMN encounter_key TEXT",
+        "ALTER TABLE scheduled_events ADD COLUMN plan_key TEXT",
+        "ALTER TABLE scheduled_events ADD COLUMN ideal_due_at DATE",
+        "ALTER TABLE scheduled_events ADD COLUMN scheduled_due_at DATE",
+        "ALTER TABLE scheduled_events ADD COLUMN delay_days INTEGER DEFAULT 0",
+    ):
+        try:
+            c.execute(ddl)
+        except sqlite3.OperationalError:
+            pass
 
     # Evaluaciones de respuesta terapéutica (RECIST/PCWG3/PSA)
     c.execute('''
@@ -1526,6 +1619,114 @@ def init_tracking_db():
             FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
         )
     ''')
+
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS outcome_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            event_key TEXT,
+            event_type TEXT NOT NULL,
+            scenario_state TEXT,
+            management_track TEXT,
+            axis TEXT,
+            adjudication_status TEXT,
+            event_date DATE,
+            source_priority TEXT,
+            decision_impact TEXT,
+            summary TEXT,
+            provisional INTEGER DEFAULT 0,
+            active INTEGER DEFAULT 1,
+            blocking_fields_json TEXT,
+            evidence_basis_json TEXT,
+            payload_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(patient_id, event_key),
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+    ''')
+    for ddl in (
+        "ALTER TABLE outcome_events ADD COLUMN event_key TEXT",
+        "ALTER TABLE outcome_events ADD COLUMN scenario_state TEXT",
+        "ALTER TABLE outcome_events ADD COLUMN management_track TEXT",
+        "ALTER TABLE outcome_events ADD COLUMN axis TEXT",
+        "ALTER TABLE outcome_events ADD COLUMN adjudication_status TEXT",
+        "ALTER TABLE outcome_events ADD COLUMN source_priority TEXT",
+        "ALTER TABLE outcome_events ADD COLUMN decision_impact TEXT",
+        "ALTER TABLE outcome_events ADD COLUMN summary TEXT",
+        "ALTER TABLE outcome_events ADD COLUMN provisional INTEGER DEFAULT 0",
+        "ALTER TABLE outcome_events ADD COLUMN active INTEGER DEFAULT 1",
+        "ALTER TABLE outcome_events ADD COLUMN blocking_fields_json TEXT",
+        "ALTER TABLE outcome_events ADD COLUMN evidence_basis_json TEXT",
+        "ALTER TABLE outcome_events ADD COLUMN payload_json TEXT",
+        "ALTER TABLE outcome_events ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+    ):
+        try:
+            c.execute(ddl)
+        except sqlite3.OperationalError:
+            pass
+
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS adjudication_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL UNIQUE,
+            state TEXT,
+            management_track TEXT,
+            engine_version TEXT,
+            current_course_status TEXT,
+            current_response_state_json TEXT,
+            last_adjudicated_event_json TEXT,
+            pending_adjudications_json TEXT,
+            outcome_events_summary_json TEXT,
+            milestone_plan_json TEXT,
+            outcome_anchor_json TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+    ''')
+    for ddl in (
+        "ALTER TABLE adjudication_snapshots ADD COLUMN state TEXT",
+        "ALTER TABLE adjudication_snapshots ADD COLUMN management_track TEXT",
+        "ALTER TABLE adjudication_snapshots ADD COLUMN engine_version TEXT",
+        "ALTER TABLE adjudication_snapshots ADD COLUMN current_course_status TEXT",
+        "ALTER TABLE adjudication_snapshots ADD COLUMN current_response_state_json TEXT",
+        "ALTER TABLE adjudication_snapshots ADD COLUMN last_adjudicated_event_json TEXT",
+        "ALTER TABLE adjudication_snapshots ADD COLUMN pending_adjudications_json TEXT",
+        "ALTER TABLE adjudication_snapshots ADD COLUMN outcome_events_summary_json TEXT",
+        "ALTER TABLE adjudication_snapshots ADD COLUMN milestone_plan_json TEXT",
+        "ALTER TABLE adjudication_snapshots ADD COLUMN outcome_anchor_json TEXT",
+    ):
+        try:
+            c.execute(ddl)
+        except sqlite3.OperationalError:
+            pass
+
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS trial_benchmark_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL UNIQUE,
+            state TEXT,
+            management_track TEXT,
+            engine_version TEXT,
+            current_trial_profile_json TEXT,
+            trial_endpoints_json TEXT,
+            benchmark_snapshot_json TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+    ''')
+    for ddl in (
+        "ALTER TABLE trial_benchmark_snapshots ADD COLUMN state TEXT",
+        "ALTER TABLE trial_benchmark_snapshots ADD COLUMN management_track TEXT",
+        "ALTER TABLE trial_benchmark_snapshots ADD COLUMN engine_version TEXT",
+        "ALTER TABLE trial_benchmark_snapshots ADD COLUMN current_trial_profile_json TEXT",
+        "ALTER TABLE trial_benchmark_snapshots ADD COLUMN trial_endpoints_json TEXT",
+        "ALTER TABLE trial_benchmark_snapshots ADD COLUMN benchmark_snapshot_json TEXT",
+    ):
+        try:
+            c.execute(ddl)
+        except sqlite3.OperationalError:
+            pass
 
     # Tracking de lesiones individuales
     c.execute('''
@@ -3036,6 +3237,29 @@ def _normalize_schedule_anchor(anchor):
     return {"anchor_date": "", "anchor_source": "", "last_visit_date": ""}
 
 
+def _schedule_event_key(item):
+    schedule_key = str(item.get("schedule_key") or item.get("agenda_key") or "").strip()
+    if schedule_key:
+        return schedule_key
+    return "::".join(
+        [
+            str(item.get("event_type") or ""),
+            str(item.get("management_track") or ""),
+            str(item.get("due_date") or ""),
+            str(item.get("label") or ""),
+        ]
+    )
+
+
+def _schedule_sort_key(item):
+    return (
+        str(item.get("ideal_due_at") or item.get("scheduled_due_at") or item.get("due_date") or ""),
+        str(item.get("scheduled_due_at") or item.get("due_date") or ""),
+        str(item.get("encounter_key") or item.get("event_type") or ""),
+        str(item.get("title") or item.get("label") or ""),
+    )
+
+
 def _upsert_scheduled_events(cursor, patient_id, management_track, items):
     cursor.execute(
         '''
@@ -3050,15 +3274,27 @@ def _upsert_scheduled_events(cursor, patient_id, management_track, items):
     duplicate_ids = []
     cursor.execute(
         '''
-        SELECT id, event_type, label, management_track, due_date, completed, completed_date, completed_visit_id
+        SELECT id, schedule_key, encounter_key, event_type, label, management_track, due_date,
+               plan_key, ideal_due_at, scheduled_due_at, delay_days,
+               completed, completed_date, completed_visit_id, overdue_alert_sent
         FROM scheduled_events
         WHERE patient_id = ? AND management_track = ?
         ''',
         (patient_id, management_track),
     )
     for row in cursor.fetchall():
-        key = (row[1], row[3], row[4])
         current = dict(row)
+        key = str(current.get("schedule_key") or "").strip()
+        if not key:
+            key = "::".join(
+                [
+                    str(current.get("event_type") or ""),
+                    str(current.get("management_track") or ""),
+                    str(current.get("due_date") or ""),
+                    str(current.get("label") or ""),
+                ]
+            )
+            current["schedule_key"] = key
         if key in existing:
             chosen = existing[key]
             keep_current = bool(current.get("completed")) and not bool(chosen.get("completed"))
@@ -3077,26 +3313,42 @@ def _upsert_scheduled_events(cursor, patient_id, management_track, items):
 
     active_keys = set()
     for item in items:
-        key = (item.get("event_type"), item.get("management_track"), item.get("due_date"))
+        key = _schedule_event_key(item)
         active_keys.add(key)
         previous = existing.get(key, {})
         if previous:
             cursor.execute(
                 '''
                 UPDATE scheduled_events
-                SET label = ?,
+                SET schedule_key = ?,
+                    encounter_key = ?,
+                    plan_key = ?,
+                    label = ?,
+                    due_date = ?,
+                    ideal_due_at = ?,
+                    scheduled_due_at = ?,
+                    delay_days = ?,
                     guideline = ?,
                     completed = ?,
                     completed_date = ?,
-                    completed_visit_id = ?
+                    completed_visit_id = ?,
+                    overdue_alert_sent = ?
                 WHERE id = ?
                 ''',
                 (
+                    key,
+                    item.get("encounter_key"),
+                    item.get("plan_key"),
                     item.get("label"),
+                    item.get("scheduled_due_at") or item.get("due_date"),
+                    item.get("ideal_due_at") or item.get("due_date"),
+                    item.get("scheduled_due_at") or item.get("due_date"),
+                    int(item.get("delay_days") or 0),
                     item.get("guideline", ""),
                     1 if previous.get("completed") else 0,
                     previous.get("completed_date"),
                     previous.get("completed_visit_id"),
+                    1 if previous.get("overdue_alert_sent") else 0,
                     previous.get("id"),
                 ),
             )
@@ -3104,16 +3356,23 @@ def _upsert_scheduled_events(cursor, patient_id, management_track, items):
             cursor.execute(
                 '''
                 INSERT INTO scheduled_events (
-                    patient_id, event_type, label, management_track, due_date, guideline,
+                    patient_id, schedule_key, encounter_key, plan_key, event_type, label, management_track, due_date,
+                    ideal_due_at, scheduled_due_at, delay_days, guideline,
                     completed, completed_date, completed_visit_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''',
                 (
                     patient_id,
+                    key,
+                    item.get("encounter_key"),
+                    item.get("plan_key"),
                     item.get("event_type"),
                     item.get("label"),
                     item.get("management_track"),
-                    item.get("due_date"),
+                    item.get("scheduled_due_at") or item.get("due_date"),
+                    item.get("ideal_due_at") or item.get("due_date"),
+                    item.get("scheduled_due_at") or item.get("due_date"),
+                    int(item.get("delay_days") or 0),
                     item.get("guideline", ""),
                     0,
                     None,
@@ -3159,7 +3418,7 @@ def _infer_completed_scheduled_event_types(data):
 
 def _complete_scheduled_events_for_visit(cursor, patient_id, visit_date, data, visit_record_id=None):
     completed_types = _infer_completed_scheduled_event_types(data)
-    if not completed_types and not data.get("scheduled_event_ids"):
+    if not completed_types and not data.get("scheduled_event_ids") and not data.get("agenda_ids"):
         return
 
     visit_iso = str(visit_date)[:10]
@@ -3182,6 +3441,44 @@ def _complete_scheduled_events_for_visit(cursor, patient_id, visit_date, data, v
             (visit_iso, visit_record_id, patient_id, *scheduled_ids),
         )
 
+    agenda_ids = [int(item) for item in (data.get("agenda_ids") or []) if _is_present(item)]
+    if agenda_ids:
+        cursor.execute(
+            f'''
+            SELECT agenda_key FROM followup_agenda_items
+            WHERE patient_id = ? AND id IN ({",".join(["?"] * len(agenda_ids))})
+            ''',
+            (patient_id, *agenda_ids),
+        )
+        schedule_keys = [str(row[0]) for row in cursor.fetchall() if str(row[0] or "")]
+        if schedule_keys:
+            cursor.execute(
+                f'''
+                UPDATE scheduled_events
+                SET completed = 1,
+                    completed_date = ?,
+                    completed_visit_id = COALESCE(?, completed_visit_id)
+                WHERE patient_id = ? AND schedule_key IN ({",".join(["?"] * len(schedule_keys))})
+                ''',
+                (visit_iso, visit_record_id, patient_id, *schedule_keys),
+            )
+
+    encounter_key = str(data.get("encounter_key") or "").strip()
+    if encounter_key:
+        cursor.execute(
+            '''
+            UPDATE scheduled_events
+            SET completed = 1,
+                completed_date = ?,
+                completed_visit_id = COALESCE(?, completed_visit_id)
+            WHERE patient_id = ?
+              AND encounter_key = ?
+              AND completed = 0
+              AND COALESCE(scheduled_due_at, due_date) <= ?
+            ''',
+            (visit_iso, visit_record_id, patient_id, encounter_key, max_due),
+        )
+
     for event_type in completed_types:
         cursor.execute(
             '''
@@ -3189,8 +3486,8 @@ def _complete_scheduled_events_for_visit(cursor, patient_id, visit_date, data, v
             WHERE patient_id = ?
               AND event_type = ?
               AND completed = 0
-              AND due_date <= ?
-            ORDER BY due_date ASC, id ASC
+              AND COALESCE(scheduled_due_at, due_date) <= ?
+            ORDER BY COALESCE(scheduled_due_at, due_date) ASC, id ASC
             LIMIT 1
             ''',
             (patient_id, event_type, max_due),
@@ -3275,25 +3572,46 @@ def _mirror_biomarkers_to_longitudinal(cursor, patient_id, visit_date, data):
 
 
 def sync_scheduled_events(patient_record, state=None, management_track=None, horizon_months=12):
+    from prostanet.domains.patient_tracking.encounter_planner import build_encounter_plans
     from prostanet.domains.patient_tracking.followup_agenda import (
         agenda_item_to_scheduled_event,
         build_agenda_board,
         infer_management_track,
         resolve_track_anchor,
     )
+    from prostanet.domains.patient_tracking.copilot_alerts import build_copilot_alerts
+    from prostanet.domains.patient_tracking.disease_course_outcomes import build_disease_course_bundle
+    from prostanet.domains.patient_tracking.master_followup_plan import build_master_followup_plan
     from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
 
     if not patient_record or not patient_record.get("identity"):
         return {
             "schedule": [],
+            "scheduled_items": [],
             "active_schedule": [],
             "archived_schedule": [],
+            "scheduled_encounters": [],
+            "encounters": [],
+            "next_encounter": {},
+            "master_followup_plan": {},
+            "master_followup_summary": {},
             "anchor_date": "",
             "anchor_source": "",
             "state": "",
             "management_track": "",
             "protocol_trace": {},
             "protocol_label": "",
+            "schedule_anchor_strength": "strong",
+            "milestone_plan": [],
+            "outcome_anchor": {},
+            "pending_adjudication_tasks": [],
+            "outcome_events_summary": {},
+            "pending_adjudications": [],
+            "current_response_state": {},
+            "current_course_status": "",
+            "last_adjudicated_event": {},
+            "trial_comparable_endpoints": [],
+            "current_trial_comparable_profile": {},
         }
 
     reconciliation = build_reconciled_state(patient_record, patient_record.get("latest_assessment"))
@@ -3304,14 +3622,31 @@ def sync_scheduled_events(patient_record, state=None, management_track=None, hor
     if not anchor_date:
         return {
             "schedule": [],
+            "scheduled_items": [],
             "active_schedule": [],
             "archived_schedule": [],
+            "scheduled_encounters": [],
+            "encounters": [],
+            "next_encounter": {},
+            "master_followup_plan": {},
+            "master_followup_summary": {},
             "anchor_date": "",
             "anchor_source": anchor.get("anchor_source", ""),
             "state": state,
             "management_track": management_track,
             "protocol_trace": {},
             "protocol_label": "",
+            "schedule_anchor_strength": "strong",
+            "milestone_plan": [],
+            "outcome_anchor": {},
+            "pending_adjudication_tasks": [],
+            "outcome_events_summary": {},
+            "pending_adjudications": [],
+            "current_response_state": {},
+            "current_course_status": "",
+            "last_adjudicated_event": {},
+            "trial_comparable_endpoints": [],
+            "current_trial_comparable_profile": {},
         }
 
     agenda_board = build_agenda_board(
@@ -3321,7 +3656,51 @@ def sync_scheduled_events(patient_record, state=None, management_track=None, hor
         raw_assessment=patient_record.get("latest_assessment"),
     )
     schedule_seed = [agenda_item_to_scheduled_event(item) for item in (agenda_board.get("items") or [])]
-
+    plan_key = f"{state}:{management_track}:{anchor_date}"
+    for item in schedule_seed:
+        ideal_due_at = str(item.get("ideal_due_at") or item.get("due_date") or "")[:10]
+        scheduled_due_at = str(item.get("scheduled_due_at") or item.get("due_date") or ideal_due_at)[:10]
+        item["plan_key"] = plan_key
+        item["ideal_due_at"] = ideal_due_at
+        item["scheduled_due_at"] = scheduled_due_at
+        item["delay_days"] = int(item.get("delay_days") or 0)
+    orchestration_signals = dict(patient_record.get("latest_signal_snapshot") or {})
+    orchestration_signals.update(
+        {
+            "explicit_state": reconciliation.get("explicit_state"),
+            "reconciled_state": reconciliation.get("reconciled_state"),
+            "reconciled_management_track": reconciliation.get("reconciled_management_track"),
+            "state_conflict_flag": reconciliation.get("state_conflict_flag"),
+            "state_conflict_reason": reconciliation.get("state_conflict_reason"),
+            "supporting_evidence": reconciliation.get("supporting_evidence", {}),
+        }
+    )
+    outcome_bundle = build_disease_course_bundle(
+        patient_record,
+        state=state,
+        management_track=management_track,
+        latest_assessment=patient_record.get("latest_assessment"),
+    )
+    orchestration_signals.update(
+        {
+            "outcome_events_summary": outcome_bundle.get("outcome_events_summary", {}),
+            "pending_adjudications": outcome_bundle.get("pending_adjudications", []),
+            "current_response_state": outcome_bundle.get("current_response_state", {}),
+            "current_course_status": outcome_bundle.get("current_course_status", ""),
+            "last_adjudicated_event": outcome_bundle.get("last_adjudicated_event", {}),
+            "trial_comparable_endpoints": outcome_bundle.get("trial_comparable_endpoints", []),
+            "current_trial_comparable_profile": outcome_bundle.get("current_trial_comparable_profile", {}),
+        }
+    )
+    copilot_bundle = build_copilot_alerts(
+        patient_record,
+        state=state,
+        management_track=management_track,
+        signals=orchestration_signals,
+        agenda_board=agenda_board,
+        encounters=agenda_board.get("encounters", []),
+        raw_assessment=patient_record.get("latest_assessment"),
+    )
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
@@ -3337,41 +3716,114 @@ def sync_scheduled_events(patient_record, state=None, management_track=None, hor
     )
     persisted = _hydrate_scheduled_event_rows(c.fetchall())
     conn.close()
-    persisted_by_key = {
-        (row.get("event_type"), row.get("management_track"), row.get("due_date")): row
-        for row in persisted
-    }
+    persisted_by_key = {str(row.get("schedule_key") or ""): row for row in persisted if str(row.get("schedule_key") or "")}
     merged_schedule = []
     for seed in schedule_seed:
-        key = (seed.get("event_type"), seed.get("management_track"), seed.get("due_date"))
+        key = _schedule_event_key(seed)
         persisted_row = persisted_by_key.get(key, {})
         merged_item = dict(seed)
         merged_item.update(
             {
                 "id": persisted_row.get("id"),
+                "schedule_key": persisted_row.get("schedule_key") or seed.get("schedule_key") or seed.get("agenda_key"),
+                "encounter_key": persisted_row.get("encounter_key") or seed.get("encounter_key"),
+                "plan_key": persisted_row.get("plan_key") or seed.get("plan_key") or plan_key,
+                "ideal_due_at": str(persisted_row.get("ideal_due_at") or seed.get("ideal_due_at") or seed.get("due_date") or "")[:10],
+                "scheduled_due_at": str(persisted_row.get("scheduled_due_at") or seed.get("scheduled_due_at") or seed.get("due_date") or "")[:10],
+                "delay_days": int(persisted_row.get("delay_days") or seed.get("delay_days") or 0),
                 "completed": bool(persisted_row.get("completed")),
                 "completed_date": persisted_row.get("completed_date", ""),
+                "completed_at": str(persisted_row.get("completed_date") or seed.get("completed_at") or "")[:10],
                 "completed_visit_id": persisted_row.get("completed_visit_id"),
                 "overdue_alert_sent": bool(persisted_row.get("overdue_alert_sent")),
+                "required": bool(seed.get("required", True)),
+                "action_mode": seed.get("action_mode", "capture"),
+                "completion_rule": dict(seed.get("completion_rule") or {}),
             }
         )
         if merged_item.get("completed"):
             merged_item["status"] = "completed"
-        elif str(merged_item.get("due_date") or merged_item.get("due_at") or "")[:10] == date.today().isoformat():
+        elif str(merged_item.get("scheduled_due_at") or merged_item.get("due_date") or merged_item.get("due_at") or "")[:10] == date.today().isoformat():
             merged_item["status"] = "due_today"
         merged_schedule.append(merged_item)
+    merged_schedule.sort(key=_schedule_sort_key)
     active_schedule = [item for item in merged_schedule if item.get("status") not in {"completed", "cancelled", "superseded"}]
     archived_schedule = [item for item in merged_schedule if item.get("status") in {"completed", "cancelled", "superseded"}]
+    schedule_by_key = {str(item.get("schedule_key") or ""): item for item in merged_schedule if str(item.get("schedule_key") or "")}
+    persisted_agenda_by_key = {
+        str(item.get("agenda_key") or ""): item
+        for item in list(patient_record.get("agenda_items") or [])
+        if str(item.get("agenda_key") or "")
+    }
+    enriched_agenda_items = []
+    for item in list(agenda_board.get("items") or []):
+        current = dict(item)
+        persisted_agenda = persisted_agenda_by_key.get(str(current.get("agenda_key") or ""), {})
+        scheduled = schedule_by_key.get(str(current.get("agenda_key") or ""), {})
+        current["id"] = persisted_agenda.get("id", current.get("id"))
+        current["plan_key"] = scheduled.get("plan_key") or plan_key
+        current["ideal_due_at"] = scheduled.get("ideal_due_at") or current.get("ideal_due_at") or current.get("due_at") or ""
+        current["scheduled_due_at"] = scheduled.get("scheduled_due_at") or current.get("scheduled_due_at") or current.get("due_at") or ""
+        current["delay_days"] = int(scheduled.get("delay_days") or current.get("delay_days") or 0)
+        current["completed_at"] = scheduled.get("completed_at") or persisted_agenda.get("completed_at") or current.get("completed_at") or ""
+        current["required"] = bool(scheduled.get("required", current.get("required", True)))
+        current["action_mode"] = scheduled.get("action_mode") or current.get("action_mode") or "capture"
+        enriched_agenda_items.append(current)
+    enriched_agenda_items.sort(key=lambda item: _schedule_sort_key(item))
+    enriched_encounters = build_encounter_plans(
+        enriched_agenda_items,
+        state=state,
+        management_track=management_track,
+        protocol_trace=agenda_board.get("protocol_trace") or {},
+    )
+    enriched_encounters.sort(key=lambda item: _schedule_sort_key(item))
+    actionable_encounters = [item for item in enriched_encounters if str(item.get("status") or "") not in {"completed", "cancelled", "superseded"}]
+    next_encounter = next(
+        (encounter for encounter in actionable_encounters if str(encounter.get("visit_modality") or "") != "async"),
+        actionable_encounters[0] if actionable_encounters else {},
+    )
+    agenda_board["items"] = enriched_agenda_items
+    agenda_board["active_items"] = [item for item in enriched_agenda_items if item.get("status") not in {"completed", "cancelled", "superseded"}]
+    agenda_board["encounters"] = enriched_encounters
+    agenda_board["next_encounter"] = next_encounter
+    master_followup_plan = build_master_followup_plan(
+        patient_record,
+        state=state,
+        management_track=management_track,
+        agenda_board=agenda_board,
+        signals=orchestration_signals,
+        copilot_alerts=copilot_bundle.get("alerts", []),
+        next_best_action=orchestration_signals.get("next_best_action") or {},
+        plan_key=plan_key,
+        calendar_horizon_months=horizon_months,
+    )
     return {
         "state": state,
         "management_track": management_track,
         "anchor_date": anchor_date,
         "anchor_source": anchor.get("anchor_source", ""),
         "schedule": active_schedule,
+        "scheduled_items": merged_schedule,
         "active_schedule": active_schedule,
         "archived_schedule": archived_schedule,
         "protocol_trace": agenda_board.get("protocol_trace", {}),
         "protocol_label": (agenda_board.get("stage_protocol") or {}).get("title", ""),
+        "scheduled_encounters": enriched_encounters,
+        "encounters": enriched_encounters,
+        "next_encounter": next_encounter,
+        "master_followup_plan": master_followup_plan,
+        "master_followup_summary": master_followup_plan.get("summary", {}),
+        "schedule_anchor_strength": "weak" if (agenda_board.get("protocol_trace") or {}).get("anchor_is_fallback") else "strong",
+        "milestone_plan": outcome_bundle.get("milestone_plan", []),
+        "outcome_anchor": outcome_bundle.get("outcome_anchor", {}),
+        "pending_adjudication_tasks": outcome_bundle.get("pending_adjudication_tasks", []),
+        "outcome_events_summary": outcome_bundle.get("outcome_events_summary", {}),
+        "pending_adjudications": outcome_bundle.get("pending_adjudications", []),
+        "current_response_state": outcome_bundle.get("current_response_state", {}),
+        "current_course_status": outcome_bundle.get("current_course_status", ""),
+        "last_adjudicated_event": outcome_bundle.get("last_adjudicated_event", {}),
+        "trial_comparable_endpoints": outcome_bundle.get("trial_comparable_endpoints", []),
+        "current_trial_comparable_profile": outcome_bundle.get("current_trial_comparable_profile", {}),
     }
 
 
@@ -3724,11 +4176,345 @@ def _persist_recommendation_audit(cursor, audit):
     )
 
 
+def _persist_copilot_alerts(cursor, patient_id, alerts, source_snapshot_id=None):
+    alert_models = [dict(alert) for alert in (alerts or []) if isinstance(alert, dict)]
+    alert_keys = {str(alert.get("alert_key") or "").strip() for alert in alert_models if str(alert.get("alert_key") or "").strip()}
+
+    if alert_keys:
+        cursor.execute(
+            f"""
+            UPDATE smart_alerts
+            SET active = 0
+            WHERE patient_id = ?
+              AND COALESCE(active, 1) = 1
+              AND COALESCE(alert_key, '') NOT IN ({",".join(["?"] * len(alert_keys))})
+            """,
+            (patient_id, *alert_keys),
+        )
+    else:
+        cursor.execute(
+            '''
+            UPDATE smart_alerts
+            SET active = 0
+            WHERE patient_id = ? AND COALESCE(active, 1) = 1
+            ''',
+            (patient_id,),
+        )
+
+    existing_by_key = {}
+    cursor.execute(
+        '''
+        SELECT id, alert_key, acknowledged
+        FROM smart_alerts
+        WHERE patient_id = ? AND COALESCE(active, 1) = 1
+        ''',
+        (patient_id,),
+    )
+    for row in cursor.fetchall():
+        existing_by_key[str(row[1] or "")] = {"id": row[0], "acknowledged": row[2]}
+
+    for alert in alert_models:
+        alert_key = str(alert.get("alert_key") or "").strip()
+        if not alert_key:
+            continue
+        payload = dict(alert)
+        previous = existing_by_key.get(alert_key)
+        if previous:
+            cursor.execute(
+                '''
+                UPDATE smart_alerts
+                SET alert_date = CURRENT_TIMESTAMP,
+                    alert_type = ?,
+                    decision_domain = ?,
+                    severity = ?,
+                    title = ?,
+                    description = ?,
+                    data_json = ?,
+                    source_snapshot_id = ?,
+                    active = 1
+                WHERE id = ?
+                ''',
+                (
+                    alert.get("category"),
+                    alert.get("decision_domain"),
+                    alert.get("severity"),
+                    alert.get("title"),
+                    alert.get("message"),
+                    _json_blob(payload),
+                    source_snapshot_id,
+                    previous["id"],
+                ),
+            )
+            continue
+        cursor.execute(
+            '''
+            INSERT INTO smart_alerts (
+                patient_id, alert_key, alert_type, decision_domain, severity, title,
+                description, data_json, source_snapshot_id, active, acknowledged
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)
+            ''',
+            (
+                patient_id,
+                alert_key,
+                alert.get("category"),
+                alert.get("decision_domain"),
+                alert.get("severity"),
+                alert.get("title"),
+                alert.get("message"),
+                _json_blob(payload),
+                source_snapshot_id,
+            ),
+        )
+
+
+def _persist_outcome_events(cursor, patient_id, events):
+    models = [dict(event) for event in (events or []) if isinstance(event, dict)]
+    event_keys = {str(item.get("event_key") or "").strip() for item in models if str(item.get("event_key") or "").strip()}
+
+    if event_keys:
+        cursor.execute(
+            f"""
+            UPDATE outcome_events
+            SET active = 0, updated_at = CURRENT_TIMESTAMP
+            WHERE patient_id = ?
+              AND COALESCE(active, 1) = 1
+              AND COALESCE(event_key, '') NOT IN ({",".join(["?"] * len(event_keys))})
+            """,
+            (patient_id, *event_keys),
+        )
+    else:
+        cursor.execute(
+            """
+            UPDATE outcome_events
+            SET active = 0, updated_at = CURRENT_TIMESTAMP
+            WHERE patient_id = ? AND COALESCE(active, 1) = 1
+            """,
+            (patient_id,),
+        )
+
+    existing_by_key = {}
+    cursor.execute(
+        """
+        SELECT id, event_key
+        FROM outcome_events
+        WHERE patient_id = ?
+        """,
+        (patient_id,),
+    )
+    for row in cursor.fetchall():
+        existing_by_key[str(row[1] or "")] = row[0]
+
+    for event in models:
+        event_key = str(event.get("event_key") or "").strip()
+        if not event_key:
+            continue
+        blocking_fields = list(event.get("blocking_fields") or [])
+        evidence_basis = list(event.get("evidence_basis") or [])
+        payload = dict(event.get("payload") or {})
+        existing_id = existing_by_key.get(event_key)
+        values = (
+            event_key,
+            event.get("event_type"),
+            event.get("scenario_state"),
+            event.get("management_track"),
+            event.get("axis"),
+            event.get("adjudication_status"),
+            event.get("event_date"),
+            event.get("source_priority"),
+            event.get("decision_impact"),
+            event.get("summary"),
+            1 if event.get("provisional") else 0,
+            1,
+            _json_blob(blocking_fields),
+            _json_blob(evidence_basis),
+            _json_blob(payload),
+        )
+        if existing_id:
+            cursor.execute(
+                """
+                UPDATE outcome_events
+                SET event_key = ?,
+                    event_type = ?,
+                    scenario_state = ?,
+                    management_track = ?,
+                    axis = ?,
+                    adjudication_status = ?,
+                    event_date = ?,
+                    source_priority = ?,
+                    decision_impact = ?,
+                    summary = ?,
+                    provisional = ?,
+                    active = ?,
+                    blocking_fields_json = ?,
+                    evidence_basis_json = ?,
+                    payload_json = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (*values, existing_id),
+            )
+        else:
+            cursor.execute(
+                """
+                INSERT INTO outcome_events (
+                    patient_id, event_key, event_type, scenario_state, management_track, axis,
+                    adjudication_status, event_date, source_priority, decision_impact, summary,
+                    provisional, active, blocking_fields_json, evidence_basis_json, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (patient_id, *values),
+            )
+
+
+def _persist_adjudication_snapshot(cursor, patient_id, bundle):
+    cursor.execute(
+        """
+        INSERT INTO adjudication_snapshots (
+            patient_id, state, management_track, engine_version, current_course_status,
+            current_response_state_json, last_adjudicated_event_json, pending_adjudications_json,
+            outcome_events_summary_json, milestone_plan_json, outcome_anchor_json, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(patient_id) DO UPDATE SET
+            state=excluded.state,
+            management_track=excluded.management_track,
+            engine_version=excluded.engine_version,
+            current_course_status=excluded.current_course_status,
+            current_response_state_json=excluded.current_response_state_json,
+            last_adjudicated_event_json=excluded.last_adjudicated_event_json,
+            pending_adjudications_json=excluded.pending_adjudications_json,
+            outcome_events_summary_json=excluded.outcome_events_summary_json,
+            milestone_plan_json=excluded.milestone_plan_json,
+            outcome_anchor_json=excluded.outcome_anchor_json,
+            updated_at=CURRENT_TIMESTAMP
+        """,
+        (
+            patient_id,
+            bundle.get("state"),
+            bundle.get("management_track"),
+            bundle.get("engine_version"),
+            bundle.get("current_course_status"),
+            _json_blob(bundle.get("current_response_state") or {}),
+            _json_blob(bundle.get("last_adjudicated_event") or {}),
+            _json_blob(bundle.get("pending_adjudications") or []),
+            _json_blob(bundle.get("outcome_events_summary") or {}),
+            _json_blob(bundle.get("milestone_plan") or []),
+            _json_blob(bundle.get("outcome_anchor") or {}),
+        ),
+    )
+
+
+def _persist_trial_benchmark_snapshot(cursor, patient_id, bundle):
+    benchmark_snapshot = {
+        "benchmark_snapshots": list(bundle.get("benchmark_snapshots") or []),
+        "survival_status": dict(bundle.get("survival_status") or {}),
+    }
+    cursor.execute(
+        """
+        INSERT INTO trial_benchmark_snapshots (
+            patient_id, state, management_track, engine_version,
+            current_trial_profile_json, trial_endpoints_json, benchmark_snapshot_json, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(patient_id) DO UPDATE SET
+            state=excluded.state,
+            management_track=excluded.management_track,
+            engine_version=excluded.engine_version,
+            current_trial_profile_json=excluded.current_trial_profile_json,
+            trial_endpoints_json=excluded.trial_endpoints_json,
+            benchmark_snapshot_json=excluded.benchmark_snapshot_json,
+            updated_at=CURRENT_TIMESTAMP
+        """,
+        (
+            patient_id,
+            bundle.get("state"),
+            bundle.get("management_track"),
+            bundle.get("engine_version"),
+            _json_blob(bundle.get("current_trial_comparable_profile") or {}),
+            _json_blob(bundle.get("trial_comparable_endpoints") or []),
+            _json_blob(benchmark_snapshot),
+        ),
+    )
+
+
+def _build_copilot_orchestration(patient_record, signals=None):
+    from prostanet.domains.patient_tracking.copilot_alerts import build_copilot_alerts
+    from prostanet.domains.patient_tracking.followup_agenda import enrich_agenda_board_with_encounters
+    from prostanet.domains.patient_tracking.master_followup_plan import build_master_followup_plan
+    from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
+
+    if not patient_record or not patient_record.get("identity"):
+        return {}
+
+    reconciliation = build_reconciled_state(patient_record, patient_record.get("latest_assessment"))
+    state = (
+        reconciliation.get("reconciled_state")
+        or (patient_record.get("latest_assessment") or {}).get("state")
+        or (patient_record.get("prior_history") or {}).get("current_state")
+        or "diagnostic_workup"
+    )
+    management_track = reconciliation.get("reconciled_management_track") or "diagnostic_surveillance"
+    agenda_board = refresh_followup_agenda(patient_record)
+    refreshed = get_patient_full_record(patient_record["identity"]["id"]) or patient_record
+    persisted_items = refreshed.get("agenda_items", [])
+    active_items = [item for item in persisted_items if item.get("status") not in {"completed", "superseded", "cancelled"}]
+    archived_items = [item for item in persisted_items if item.get("status") in {"completed", "superseded", "cancelled"}]
+    agenda_board["items"] = active_items
+    agenda_board["active_items"] = active_items
+    agenda_board["archived_items"] = archived_items
+    agenda_board["next_due_items"] = [item for item in active_items if item.get("status") in {"due", "due_today"}][:4]
+    agenda_board["overdue_items"] = [item for item in active_items if item.get("status") == "overdue"][:4]
+    agenda_board["active_recommendations"] = [item for item in active_items if item.get("status") in {"due", "due_today", "overdue", "scheduled", "blocked"}][:5]
+    agenda_board = enrich_agenda_board_with_encounters(agenda_board, state, management_track)
+    sync_scheduled_events(refreshed, state=state, management_track=management_track)
+
+    orchestration_signals = dict(signals or refreshed.get("latest_signal_snapshot") or {})
+    orchestration_signals.update(
+        {
+            "explicit_state": reconciliation.get("explicit_state"),
+            "reconciled_state": reconciliation.get("reconciled_state"),
+            "reconciled_management_track": reconciliation.get("reconciled_management_track"),
+            "state_conflict_flag": reconciliation.get("state_conflict_flag"),
+            "state_conflict_reason": reconciliation.get("state_conflict_reason"),
+            "supporting_evidence": reconciliation.get("supporting_evidence", {}),
+        }
+    )
+    copilot_bundle = build_copilot_alerts(
+        refreshed,
+        state=state,
+        management_track=management_track,
+        signals=orchestration_signals,
+        agenda_board=agenda_board,
+        encounters=agenda_board.get("encounters", []),
+        raw_assessment=refreshed.get("latest_assessment"),
+    )
+    master_followup_plan = build_master_followup_plan(
+        refreshed,
+        state=state,
+        management_track=management_track,
+        agenda_board=agenda_board,
+        signals=orchestration_signals,
+        copilot_alerts=copilot_bundle.get("alerts", []),
+        next_best_action=orchestration_signals.get("next_best_action") or {},
+    )
+    return {
+        "state": state,
+        "management_track": management_track,
+        "signals": orchestration_signals,
+        "agenda_board": agenda_board,
+        "encounters": agenda_board.get("encounters", []),
+        "copilot_alerts": copilot_bundle.get("alerts", []),
+        "alert_summary": copilot_bundle.get("summary", {}),
+        "master_followup_plan": master_followup_plan,
+        "master_followup_summary": master_followup_plan.get("summary", {}),
+        "schedule_anchor_strength": "weak" if (agenda_board.get("protocol_trace") or {}).get("anchor_is_fallback") else "strong",
+    }
+
+
 def refresh_longitudinal_intelligence(nss_or_id, event_id=None, force_recompute=False):
     from prostanet.domains.patient_tracking.longitudinal_intelligence import (
         build_longitudinal_intelligence_bundle,
         build_recommendation_audit,
     )
+    from prostanet.domains.patient_tracking.disease_course_outcomes import build_disease_course_bundle
 
     if force_recompute:
         recompute_patient_care_plan(nss_or_id)
@@ -3747,6 +4533,12 @@ def refresh_longitudinal_intelligence(nss_or_id, event_id=None, force_recompute=
     conn.close()
     refreshed = get_patient_full_record(nss_or_id)
     latest_snapshot = dict(refreshed.get("latest_signal_snapshot") or {})
+    outcome_bundle = build_disease_course_bundle(
+        refreshed,
+        state=bundle.get("signals", {}).get("reconciled_state") or bundle.get("signals", {}).get("state") or "",
+        management_track=bundle.get("signals", {}).get("reconciled_management_track") or bundle.get("signals", {}).get("management_track") or "",
+        latest_assessment=refreshed.get("latest_assessment"),
+    )
     latest_snapshot.update(
         {
             "explicit_state": bundle.get("signals", {}).get("explicit_state"),
@@ -3755,10 +4547,28 @@ def refresh_longitudinal_intelligence(nss_or_id, event_id=None, force_recompute=
             "state_conflict_flag": bundle.get("signals", {}).get("state_conflict_flag"),
             "state_conflict_reason": bundle.get("signals", {}).get("state_conflict_reason"),
             "supporting_evidence": bundle.get("signals", {}).get("supporting_evidence", {}),
+            "outcome_events_summary": outcome_bundle.get("outcome_events_summary", {}),
+            "pending_adjudications": outcome_bundle.get("pending_adjudications", []),
+            "current_response_state": outcome_bundle.get("current_response_state", {}),
+            "current_course_status": outcome_bundle.get("current_course_status", ""),
+            "last_adjudicated_event": outcome_bundle.get("last_adjudicated_event", {}),
+            "trial_comparable_endpoints": outcome_bundle.get("trial_comparable_endpoints", []),
+            "current_trial_comparable_profile": outcome_bundle.get("current_trial_comparable_profile", {}),
         }
     )
     if not latest_snapshot:
         latest_snapshot = bundle.get("signals", {})
+    orchestration = _build_copilot_orchestration(refreshed, signals=latest_snapshot)
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    signal_snapshot_id = (refreshed.get("latest_signal_snapshot") or {}).get("id")
+    _persist_copilot_alerts(c, refreshed["identity"]["id"], orchestration.get("copilot_alerts", []), source_snapshot_id=signal_snapshot_id)
+    _persist_outcome_events(c, refreshed["identity"]["id"], outcome_bundle.get("outcome_events", []))
+    _persist_adjudication_snapshot(c, refreshed["identity"]["id"], outcome_bundle)
+    _persist_trial_benchmark_snapshot(c, refreshed["identity"]["id"], outcome_bundle)
+    conn.commit()
+    conn.close()
+    refreshed = get_patient_full_record(nss_or_id) or refreshed
     open_proposals = [
         proposal for proposal in (refreshed.get("transition_proposals") or []) if proposal.get("proposal_status") == "open"
     ]
@@ -3768,6 +4578,20 @@ def refresh_longitudinal_intelligence(nss_or_id, event_id=None, force_recompute=
         "transition_proposals": open_proposals,
         "next_best_action": latest_snapshot.get("next_best_action") or bundle.get("next_best_action", {}),
         "recommendation_audit": recent_audit,
+        "copilot_alerts": get_patient_alerts(refreshed["identity"]["id"]),
+        "alert_summary": orchestration.get("alert_summary", {}),
+        "encounters": orchestration.get("encounters", []),
+        "master_followup_plan": orchestration.get("master_followup_plan", {}),
+        "master_followup_summary": orchestration.get("master_followup_summary", {}),
+        "schedule_anchor_strength": orchestration.get("schedule_anchor_strength", "strong"),
+        "outcome_events": outcome_bundle.get("outcome_events", []),
+        "outcome_events_summary": outcome_bundle.get("outcome_events_summary", {}),
+        "pending_adjudications": outcome_bundle.get("pending_adjudications", []),
+        "current_response_state": outcome_bundle.get("current_response_state", {}),
+        "current_course_status": outcome_bundle.get("current_course_status", ""),
+        "last_adjudicated_event": outcome_bundle.get("last_adjudicated_event", {}),
+        "trial_comparable_endpoints": outcome_bundle.get("trial_comparable_endpoints", []),
+        "current_trial_comparable_profile": outcome_bundle.get("current_trial_comparable_profile", {}),
     }
 
 
@@ -3794,6 +4618,8 @@ def refresh_followup_agenda(patient_record):
 
 
 def get_patient_agenda(nss_or_id):
+    from prostanet.domains.patient_tracking.followup_agenda import enrich_agenda_board_with_encounters, longitudinal_item_sort_key
+
     record = get_patient_full_record(nss_or_id)
     if not record:
         return None
@@ -3805,9 +4631,65 @@ def get_patient_agenda(nss_or_id):
     agenda_board["items"] = active_items
     agenda_board["active_items"] = active_items
     agenda_board["archived_items"] = archived_items
-    agenda_board["next_due_items"] = [item for item in active_items if item.get("status") == "due"][:4]
+    agenda_board["next_due_items"] = [item for item in active_items if item.get("status") in {"due", "due_today"}][:4]
     agenda_board["overdue_items"] = [item for item in active_items if item.get("status") == "overdue"][:4]
     agenda_board["active_recommendations"] = [item for item in active_items if item.get("status") in {"due", "overdue", "scheduled", "blocked"}][:5]
+    agenda_board = enrich_agenda_board_with_encounters(
+        agenda_board,
+        agenda_board.get("state") or agenda_board.get("protocol_trace", {}).get("state") or agenda_board.get("stage_protocol", {}).get("state") or "",
+        agenda_board.get("management_track") or "",
+    )
+    schedule_bundle = sync_scheduled_events(
+        refreshed,
+        state=agenda_board.get("state") or "",
+        management_track=agenda_board.get("management_track") or "",
+    )
+    schedule_by_key = {
+        str(item.get("schedule_key") or ""): item
+        for item in (schedule_bundle.get("scheduled_items") or [])
+        if str(item.get("schedule_key") or "")
+    }
+    merged_active_items = []
+    for item in list(agenda_board.get("active_items") or []):
+        current = dict(item)
+        scheduled = schedule_by_key.get(str(current.get("agenda_key") or ""), {})
+        current["plan_key"] = scheduled.get("plan_key") or current.get("plan_key") or (schedule_bundle.get("master_followup_plan") or {}).get("plan_key", "")
+        current["ideal_due_at"] = scheduled.get("ideal_due_at") or current.get("ideal_due_at") or current.get("due_at") or ""
+        current["scheduled_due_at"] = scheduled.get("scheduled_due_at") or current.get("scheduled_due_at") or current.get("due_at") or ""
+        current["delay_days"] = int(scheduled.get("delay_days") or current.get("delay_days") or 0)
+        current["completed_at"] = scheduled.get("completed_at") or current.get("completed_at") or ""
+        current["required"] = bool(scheduled.get("required", current.get("required", True)))
+        current["action_mode"] = scheduled.get("action_mode") or current.get("action_mode") or "capture"
+        merged_active_items.append(current)
+    merged_active_items.sort(key=longitudinal_item_sort_key)
+    agenda_board["items"] = merged_active_items
+    agenda_board["active_items"] = merged_active_items
+    agenda_board["next_due_items"] = [item for item in merged_active_items if item.get("status") in {"due", "due_today"}][:4]
+    agenda_board["overdue_items"] = [item for item in merged_active_items if item.get("status") == "overdue"][:4]
+    agenda_board["active_recommendations"] = [
+        item
+        for item in merged_active_items
+        if item.get("status") in {"due", "overdue", "scheduled", "blocked", "due_today"}
+    ][:5]
+    agenda_board["master_followup_plan"] = schedule_bundle.get("master_followup_plan", {})
+    agenda_board["master_followup_summary"] = schedule_bundle.get("master_followup_summary", {})
+    agenda_board["alerts_linked"] = (schedule_bundle.get("master_followup_plan") or {}).get("blocking_alerts", [])
+    agenda_board["encounter_tasks"] = [
+        task
+        for encounter in (agenda_board.get("encounters") or [])
+        for task in list(encounter.get("tasks") or [])
+    ]
+    agenda_board["followup_tasks"] = list(agenda_board.get("encounter_tasks") or [])
+    agenda_board["adjudication_tasks"] = schedule_bundle.get("pending_adjudication_tasks", [])
+    agenda_board["milestone_plan"] = schedule_bundle.get("milestone_plan", [])
+    agenda_board["outcome_anchor"] = schedule_bundle.get("outcome_anchor", {})
+    agenda_board["outcome_events_summary"] = schedule_bundle.get("outcome_events_summary", {})
+    agenda_board["pending_adjudications"] = schedule_bundle.get("pending_adjudications", [])
+    agenda_board["current_response_state"] = schedule_bundle.get("current_response_state", {})
+    agenda_board["current_course_status"] = schedule_bundle.get("current_course_status", "")
+    agenda_board["last_adjudicated_event"] = schedule_bundle.get("last_adjudicated_event", {})
+    agenda_board["trial_comparable_endpoints"] = schedule_bundle.get("trial_comparable_endpoints", [])
+    agenda_board["current_trial_comparable_profile"] = schedule_bundle.get("current_trial_comparable_profile", {})
     return agenda_board
 
 
@@ -3816,6 +4698,41 @@ def get_patient_signals(nss_or_id):
     if not bundle:
         return None
     return bundle.get("signals", {})
+
+
+def get_patient_outcomes(nss_or_id):
+    bundle = refresh_longitudinal_intelligence(nss_or_id, force_recompute=False)
+    if not bundle:
+        return None
+    return {
+        "outcome_events": bundle.get("outcome_events", []),
+        "outcome_events_summary": bundle.get("outcome_events_summary", {}),
+        "pending_adjudications": bundle.get("pending_adjudications", []),
+        "current_response_state": bundle.get("current_response_state", {}),
+        "current_course_status": bundle.get("current_course_status", ""),
+        "last_adjudicated_event": bundle.get("last_adjudicated_event", {}),
+        "trial_comparable_endpoints": bundle.get("trial_comparable_endpoints", []),
+        "current_trial_comparable_profile": bundle.get("current_trial_comparable_profile", {}),
+    }
+
+
+def get_cohort_benchmarks():
+    from prostanet.domains.patient_tracking.disease_course_outcomes import build_cohort_benchmark_aggregate
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT id FROM patient_identity ORDER BY id ASC")
+    patient_ids = [int(row["id"]) for row in c.fetchall()]
+    conn.close()
+
+    patient_records = []
+    for patient_id in patient_ids:
+        refresh_longitudinal_intelligence(patient_id, force_recompute=False)
+        record = get_patient_full_record(patient_id)
+        if record:
+            patient_records.append(record)
+    return build_cohort_benchmark_aggregate(patient_records)
 
 
 def get_patient_next_best_action(nss_or_id):
@@ -3858,7 +4775,7 @@ def _agenda_completion_state(agenda_item, data):
 def _resolve_followup_agenda_item(cursor, patient_id, agenda_id, data, visit_record_id=None):
     cursor.execute(
         '''
-        SELECT item_type, due_at, required_inputs_json, completion_rule_json
+        SELECT agenda_key, item_type, due_at, required_inputs_json, completion_rule_json
         FROM followup_agenda_items
         WHERE id = ? AND patient_id = ?
         ''',
@@ -3868,10 +4785,11 @@ def _resolve_followup_agenda_item(cursor, patient_id, agenda_id, data, visit_rec
     if not row:
         return False
     agenda_item = {
-        "item_type": row[0],
-        "due_at": row[1],
-        "required_inputs": _parse_json_blob(row[2], []),
-        "completion_rule": _parse_json_blob(row[3], {}),
+        "agenda_key": row[0],
+        "item_type": row[1],
+        "due_at": row[2],
+        "required_inputs": _parse_json_blob(row[3], []),
+        "completion_rule": _parse_json_blob(row[4], {}),
     }
     status = _agenda_completion_state(agenda_item, data)
     if status == "completed":
@@ -3886,15 +4804,7 @@ def _resolve_followup_agenda_item(cursor, patient_id, agenda_id, data, visit_rec
             ''',
             (visit_record_id, agenda_id, patient_id),
         )
-        schedule_event_type = {
-            "lab_panel": "labs",
-            "pro_assessment": "qol",
-            "toxicity_review": "toxicity",
-            "therapy_review": "therapy_review",
-            "supportive_care": "supportive_care",
-            "goals_of_care": "goals_of_care",
-        }.get(agenda_item["item_type"], agenda_item["item_type"])
-        if schedule_event_type and agenda_item.get("due_at"):
+        if agenda_item.get("agenda_key"):
             cursor.execute(
                 '''
                 UPDATE scheduled_events
@@ -3902,11 +4812,9 @@ def _resolve_followup_agenda_item(cursor, patient_id, agenda_id, data, visit_rec
                     completed_date = DATE('now'),
                     completed_visit_id = COALESCE(?, completed_visit_id)
                 WHERE patient_id = ?
-                  AND event_type = ?
-                  AND completed = 0
-                  AND due_date = ?
+                  AND schedule_key = ?
                 ''',
-                (visit_record_id, patient_id, schedule_event_type, agenda_item["due_at"]),
+                (visit_record_id, patient_id, agenda_item["agenda_key"]),
             )
         return cursor.rowcount >= 0
     if status == "partially_satisfied":
@@ -4023,7 +4931,7 @@ def complete_followup_agenda_item(patient_id, agenda_id, visit_record_id=None):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute(
-            "SELECT item_type, due_at FROM followup_agenda_items WHERE id = ? AND patient_id = ?",
+            "SELECT agenda_key, item_type, due_at FROM followup_agenda_items WHERE id = ? AND patient_id = ?",
             (agenda_id, patient_id),
         )
         agenda_row = c.fetchone()
@@ -4040,15 +4948,7 @@ def complete_followup_agenda_item(patient_id, agenda_id, visit_record_id=None):
         )
         updated = c.rowcount
         if updated and agenda_row:
-            schedule_event_type = {
-                "lab_panel": "labs",
-                "pro_assessment": "qol",
-                "toxicity_review": "toxicity",
-                "therapy_review": "therapy_review",
-                "supportive_care": "supportive_care",
-                "goals_of_care": "goals_of_care",
-            }.get(agenda_row[0], agenda_row[0])
-            if schedule_event_type:
+            if agenda_row[0]:
                 c.execute(
                     '''
                     UPDATE scheduled_events
@@ -4056,11 +4956,9 @@ def complete_followup_agenda_item(patient_id, agenda_id, visit_record_id=None):
                         completed_date = DATE('now'),
                         completed_visit_id = COALESCE(?, completed_visit_id)
                     WHERE patient_id = ?
-                      AND event_type = ?
-                      AND completed = 0
-                      AND due_date = ?
+                      AND schedule_key = ?
                     ''',
-                    (visit_record_id, patient_id, schedule_event_type, agenda_row[1]),
+                    (visit_record_id, patient_id, agenda_row[0]),
                 )
         conn.commit()
         conn.close()
@@ -4668,6 +5566,11 @@ def save_stage_visit_bundle(patient_id, data):
             "visit_date": visit_date,
             "visit_type": data.get("visit_type", "stage_followup"),
             "agenda_submission_mode": data.get("agenda_submission_mode", "full_track"),
+            "encounter_key": data.get("encounter_key", ""),
+            "plan_key": data.get("plan_key", ""),
+            "alert_keys_resolved": list(data.get("alert_keys_resolved") or []),
+            "milestone_event_context": data.get("milestone_event_context", {}),
+            "adjudication_targets": list(data.get("adjudication_targets") or []),
             "payload": dict(data),
         }
 
@@ -4737,6 +5640,9 @@ def save_stage_visit_bundle(patient_id, data):
                     {
                         "agenda_ids": data.get("agenda_ids", []),
                         "agenda_submission_mode": data.get("agenda_submission_mode", "full_track"),
+                        "encounter_key": data.get("encounter_key", ""),
+                        "plan_key": data.get("plan_key", ""),
+                        "alert_keys_resolved": list(data.get("alert_keys_resolved") or []),
                     }
                 ),
             ),
@@ -4862,6 +5768,10 @@ def save_stage_visit_bundle(patient_id, data):
             "visit_record_id": visit_record_id,
             "agenda": agenda,
             "intelligence": intelligence,
+            "resolved_alert_keys": list(data.get("alert_keys_resolved") or []),
+            "encounter_key": data.get("encounter_key", ""),
+            "plan_key": data.get("plan_key", ""),
+            "master_followup_plan": intelligence.get("master_followup_plan", {}),
         }
     except Exception as e:
         logger.error(f"Error adding follow-up: {e}")
@@ -5500,8 +6410,8 @@ def create_smart_alert(patient_id, alert_type, severity, title, description, dat
         c = conn.cursor()
         c.execute('''
             INSERT INTO smart_alerts (
-                patient_id, alert_type, severity, title, description, data_json
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                patient_id, alert_type, severity, title, description, data_json, active
+            ) VALUES (?, ?, ?, ?, ?, ?, 1)
         ''', (
             patient_id, alert_type, severity, title, description,
             json.dumps(data_dict) if data_dict else None
@@ -5523,9 +6433,10 @@ def get_patient_alerts(patient_id, unacknowledged_only=True):
         query = "SELECT * FROM smart_alerts WHERE patient_id = ?"
         if unacknowledged_only:
             query += " AND acknowledged = 0"
+        query += " AND COALESCE(active, 1) = 1"
         query += " ORDER BY alert_date DESC"
         c.execute(query, (patient_id,))
-        alerts = [dict(row) for row in c.fetchall()]
+        alerts = _hydrate_alert_rows(c.fetchall())
         conn.close()
         return alerts
     except Exception as e:
@@ -5647,8 +6558,11 @@ def get_patient_full_record(nss_or_id):
         prior_history = c.fetchone()
 
         # 16. Alerts
-        c.execute("SELECT * FROM smart_alerts WHERE patient_id = ? AND acknowledged = 0 ORDER BY alert_date DESC", (patient_id,))
-        alerts = [dict(row) for row in c.fetchall()]
+        c.execute(
+            "SELECT * FROM smart_alerts WHERE patient_id = ? AND acknowledged = 0 AND COALESCE(active, 1) = 1 ORDER BY alert_date DESC",
+            (patient_id,),
+        )
+        alerts = _hydrate_alert_rows(c.fetchall())
 
         # 17. Pivotal Study Matching
         c.execute("SELECT * FROM pivotal_study_matching WHERE patient_id = ? ORDER BY evaluation_date DESC", (patient_id,))
@@ -5739,6 +6653,24 @@ def get_patient_full_record(nss_or_id):
         recommendation_audit = _hydrate_recommendation_audit_rows(c.fetchall())
 
         c.execute(
+            "SELECT * FROM outcome_events WHERE patient_id = ? AND COALESCE(active, 1) = 1 ORDER BY COALESCE(event_date, '') DESC, id DESC",
+            (patient_id,),
+        )
+        outcome_events = _hydrate_outcome_rows(c.fetchall())
+
+        c.execute(
+            "SELECT * FROM adjudication_snapshots WHERE patient_id = ? ORDER BY updated_at DESC, id DESC LIMIT 1",
+            (patient_id,),
+        )
+        adjudication_snapshots = _hydrate_adjudication_snapshot_rows(c.fetchall())
+
+        c.execute(
+            "SELECT * FROM trial_benchmark_snapshots WHERE patient_id = ? ORDER BY updated_at DESC, id DESC LIMIT 1",
+            (patient_id,),
+        )
+        trial_benchmark_snapshots = _hydrate_trial_benchmark_snapshot_rows(c.fetchall())
+
+        c.execute(
             "SELECT * FROM source_documents WHERE patient_id = ? ORDER BY created_at DESC, id DESC",
             (patient_id,),
         )
@@ -5805,6 +6737,9 @@ def get_patient_full_record(nss_or_id):
             'latest_signal_snapshot': latest_signal_snapshot[0] if latest_signal_snapshot else {},
             'transition_proposals': transition_proposals,
             'recommendation_audit': recommendation_audit,
+            'outcome_events': outcome_events,
+            'latest_adjudication_snapshot': adjudication_snapshots[0] if adjudication_snapshots else {},
+            'latest_trial_benchmark_snapshot': trial_benchmark_snapshots[0] if trial_benchmark_snapshots else {},
             'source_documents': source_documents,
             'document_candidates': document_candidates,
             'document_verification_tasks': document_verification_tasks,
@@ -5957,99 +6892,12 @@ def recompute_patient_care_plan(nss_or_id):
 
 
 def check_and_generate_alerts(patient_id):
-    """
-    Motor de alertas inteligentes.
-    Analiza el estado actual del paciente y genera alertas si detecta:
-    - PSA en ascenso
-    - PSADT < 10 meses
-    - Upgrade en biopsia
-    - Cambio de ECOG
-    - BCR detectado
-    - Visita de seguimiento vencida
-    """
+    """Recalcula y persiste la salida canónica de alertas del copiloto."""
     try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        c = conn.cursor()
-
-        # Obtener últimas 2 visitas de seguimiento
-        c.execute("""
-            SELECT * FROM follow_up_visits
-            WHERE patient_id = ? ORDER BY visit_date DESC LIMIT 3
-        """, (patient_id,))
-        visits = [dict(row) for row in c.fetchall()]
-
-        alerts_generated = []
-
-        if len(visits) >= 2:
-            current = visits[0]
-            previous = visits[1]
-
-            # 1. PSA Rising (3 mediciones consecutivas ascendentes)
-            if (current.get('psa_current') and previous.get('psa_current') and
-                current['psa_current'] > previous['psa_current']):
-                if len(visits) >= 3 and visits[1].get('psa_current', 0) > visits[2].get('psa_current', 0):
-                    create_smart_alert(
-                        patient_id, 'psa_rising', 'warning',
-                        'APE en ascenso sostenido',
-                        f"3 mediciones consecutivas en ascenso: {visits[2].get('psa_current', '?')} → {previous['psa_current']} → {current['psa_current']} ng/mL",
-                        {'values': [v.get('psa_current') for v in reversed(visits)]}
-                    )
-                    alerts_generated.append('psa_rising')
-
-            # 2. ECOG Decline
-            if (current.get('ecog_current') is not None and previous.get('ecog_current') is not None and
-                current['ecog_current'] > previous['ecog_current']):
-                create_smart_alert(
-                    patient_id, 'ecog_decline', 'warning',
-                    'Deterioro del estado funcional',
-                    f"ECOG empeoró de {previous['ecog_current']} a {current['ecog_current']}",
-                    {'from': previous['ecog_current'], 'to': current['ecog_current']}
-                )
-                alerts_generated.append('ecog_decline')
-
-        # 3. BCR Detection (post-RP: PSA > 0.2)
-        c.execute("SELECT * FROM surgical_details WHERE patient_id = ?", (patient_id,))
-        surgery = c.fetchone()
-        if surgery and visits:
-            psa_current = visits[0].get('psa_current', 0) or 0
-            if psa_current >= 0.2:
-                # Verificar que no exista ya una alerta reciente
-                c.execute("""
-                    SELECT COUNT(*) as cnt FROM smart_alerts
-                    WHERE patient_id = ? AND alert_type = 'bcr_detected' AND acknowledged = 0
-                """, (patient_id,))
-                if c.fetchone()['cnt'] == 0:
-                    create_smart_alert(
-                        patient_id, 'bcr_detected', 'critical',
-                        'Posible Recurrencia Bioquímica (BCR)',
-                        f"PSA post-prostatectomía = {psa_current} ng/mL (≥0.2 ng/mL = BCR por criterio AUA)",
-                        {'psa': psa_current, 'threshold': 0.2}
-                    )
-                    alerts_generated.append('bcr_detected')
-
-        # 4. Biopsy Upgrade (en VA)
-        c.execute("""
-            SELECT * FROM biopsy_details WHERE patient_id = ? ORDER BY biopsy_date DESC LIMIT 2
-        """, (patient_id,))
-        biopsies = [dict(row) for row in c.fetchall()]
-        if len(biopsies) >= 2:
-            current_isup = biopsies[0].get('isup_grade', 1) or 1
-            prev_isup = biopsies[1].get('isup_grade', 1) or 1
-            if current_isup > prev_isup:
-                create_smart_alert(
-                    patient_id, 'upgrade_biopsy', 'critical',
-                    'Upgrade en biopsia de seguimiento',
-                    f"ISUP cambió de GG{prev_isup} a GG{current_isup}. Considerar salida de Vigilancia Activa.",
-                    {'from_isup': prev_isup, 'to_isup': current_isup}
-                )
-                alerts_generated.append('upgrade_biopsy')
-
-        conn.close()
-        return alerts_generated
-
+        bundle = refresh_longitudinal_intelligence(patient_id, force_recompute=False)
+        return [alert.get("alert_key") or alert.get("title") for alert in bundle.get("copilot_alerts", [])]
     except Exception as e:
-        logger.error(f"Error in alert generation: {e}")
+        logger.error(f"Error generating canonical alerts: {e}")
         return []
 
 

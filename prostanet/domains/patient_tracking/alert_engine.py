@@ -527,4 +527,110 @@ class ClinicalAlertEngine:
         except Exception:
             pass
 
+        # ── Biopsia estructurada alerts ──
+        try:
+            from prostanet.domains.patient_tracking.structured_biopsy import StructuredBiopsyService
+            biopsies = patient.get("biopsies") or []
+            if biopsies:
+                current = biopsies[-1] if isinstance(biopsies[-1], dict) else None
+                previous = biopsies[-2] if len(biopsies) >= 2 and isinstance(biopsies[-2], dict) else None
+                if current:
+                    parsed = StructuredBiopsyService.parse_structured_biopsy(current)
+                    biopsy_alerts = StructuredBiopsyService.evaluate_biopsy_alerts(patient_id, parsed, previous)
+                    for ba in biopsy_alerts:
+                        alerts.append(ClinicalAlert(
+                            patient_id=patient_id, alert_type=ba.get("alert_type", ""),
+                            severity=ba.get("severity", "info"), category=ba.get("category", "pathology"),
+                            title=ba.get("title", ""), message=ba.get("message", ""),
+                            recommended_action=ba.get("recommended_action", ""),
+                            guideline_reference=ba.get("guideline_reference", ""),
+                            triggering_value=ba.get("triggering_value", ""),
+                            threshold=ba.get("threshold", ""),
+                        ))
+        except Exception:
+            pass
+
+        # ── Vigilancia activa alerts ──
+        try:
+            from prostanet.domains.patient_tracking.active_surveillance import ActiveSurveillanceService
+            as_data = patient.get("active_surveillance")
+            if as_data or patient.get("management_track") == "active_surveillance":
+                state = patient.get("state", patient.get("clinical_state", "localized_initial"))
+                as_protocol = ActiveSurveillanceService.build_as_protocol(patient, state)
+                as_alerts = ActiveSurveillanceService.evaluate_as_alerts(patient_id, as_protocol)
+                for aa in as_alerts:
+                    alerts.append(ClinicalAlert(
+                        patient_id=patient_id, alert_type=aa.get("alert_type", ""),
+                        severity=aa.get("severity", "info"), category=aa.get("category", "active_surveillance"),
+                        title=aa.get("title", ""), message=aa.get("message", ""),
+                        recommended_action=aa.get("recommended_action", ""),
+                        guideline_reference=aa.get("guideline_reference", ""),
+                        triggering_value=aa.get("triggering_value", ""),
+                        threshold=aa.get("threshold", ""),
+                    ))
+        except Exception:
+            pass
+
+        # ── Radioterapia detallada alerts ──
+        try:
+            from prostanet.domains.patient_tracking.radiotherapy_detail import RadiotherapyDetailService
+            rt_data = patient.get("radiation_details") or patient.get("radiation")
+            if rt_data:
+                rt_summary = RadiotherapyDetailService.build_rt_history(patient)
+                rt_alerts = RadiotherapyDetailService.evaluate_rt_alerts(patient_id, rt_summary, patient)
+                for ra in rt_alerts:
+                    alerts.append(ClinicalAlert(
+                        patient_id=patient_id, alert_type=ra.get("alert_type", ""),
+                        severity=ra.get("severity", "info"), category=ra.get("category", "radiation_therapy"),
+                        title=ra.get("title", ""), message=ra.get("message", ""),
+                        recommended_action=ra.get("recommended_action", ""),
+                        guideline_reference=ra.get("guideline_reference", ""),
+                        triggering_value=ra.get("triggering_value", ""),
+                        threshold=ra.get("threshold", ""),
+                    ))
+        except Exception:
+            pass
+
+        # ── Eventos esqueléticos alerts ──
+        try:
+            from prostanet.domains.patient_tracking.skeletal_events import SkeletalEventService
+            sre_data = patient.get("skeletal_events") or patient.get("bone_modifying_agent")
+            bone_mets = patient.get("bone_metastasis_count") or patient.get("metastasis_count")
+            if sre_data or bone_mets:
+                state = patient.get("state", patient.get("clinical_state", ""))
+                sre_profile = SkeletalEventService.build_sre_profile(patient, state)
+                sre_alerts = SkeletalEventService.evaluate_sre_alerts(patient_id, sre_profile)
+                for sa in sre_alerts:
+                    alerts.append(ClinicalAlert(
+                        patient_id=patient_id, alert_type=sa.get("alert_type", ""),
+                        severity=sa.get("severity", "info"), category=sa.get("category", "skeletal_event"),
+                        title=sa.get("title", ""), message=sa.get("message", ""),
+                        recommended_action=sa.get("recommended_action", ""),
+                        guideline_reference=sa.get("guideline_reference", ""),
+                        triggering_value=sa.get("triggering_value", ""),
+                        threshold=sa.get("threshold", ""),
+                    ))
+        except Exception:
+            pass
+
+        # ── Endpoints de supervivencia alerts ──
+        try:
+            from prostanet.domains.patient_tracking.survival_endpoints import SurvivalEndpointService
+            state = patient.get("state", patient.get("clinical_state", ""))
+            if state:
+                survival_status = SurvivalEndpointService.compute_endpoints(patient, state)
+                surv_alerts = SurvivalEndpointService.evaluate_survival_alerts(patient_id, survival_status)
+                for sv in surv_alerts:
+                    alerts.append(ClinicalAlert(
+                        patient_id=patient_id, alert_type=sv.get("alert_type", ""),
+                        severity=sv.get("severity", "info"), category=sv.get("category", "survival_endpoint"),
+                        title=sv.get("title", ""), message=sv.get("message", ""),
+                        recommended_action=sv.get("recommended_action", ""),
+                        guideline_reference=sv.get("guideline_reference", ""),
+                        triggering_value=sv.get("triggering_value", ""),
+                        threshold=sv.get("threshold", ""),
+                    ))
+        except Exception:
+            pass
+
         return alerts

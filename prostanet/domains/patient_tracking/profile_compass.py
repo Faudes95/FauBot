@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from prostanet.domains.patient_tracking.followup_agenda import build_agenda_board, infer_management_track
+from prostanet.domains.patient_tracking.followup_agenda import build_agenda_board, infer_management_track, longitudinal_item_sort_key
 from prostanet.domains.patient_tracking.capture_flows import build_missing_input_capture_bundle
 from prostanet.domains.patient_tracking.cohort_analytics import (
     build_patient_kpis,
@@ -11,6 +11,7 @@ from prostanet.domains.patient_tracking.cohort_analytics import (
     compute_patient_endpoint_readiness,
     compute_patient_research_readiness,
 )
+from prostanet.domains.patient_tracking.master_followup_plan import build_master_followup_plan
 from prostanet.domains.patient_tracking.psa_line_monitor import build_psa_by_treatment_line
 from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
 from prostanet.domains.patient_tracking.therapy_catalog import regimen_label, therapy_select_options
@@ -1822,12 +1823,15 @@ def _build_copilot_sections(patient: dict[str, Any], state: str, management_trac
     copilot_logger = logging.getLogger(__name__)
     copilot: dict[str, Any] = {
         "schedule": [],
+        "scheduled_encounters": [],
+        "next_encounter": {},
         "overdue_alerts": [],
         "clinical_alerts": [],
         "comorbidity_scores": {},
         "adt_side_effects": None,
         "schedule_anchor_date": "",
         "schedule_anchor_source": "",
+        "schedule_anchor_strength": "strong",
         "latest_response_assessment": {},
     }
 
@@ -1851,8 +1855,11 @@ def _build_copilot_sections(patient: dict[str, Any], state: str, management_trac
             horizon_months=12,
         )
         copilot["schedule"] = schedule_bundle.get("schedule", [])[:20]
+        copilot["scheduled_encounters"] = schedule_bundle.get("scheduled_encounters", [])[:6]
+        copilot["next_encounter"] = schedule_bundle.get("next_encounter", {})
         copilot["schedule_anchor_date"] = schedule_bundle.get("anchor_date", "")
         copilot["schedule_anchor_source"] = schedule_bundle.get("anchor_source", "")
+        copilot["schedule_anchor_strength"] = schedule_bundle.get("schedule_anchor_strength", "strong")
         copilot["overdue_alerts"] = [
             item for item in (schedule_bundle.get("schedule") or [])
             if item.get("status") == "overdue" and not item.get("completed")
@@ -1862,32 +1869,9 @@ def _build_copilot_sections(patient: dict[str, Any], state: str, management_trac
 
     # ── Clinical alerts ──
     try:
-        from prostanet.domains.patient_tracking.alert_engine import ClinicalAlertEngine
-        alert_data: dict[str, Any] = {}
-        alert_data.update(identity)
-        alert_data.update(baseline)
-        alert_data.update(prior)
-        if followups:
-            last_fu = followups[-1]
-            alert_data["psa"] = last_fu.get("psa_current")
-            alert_data["hemoglobin"] = last_fu.get("hemoglobin_current")
-            alert_data["ecog"] = last_fu.get("ecog_current")
-            alert_data["testosterone"] = last_fu.get("testosterone_current")
-            alert_data["alp"] = last_fu.get("alp_current")
-            if len(followups) >= 2:
-                alert_data["ecog_previous"] = followups[-2].get("ecog_current")
-        alert_data["management_track"] = management_track
-        adt_context = (
-            alert_data.get("current_adt_context")
-            or alert_data.get("adt_context")
-            or (raw_assessment or {}).get("input_snapshot", {}).get("current_adt_context")
-            or (raw_assessment or {}).get("input_snapshot", {}).get("adt_context")
-        )
-        if adt_context:
-            alert_data["adt_context"] = adt_context
-            alert_data["current_adt_context"] = adt_context
-        alerts = ClinicalAlertEngine.run_all(patient_id, alert_data)
-        copilot["clinical_alerts"] = [a.to_dict() for a in alerts]
+        persisted_alerts = patient.get("alerts") or []
+        if persisted_alerts:
+            copilot["clinical_alerts"] = [dict(alert) for alert in persisted_alerts]
     except Exception as exc:
         copilot_logger.debug("Copilot alerts error: %s", exc)
 
@@ -2257,6 +2241,79 @@ def _build_copilot_sections(patient: dict[str, Any], state: str, management_trac
         copilot_logger.debug("Copilot TNM staging error: %s", exc)
         copilot["tnm_staging"] = {"has_data": False}
 
+    # ── Structured biopsy section ──
+    try:
+        from prostanet.domains.patient_tracking.structured_biopsy import StructuredBiopsyService
+        biopsies = patient.get("biopsies") or []
+        if biopsies and isinstance(biopsies[-1], dict):
+            parsed_biopsy = StructuredBiopsyService.parse_structured_biopsy(biopsies[-1])
+            copilot["structured_biopsy"] = StructuredBiopsyService.build_biopsy_summary_for_profile(parsed_biopsy)
+        else:
+            copilot["structured_biopsy"] = {"has_data": False}
+    except Exception as exc:
+        copilot_logger.debug("Copilot structured biopsy error: %s", exc)
+        copilot["structured_biopsy"] = {"has_data": False}
+
+    # ── Active surveillance protocol section ──
+    try:
+        from prostanet.domains.patient_tracking.active_surveillance import ActiveSurveillanceService
+        if management_track == "active_surveillance" or state == "localized_initial":
+            as_data: dict[str, Any] = {}
+            as_data.update(identity)
+            as_data.update(baseline)
+            as_data.update(prior)
+            if followups:
+                as_data.update(followups[-1])
+            as_protocol = ActiveSurveillanceService.build_as_protocol(as_data, state)
+            copilot["active_surveillance"] = ActiveSurveillanceService.build_as_summary_for_profile(as_protocol)
+        else:
+            copilot["active_surveillance"] = {"has_data": False}
+    except Exception as exc:
+        copilot_logger.debug("Copilot active surveillance error: %s", exc)
+        copilot["active_surveillance"] = {"has_data": False}
+
+    # ── Radiotherapy detail section ──
+    try:
+        from prostanet.domains.patient_tracking.radiotherapy_detail import RadiotherapyDetailService
+        rt_courses = patient.get("rt_courses") or patient.get("radiotherapy_courses") or []
+        if rt_courses:
+            rt_summary = RadiotherapyDetailService.build_rt_history(patient)
+            copilot["radiotherapy_detail"] = RadiotherapyDetailService.build_rt_summary_for_profile(rt_summary)
+        else:
+            copilot["radiotherapy_detail"] = {"has_data": False}
+    except Exception as exc:
+        copilot_logger.debug("Copilot radiotherapy detail error: %s", exc)
+        copilot["radiotherapy_detail"] = {"has_data": False}
+
+    # ── Skeletal events section ──
+    try:
+        from prostanet.domains.patient_tracking.skeletal_events import SkeletalEventService
+        sre_raw = patient.get("skeletal_events") or patient.get("sre_events") or []
+        if sre_raw or state in ADVANCED_STATES:
+            sre_data: dict[str, Any] = {}
+            sre_data.update(identity)
+            sre_data.update(baseline)
+            sre_data.update(prior)
+            if followups:
+                sre_data.update(followups[-1])
+            sre_data["skeletal_events"] = sre_raw
+            sre_profile = SkeletalEventService.build_sre_profile(sre_data, state)
+            copilot["skeletal_events"] = SkeletalEventService.build_sre_summary_for_profile(sre_profile)
+        else:
+            copilot["skeletal_events"] = {"has_data": False}
+    except Exception as exc:
+        copilot_logger.debug("Copilot skeletal events error: %s", exc)
+        copilot["skeletal_events"] = {"has_data": False}
+
+    # ── Survival endpoints section ──
+    try:
+        from prostanet.domains.patient_tracking.survival_endpoints import SurvivalEndpointService
+        survival_status = SurvivalEndpointService.compute_endpoints(patient, state)
+        copilot["survival_endpoints"] = SurvivalEndpointService.build_survival_summary_for_profile(survival_status)
+    except Exception as exc:
+        copilot_logger.debug("Copilot survival endpoints error: %s", exc)
+        copilot["survival_endpoints"] = {"has_data": False}
+
     return copilot
 
 
@@ -2294,7 +2351,24 @@ def build_patient_profile_view_model(
         operational_module_label=operational_module_label,
     )
     agenda_board = build_agenda_board(patient, state, management_track, raw_assessment)
-    persisted_agenda_items = patient.get("agenda_items") or agenda_board.get("items", [])
+    persisted_agenda_items = [dict(item) for item in (patient.get("agenda_items") or agenda_board.get("items", []))]
+    scheduled_by_key = {
+        str(item.get("schedule_key") or ""): item
+        for item in (patient.get("scheduled_events") or [])
+        if str(item.get("schedule_key") or "")
+    }
+    for item in persisted_agenda_items:
+        scheduled = scheduled_by_key.get(str(item.get("agenda_key") or ""), {})
+        item["plan_key"] = scheduled.get("plan_key") or item.get("plan_key") or ""
+        item["ideal_due_at"] = scheduled.get("ideal_due_at") or item.get("ideal_due_at") or item.get("due_at") or ""
+        item["scheduled_due_at"] = scheduled.get("scheduled_due_at") or item.get("scheduled_due_at") or item.get("due_at") or ""
+        item["delay_days"] = int(scheduled.get("delay_days") or item.get("delay_days") or 0)
+        item["completed_at"] = scheduled.get("completed_at") or item.get("completed_at") or ""
+        item["required"] = bool(scheduled.get("required", item.get("required", True)))
+        item["action_mode"] = scheduled.get("action_mode") or item.get("action_mode") or "capture"
+        if item["completed_at"] and str(item.get("status") or "") not in {"cancelled", "superseded"}:
+            item["status"] = "completed"
+    persisted_agenda_items.sort(key=longitudinal_item_sort_key)
     active_agenda_items = [item for item in persisted_agenda_items if item.get("status") not in {"completed", "superseded", "cancelled"}]
     archived_agenda_items = [item for item in persisted_agenda_items if item.get("status") in {"completed", "superseded", "cancelled"}]
     next_due_items = [item for item in active_agenda_items if item.get("status") in {"due", "due_today"}][:4]
@@ -2306,6 +2380,28 @@ def build_patient_profile_view_model(
     agenda_board["next_due_items"] = next_due_items
     agenda_board["overdue_items"] = overdue_items
     agenda_board["active_recommendations"] = active_recommendations
+    from prostanet.domains.patient_tracking.encounter_planner import build_encounter_plans
+
+    timeline_agenda_items = sorted(
+        [dict(item) for item in [*active_agenda_items, *archived_agenda_items]],
+        key=longitudinal_item_sort_key,
+    )
+    enriched_encounters = build_encounter_plans(
+        timeline_agenda_items,
+        state=state,
+        management_track=management_track,
+        protocol_trace=agenda_board.get("protocol_trace") or {},
+    )
+    actionable_encounters = [
+        encounter
+        for encounter in enriched_encounters
+        if str(encounter.get("status") or "scheduled") not in {"completed", "cancelled", "superseded"}
+    ]
+    agenda_board["encounters"] = enriched_encounters
+    agenda_board["next_encounter"] = next(
+        (encounter for encounter in actionable_encounters if str(encounter.get("visit_modality") or "") != "async"),
+        actionable_encounters[0] if actionable_encounters else {},
+    )
     latest_signal_snapshot = dict(patient.get("latest_signal_snapshot") or {})
     latest_signal_snapshot.update(
         {
@@ -2317,11 +2413,65 @@ def build_patient_profile_view_model(
             "supporting_evidence": reconciliation.get("supporting_evidence", {}),
         }
     )
+    adjudication_snapshot = dict(patient.get("latest_adjudication_snapshot") or {})
+    trial_benchmark_snapshot = dict(patient.get("latest_trial_benchmark_snapshot") or {})
+    if not adjudication_snapshot or not trial_benchmark_snapshot:
+        from prostanet.domains.patient_tracking.disease_course_outcomes import build_disease_course_bundle
+
+        runtime_outcomes = build_disease_course_bundle(
+            patient,
+            state=state,
+            management_track=management_track,
+            latest_assessment=raw_assessment,
+        )
+        adjudication_snapshot = {
+            "current_course_status": runtime_outcomes.get("current_course_status", ""),
+            "current_response_state": runtime_outcomes.get("current_response_state", {}),
+            "last_adjudicated_event": runtime_outcomes.get("last_adjudicated_event", {}),
+            "pending_adjudications": runtime_outcomes.get("pending_adjudications", []),
+            "outcome_events_summary": runtime_outcomes.get("outcome_events_summary", {}),
+            "milestone_plan": runtime_outcomes.get("milestone_plan", []),
+            "outcome_anchor": runtime_outcomes.get("outcome_anchor", {}),
+        }
+        trial_benchmark_snapshot = {
+            "current_trial_profile": runtime_outcomes.get("current_trial_comparable_profile", {}),
+            "trial_endpoints": runtime_outcomes.get("trial_comparable_endpoints", []),
+            "benchmark_snapshot": {
+                "benchmark_snapshots": runtime_outcomes.get("benchmark_snapshots", []),
+                "survival_status": runtime_outcomes.get("survival_status", {}),
+            },
+        }
+        patient_outcome_events = runtime_outcomes.get("outcome_events", [])
+    else:
+        patient_outcome_events = list(patient.get("outcome_events") or [])
+    latest_signal_snapshot.update(
+        {
+            "outcome_events_summary": adjudication_snapshot.get("outcome_events_summary", {}),
+            "pending_adjudications": adjudication_snapshot.get("pending_adjudications", []),
+            "current_response_state": adjudication_snapshot.get("current_response_state", {}),
+            "current_course_status": adjudication_snapshot.get("current_course_status", ""),
+            "last_adjudicated_event": adjudication_snapshot.get("last_adjudicated_event", {}),
+            "trial_comparable_endpoints": trial_benchmark_snapshot.get("trial_endpoints", []),
+            "current_trial_comparable_profile": trial_benchmark_snapshot.get("current_trial_profile", {}),
+        }
+    )
     transition_proposals = [
         proposal for proposal in (patient.get("transition_proposals") or []) if proposal.get("proposal_status") == "open"
     ]
     document_board = _build_document_board(patient)
     copilot_sections = _build_copilot_sections(patient, state, management_track, raw_assessment)
+    master_followup_plan = build_master_followup_plan(
+        patient,
+        state=state,
+        management_track=management_track,
+        agenda_board=agenda_board,
+        signals=latest_signal_snapshot,
+        copilot_alerts=copilot_sections.get("clinical_alerts") or patient.get("alerts") or [],
+        next_best_action=latest_signal_snapshot.get("next_best_action") or {},
+    )
+    agenda_board["master_followup_plan"] = master_followup_plan
+    agenda_board["master_followup_summary"] = master_followup_plan.get("summary", {})
+    agenda_board["alerts_linked"] = master_followup_plan.get("blocking_alerts", [])
     copilot_modifiers = _build_parallel_modifier_bundle(copilot_sections, state)
     raw_result = (raw_assessment or {}).get("result_snapshot", {}) if raw_assessment else {}
     display_result = assessment.get("display_result", {}) if assessment else {}
@@ -2440,8 +2590,12 @@ def build_patient_profile_view_model(
         "source_citations": display_result.get("source_citations", []),
         "care_overlays": care_overlays,
         "agenda_board": agenda_board,
+        "master_followup_plan": master_followup_plan,
+        "master_followup_summary": master_followup_plan.get("summary", {}),
         "active_agenda_items": active_agenda_items,
         "archived_agenda_items": archived_agenda_items,
+        "encounters": agenda_board.get("encounters", []),
+        "next_encounter": agenda_board.get("next_encounter", {}),
         "next_due_items": next_due_items,
         "overdue_items": overdue_items,
         "visit_schema": agenda_board.get("visit_schema", {}),
@@ -2454,6 +2608,15 @@ def build_patient_profile_view_model(
         "next_best_action": latest_signal_snapshot.get("next_best_action", {}),
         "transition_proposals": transition_proposals,
         "recommendation_audit": (patient.get("recommendation_audit") or [])[:8],
+        "outcome_events": patient_outcome_events,
+        "outcome_events_summary": adjudication_snapshot.get("outcome_events_summary", {}),
+        "pending_adjudications": adjudication_snapshot.get("pending_adjudications", []),
+        "current_response_state": adjudication_snapshot.get("current_response_state", {}),
+        "current_course_status": adjudication_snapshot.get("current_course_status", ""),
+        "last_adjudicated_event": adjudication_snapshot.get("last_adjudicated_event", {}),
+        "trial_comparable_endpoints": trial_benchmark_snapshot.get("trial_endpoints", []),
+        "current_trial_comparable_profile": trial_benchmark_snapshot.get("current_trial_profile", {}),
+        "benchmark_snapshots": (trial_benchmark_snapshot.get("benchmark_snapshot") or {}).get("benchmark_snapshots", []),
         "document_board": document_board,
         "patient_kpis": patient_kpis,
         "cohort_completeness": cohort_completeness,

@@ -276,10 +276,59 @@ def patient_schedule(patient_id: int) -> tuple:
             "protocol_trace": schedule_bundle.get("protocol_trace", {}),
             "protocol_label": schedule_bundle.get("protocol_label", ""),
             "schedule": schedule_bundle.get("schedule", []),
+            "scheduled_items": schedule_bundle.get("scheduled_items", schedule_bundle.get("schedule", [])),
             "active_schedule": schedule_bundle.get("active_schedule", schedule_bundle.get("schedule", [])),
             "archived_schedule": schedule_bundle.get("archived_schedule", []),
-            "total_events": len(schedule_bundle.get("schedule", [])),
+            "scheduled_encounters": schedule_bundle.get("scheduled_encounters", []),
+            "encounters": schedule_bundle.get("encounters", []),
+            "next_encounter": schedule_bundle.get("next_encounter", {}),
+            "master_followup_plan": schedule_bundle.get("master_followup_plan", {}),
+            "master_followup_summary": schedule_bundle.get("master_followup_summary", {}),
+            "plan_key": (schedule_bundle.get("master_followup_plan") or {}).get("plan_key", ""),
+            "guideline_basis": (schedule_bundle.get("master_followup_plan") or {}).get("guideline_basis", []),
+            "plan_version": (schedule_bundle.get("master_followup_plan") or {}).get("plan_version", ""),
+            "plan_status": (schedule_bundle.get("master_followup_plan") or {}).get("plan_status", "active"),
+            "calendar_horizon_months": (schedule_bundle.get("master_followup_plan") or {}).get("calendar_horizon_months", horizon),
+            "timeline": (schedule_bundle.get("master_followup_plan") or {}).get("timeline", []),
+            "schedule_anchor_strength": schedule_bundle.get("schedule_anchor_strength", "strong"),
+            "milestone_plan": schedule_bundle.get("milestone_plan", []),
+            "outcome_anchor": schedule_bundle.get("outcome_anchor", {}),
+            "pending_adjudication_tasks": schedule_bundle.get("pending_adjudication_tasks", []),
+            "outcome_events_summary": schedule_bundle.get("outcome_events_summary", {}),
+            "pending_adjudications": schedule_bundle.get("pending_adjudications", []),
+            "current_response_state": schedule_bundle.get("current_response_state", {}),
+            "current_course_status": schedule_bundle.get("current_course_status", ""),
+            "last_adjudicated_event": schedule_bundle.get("last_adjudicated_event", {}),
+            "trial_comparable_endpoints": schedule_bundle.get("trial_comparable_endpoints", []),
+            "current_trial_comparable_profile": schedule_bundle.get("current_trial_comparable_profile", {}),
+            "total_events": len(schedule_bundle.get("scheduled_items", schedule_bundle.get("schedule", []))),
         })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/patients/<int:patient_id>/outcomes", methods=["GET"])
+def patient_outcomes(patient_id: int) -> tuple:
+    import tracking_db
+
+    try:
+        if not tracking_db.patient_exists(patient_id):
+            return jsonify({"success": False, "error": "Paciente no encontrado."}), 404
+        payload = tracking_db.get_patient_outcomes(patient_id)
+        if payload is None:
+            return jsonify({"success": False, "error": "Paciente no encontrado."}), 404
+        return jsonify({"success": True, **payload})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/cohorts/benchmarks", methods=["GET"])
+def cohort_benchmarks() -> tuple:
+    import tracking_db
+
+    try:
+        payload = tracking_db.get_cohort_benchmarks()
+        return jsonify({"success": True, **payload})
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500
 
@@ -314,6 +363,7 @@ def patient_overdue(patient_id: int) -> tuple:
             "anchor_date": schedule_bundle.get("anchor_date", ""),
             "anchor_source": schedule_bundle.get("anchor_source", ""),
             "protocol_trace": schedule_bundle.get("protocol_trace", {}),
+            "schedule_anchor_strength": schedule_bundle.get("schedule_anchor_strength", "strong"),
             "overdue_alerts": overdue,
             "overdue_count": len(overdue),
         })
@@ -323,63 +373,21 @@ def patient_overdue(patient_id: int) -> tuple:
 
 @modular_api.route("/api/patients/<int:patient_id>/clinical-alerts", methods=["GET"])
 def patient_clinical_alerts(patient_id: int) -> tuple:
-    """Ejecuta el motor de alertas clínicas y retorna alertas activas."""
+    """Retorna la salida canónica de alertas del copiloto para este paciente."""
     import tracking_db
-    from prostanet.domains.patient_tracking.alert_engine import ClinicalAlertEngine
-    from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
 
     try:
         patient = tracking_db.get_patient_full_record(patient_id)
         if not patient:
             return jsonify({"success": False, "error": "Paciente no encontrado."}), 404
-
-        # Build consolidated patient dict for alert engine
-        alert_data = {}
-        alert_data.update(patient.get("identity", {}))
-        alert_data.update(patient.get("baseline", {}) or {})
-        if patient.get("prior_history"):
-            alert_data.update(patient["prior_history"])
-
-        # Include latest followup data
-        followups = patient.get("follow_ups", [])
-        if followups:
-            last = followups[-1]
-            alert_data["psa"] = last.get("psa_current")
-            alert_data["hemoglobin"] = last.get("hemoglobin_current")
-            alert_data["ecog"] = last.get("ecog_current")
-            alert_data["testosterone"] = last.get("testosterone_current")
-            alert_data["alp"] = last.get("alp_current")
-            if len(followups) >= 2:
-                alert_data["ecog_previous"] = followups[-2].get("ecog_current")
-        adt_context = alert_data.get("current_adt_context") or alert_data.get("adt_context")
-        if adt_context:
-            alert_data["adt_context"] = adt_context
-            alert_data["current_adt_context"] = adt_context
-
-        # Include assessment state info
-        assessment = patient.get("latest_assessment")
-        reconciliation = build_reconciled_state(patient, assessment)
-        state = reconciliation.get("reconciled_state", "")
-        alert_data["management_track"] = reconciliation.get("reconciled_management_track", "")
-        alert_data["reconciled_state"] = state
-        snapshot = assessment.get("input_snapshot", {}) if isinstance(assessment, dict) else {}
-        adt_context = (
-            alert_data.get("current_adt_context")
-            or alert_data.get("adt_context")
-            or snapshot.get("current_adt_context")
-            or snapshot.get("adt_context")
-        )
-        if adt_context:
-            alert_data["adt_context"] = adt_context
-            alert_data["current_adt_context"] = adt_context
-
-        alerts = ClinicalAlertEngine.run_all(patient_id, alert_data)
-
+        bundle = tracking_db.refresh_longitudinal_intelligence(patient_id, force_recompute=False)
+        alerts = bundle.get("copilot_alerts", [])
         return jsonify({
             "success": True,
-            "alerts": [a.to_dict() for a in alerts],
-            "critical_count": sum(1 for a in alerts if a.severity == "critical"),
-            "warning_count": sum(1 for a in alerts if a.severity == "warning"),
+            "alerts": alerts,
+            "critical_count": sum(1 for a in alerts if a.get("severity") == "critical"),
+            "warning_count": sum(1 for a in alerts if a.get("severity") == "warning"),
+            "alert_summary": bundle.get("alert_summary", {}),
         })
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500
@@ -497,9 +505,17 @@ def patient_response_assessment(patient_id: int) -> tuple:
             import logging
             logging.getLogger(__name__).warning("Error persisting response assessment: %s", db_err)
 
+        # Enrich with survival context when PD detected
+        survival_context = {}
+        try:
+            survival_context = ResponseAssessmentService.evaluate_with_survival_context(patient, composite)
+        except Exception:
+            pass
+
         return jsonify({
             "success": True,
             "response": composite.to_dict(),
+            "survival_context": survival_context,
         })
     except ValueError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
@@ -589,6 +605,171 @@ def patient_survivorship_plan(patient_id: int) -> tuple:
         track = infer_management_track(patient, state, patient.get("latest_assessment"))
         plan = SurvivorshipCarePlan.generate(patient, state, track)
         return jsonify({"success": True, "survivorship_plan": plan})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/patients/<int:patient_id>/structured-biopsy", methods=["POST"])
+def patient_structured_biopsy(patient_id: int) -> tuple:
+    """Parsea y analiza biopsia estructurada con mapa sextante y concordancia MRI."""
+    import tracking_db
+    from prostanet.domains.patient_tracking.structured_biopsy import StructuredBiopsyService
+
+    try:
+        data = _parse_json()
+        patient = tracking_db.get_patient_full_record(patient_id)
+        if not patient:
+            return jsonify({"success": False, "error": "Paciente no encontrado."}), 404
+
+        parsed = StructuredBiopsyService.parse_structured_biopsy(data)
+        summary = StructuredBiopsyService.build_biopsy_summary_for_profile(parsed)
+
+        # Check for upgrade vs previous biopsy
+        biopsies = patient.get("biopsies") or []
+        previous = biopsies[-1] if biopsies and isinstance(biopsies[-1], dict) else None
+        upgrade = StructuredBiopsyService.evaluate_upgrade_from_previous(parsed, previous)
+        concordance = StructuredBiopsyService.check_mri_concordance(parsed)
+        alerts = StructuredBiopsyService.evaluate_biopsy_alerts(patient_id, parsed, previous)
+
+        return jsonify({
+            "success": True,
+            "biopsy_summary": summary,
+            "upgrade_assessment": upgrade,
+            "mri_concordance": concordance,
+            "alerts": [a.to_dict() for a in alerts],
+        })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/patients/<int:patient_id>/active-surveillance", methods=["GET"])
+def patient_active_surveillance(patient_id: int) -> tuple:
+    """Evalúa elegibilidad AS multi-protocolo, construye protocolo y agenda."""
+    import tracking_db
+    from prostanet.domains.patient_tracking.active_surveillance import ActiveSurveillanceService
+    from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
+
+    try:
+        patient = tracking_db.get_patient_full_record(patient_id)
+        if not patient:
+            return jsonify({"success": False, "error": "Paciente no encontrado."}), 404
+
+        assessment = patient.get("latest_assessment") or {}
+        reconciliation = build_reconciled_state(patient, assessment)
+        state = reconciliation.get("reconciled_state", "")
+
+        as_data = {}
+        as_data.update(patient.get("identity", {}))
+        as_data.update(patient.get("baseline", {}) or {})
+        if patient.get("prior_history"):
+            as_data.update(patient["prior_history"])
+        followups = patient.get("follow_ups", [])
+        if followups:
+            as_data.update(followups[-1])
+
+        eligibility = ActiveSurveillanceService.check_eligibility(as_data, state)
+        protocol = ActiveSurveillanceService.build_as_protocol(as_data, state)
+        summary = ActiveSurveillanceService.build_as_summary_for_profile(protocol)
+        alerts = ActiveSurveillanceService.evaluate_as_alerts(patient_id, protocol)
+
+        return jsonify({
+            "success": True,
+            "eligibility": [e.__dict__ if hasattr(e, "__dict__") else e for e in eligibility],
+            "protocol_summary": summary,
+            "alerts": [a.to_dict() for a in alerts],
+        })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/patients/<int:patient_id>/radiotherapy-detail", methods=["GET"])
+def patient_radiotherapy_detail(patient_id: int) -> tuple:
+    """Historial detallado de radioterapia con validación de fraccionamiento y toxicidad."""
+    import tracking_db
+    from prostanet.domains.patient_tracking.radiotherapy_detail import RadiotherapyDetailService
+
+    try:
+        patient = tracking_db.get_patient_full_record(patient_id)
+        if not patient:
+            return jsonify({"success": False, "error": "Paciente no encontrado."}), 404
+
+        rt_summary = RadiotherapyDetailService.build_rt_history(patient)
+        profile_summary = RadiotherapyDetailService.build_rt_summary_for_profile(rt_summary)
+        alerts = RadiotherapyDetailService.evaluate_rt_alerts(patient_id, rt_summary)
+
+        return jsonify({
+            "success": True,
+            "rt_summary": profile_summary,
+            "alerts": [a.to_dict() for a in alerts],
+        })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/patients/<int:patient_id>/skeletal-events", methods=["GET"])
+def patient_skeletal_events(patient_id: int) -> tuple:
+    """Perfil de eventos esqueléticos, riesgo SRE y cumplimiento BMA."""
+    import tracking_db
+    from prostanet.domains.patient_tracking.skeletal_events import SkeletalEventService
+    from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
+
+    try:
+        patient = tracking_db.get_patient_full_record(patient_id)
+        if not patient:
+            return jsonify({"success": False, "error": "Paciente no encontrado."}), 404
+
+        assessment = patient.get("latest_assessment") or {}
+        reconciliation = build_reconciled_state(patient, assessment)
+        state = reconciliation.get("reconciled_state", "")
+
+        sre_data = {}
+        sre_data.update(patient.get("identity", {}))
+        sre_data.update(patient.get("baseline", {}) or {})
+        if patient.get("prior_history"):
+            sre_data.update(patient["prior_history"])
+        followups = patient.get("follow_ups", [])
+        if followups:
+            sre_data.update(followups[-1])
+        sre_data["skeletal_events"] = patient.get("skeletal_events") or patient.get("sre_events") or []
+
+        profile = SkeletalEventService.build_sre_profile(sre_data, state)
+        summary = SkeletalEventService.build_sre_summary_for_profile(profile)
+        alerts = SkeletalEventService.evaluate_sre_alerts(patient_id, profile)
+
+        return jsonify({
+            "success": True,
+            "sre_profile": summary,
+            "alerts": [a.to_dict() for a in alerts],
+        })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/patients/<int:patient_id>/survival-endpoints", methods=["GET"])
+def patient_survival_endpoints(patient_id: int) -> tuple:
+    """Calcula endpoints de supervivencia (OS, rPFS, MFS, BCR-FS, TTPP, TTSRE, etc.)."""
+    import tracking_db
+    from prostanet.domains.patient_tracking.survival_endpoints import SurvivalEndpointService
+    from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
+
+    try:
+        patient = tracking_db.get_patient_full_record(patient_id)
+        if not patient:
+            return jsonify({"success": False, "error": "Paciente no encontrado."}), 404
+
+        assessment = patient.get("latest_assessment") or {}
+        reconciliation = build_reconciled_state(patient, assessment)
+        state = reconciliation.get("reconciled_state", "")
+
+        survival_status = SurvivalEndpointService.compute_endpoints(patient, state)
+        summary = SurvivalEndpointService.build_survival_summary_for_profile(survival_status)
+        alerts = SurvivalEndpointService.evaluate_survival_alerts(patient_id, survival_status)
+
+        return jsonify({
+            "success": True,
+            "survival_status": summary,
+            "alerts": [a.to_dict() for a in alerts],
+        })
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500
 

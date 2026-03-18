@@ -330,3 +330,43 @@ class ResponseAssessmentService:
             clinical_benefit=clinical_benefit,
             details=details,
         )
+
+    @classmethod
+    def evaluate_with_survival_context(
+        cls,
+        patient: dict[str, Any],
+        composite: "CompositeResponse",
+    ) -> dict[str, Any]:
+        """
+        Cuando se detecta PD, calcula el endpoint rPFS y enriquece la respuesta
+        con contexto de supervivencia para informar decisiones de siguiente línea.
+        """
+        context: dict[str, Any] = {"progression_detected": composite.overall == "PD"}
+        if composite.overall != "PD":
+            return context
+
+        try:
+            from prostanet.domains.patient_tracking.survival_endpoints import SurvivalEndpointService
+            rpfs = SurvivalEndpointService.compute_rpfs(patient)
+            if rpfs:
+                context["rpfs_endpoint"] = {
+                    "start_event": rpfs.start_event,
+                    "start_date": rpfs.start_date,
+                    "end_event": rpfs.end_event,
+                    "end_date": rpfs.end_date,
+                    "duration_months": rpfs.duration_months,
+                    "censored": rpfs.censored,
+                }
+            ttpp = SurvivalEndpointService.compute_ttpp(patient)
+            if ttpp:
+                context["ttpp_endpoint"] = {
+                    "duration_months": ttpp.duration_months,
+                    "censored": ttpp.censored,
+                }
+            context["recommended_action"] = (
+                "Progresión radiográfica confirmada. Re-estadificación completa indicada. "
+                "Discutir siguiente línea de tratamiento en tumor board."
+            )
+        except Exception:
+            pass
+        return context

@@ -44,6 +44,50 @@ class TumorBoardPresentation:
         genomic = patient.get("genomics", {}) or {}
         psa_series = patient.get("psa_series", []) or []
 
+        # Extended clinical modules for tumor board
+        extended_sections: dict[str, Any] = {}
+        try:
+            from prostanet.domains.patient_tracking.radiotherapy_detail import RadiotherapyDetailService
+            rt_summary = RadiotherapyDetailService.build_rt_history(patient)
+            rt_profile = RadiotherapyDetailService.build_rt_summary_for_profile(rt_summary)
+            if rt_profile.get("has_data"):
+                extended_sections["radiotherapy_detail"] = rt_profile
+        except Exception:
+            pass
+        try:
+            from prostanet.domains.patient_tracking.skeletal_events import SkeletalEventService
+            state = assessment.get("state", "")
+            sre_data = {}
+            sre_data.update(identity)
+            sre_data.update(baseline)
+            sre_data.update(prior)
+            sre_data["skeletal_events"] = patient.get("skeletal_events") or patient.get("sre_events") or []
+            sre_profile = SkeletalEventService.build_sre_profile(sre_data, state)
+            sre_section = SkeletalEventService.build_sre_summary_for_profile(sre_profile)
+            if sre_section.get("has_data"):
+                extended_sections["skeletal_events"] = sre_section
+        except Exception:
+            pass
+        try:
+            from prostanet.domains.patient_tracking.survival_endpoints import SurvivalEndpointService
+            state = assessment.get("state", "")
+            survival_status = SurvivalEndpointService.compute_endpoints(patient, state)
+            survival_section = SurvivalEndpointService.build_survival_summary_for_profile(survival_status)
+            if survival_section.get("has_data"):
+                extended_sections["survival_endpoints"] = survival_section
+        except Exception:
+            pass
+        try:
+            from prostanet.domains.patient_tracking.structured_biopsy import StructuredBiopsyService
+            biopsies = patient.get("biopsies") or []
+            if biopsies and isinstance(biopsies[-1], dict):
+                parsed_biopsy = StructuredBiopsyService.parse_structured_biopsy(biopsies[-1])
+                biopsy_section = StructuredBiopsyService.build_biopsy_summary_for_profile(parsed_biopsy)
+                if biopsy_section.get("has_data"):
+                    extended_sections["structured_biopsy"] = biopsy_section
+        except Exception:
+            pass
+
         return {
             "generated_date": date.today().isoformat(),
             "patient_summary": cls._patient_summary(identity, demographics, baseline, prior),
@@ -55,6 +99,7 @@ class TumorBoardPresentation:
             "genomic_profile": cls._genomic_profile(genomic),
             "current_status": cls._current_status(assessment, followups, prior),
             "discussion_points": cls._discussion_points(assessment, prior, baseline, genomic),
+            **extended_sections,
         }
 
     @classmethod
