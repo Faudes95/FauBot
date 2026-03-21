@@ -202,9 +202,11 @@
             </div>
         {% endcall %}
     </section>
+    {% include "components/consent_modal.html" %}
 {% endblock %}
 
 {% block page_scripts %}
+    <script src="{{ url_for('static', filename='js/consent_flow.js') }}"></script>
     <script>
         const humanizeClinicalText = window.clinicalPresentation?.humanize || ((value) => value);
         let latestPayload = null;
@@ -229,6 +231,16 @@
         const registrationAssessmentBadge = document.getElementById('registrationAssessmentBadge');
         const registerPatientButton = document.getElementById('registerPatientButton');
         const cancelRegistrationButton = document.getElementById('cancelRegistrationButton');
+        const consentFlow = new window.ProstaNetConsentFlow({
+            onStatus: (message, tone) => {
+                registrationStatus.textContent = message;
+                registrationStatus.className = `mt-2 text-sm ${tone === 'error' ? 'text-rose-300' : tone === 'success' ? 'text-emerald-300' : 'text-slate-300'}`;
+            },
+            onBusy: (isBusy, buttonText) => {
+                registerPatientButton.disabled = isBusy;
+                registerPatientButton.textContent = isBusy ? buttonText : 'Guardar y abrir expediente';
+            },
+        });
 
         const badgeColors = {
             'preferred': 'border-emerald-400/40 bg-emerald-500/10 text-emerald-200',
@@ -933,28 +945,18 @@
             const payload = Object.fromEntries(new FormData(registrationForm).entries());
             payload.assessment_id = latestDraft.assessment_id;
             payload.assessment_state = registrationAssessmentState.value || latestResult?.state || '';
-
-            registerPatientButton.disabled = true;
-            registerPatientButton.textContent = 'Guardando expediente...';
-            registrationStatus.textContent = 'Persistiendo identidad, baseline, longitudinal y vínculo con la evaluación clínica.';
-
-            const response = await fetch('/api/register_patient', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(payload),
-            });
-            const data = await response.json();
-            registerPatientButton.disabled = false;
-            registerPatientButton.textContent = 'Guardar y abrir expediente';
-
-            if (!data.success) {
-                registrationStatus.textContent = data.error || 'No se pudo registrar el paciente.';
-                return;
+            registrationStatus.textContent = 'Preparando consentimiento informado y evidencia de firma electrónica.';
+            try {
+                await consentFlow.open({
+                    payload,
+                    sourceContext: 'wizard',
+                    redirectUrl: payload.nss ? `/patient_profile/${encodeURIComponent(payload.nss)}` : '/patients',
+                });
+            } catch (error) {
+                registerPatientButton.disabled = false;
+                registerPatientButton.textContent = 'Guardar y abrir expediente';
+                registrationStatus.textContent = error.message || 'No se pudo iniciar el consentimiento informado.';
             }
-
-            registrationStatus.textContent = 'Registro completo. Se abrirá el expediente longitudinal.';
-            const nextProfile = data.next_routes?.profile || (payload.nss ? `/patient_profile/${encodeURIComponent(payload.nss)}` : '/patients');
-            window.location.href = nextProfile;
         });
 
         updateConditionalFields();

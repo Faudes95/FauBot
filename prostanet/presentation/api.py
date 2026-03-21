@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from flask import Blueprint, jsonify, request
+import tracking_db
 
 from prostanet.application.module_registry import ModuleRegistry
 from prostanet.domains.clinical_assessments.service import ClinicalAssessmentService
@@ -18,6 +19,42 @@ from prostanet.shared.presentation_text import (
     humanize_schema,
     humanize_sources,
     humanize_state_timeline,
+)
+from prostanet.domains.research_intelligence.comparative_effectiveness import (
+    run_propensity_analysis,
+)
+from prostanet.domains.research_intelligence.consent_governance import (
+    create_consent_draft,
+    finalize_consent_draft_payload,
+    get_consent_draft_payload,
+    get_current_consent_payload,
+    sign_consent_draft_payload,
+)
+from prostanet.domains.research_intelligence.dynamic_cohorting import (
+    create_dynamic_cohort,
+    get_dynamic_cohort_payload,
+    list_dynamic_cohort_payload,
+)
+from prostanet.domains.research_intelligence.institutional_benchmarking import (
+    build_institutional_benchmark_payload,
+)
+from prostanet.domains.research_intelligence.multivariate_analysis import (
+    build_cox_payload,
+    build_logistic_payload,
+)
+from prostanet.domains.research_intelligence.operational_outcomes import (
+    build_operational_outcomes_payload,
+)
+from prostanet.domains.research_intelligence.quality_indicators import (
+    build_quality_indicator_payload,
+)
+from prostanet.domains.research_intelligence.research_exports import (
+    build_cdisc_mapping_payload,
+    build_csv_export_payload,
+    build_redcap_export_payload,
+)
+from prostanet.domains.research_intelligence.survival_registry import (
+    build_survival_registry_payload,
 )
 
 
@@ -941,6 +978,256 @@ def cohort_domain_completeness() -> tuple:
         records = [record for record in records if record]
         payload = build_domain_completeness_payload(records)
         return jsonify({"success": True, **payload})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/research/consent/versions/current", methods=["GET"])
+def research_current_consent_version() -> tuple:
+    try:
+        return jsonify({"success": True, **get_current_consent_payload()})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/research/consent/draft", methods=["POST"])
+def research_create_consent_draft() -> tuple:
+    try:
+        data = _parse_json()
+        payload = tracking_service.canonicalize_payload(dict(data.get("payload") or data))
+        assessment_id = payload.get("assessment_id")
+        if assessment_id not in (None, ""):
+            assessment = assessment_service.get_draft(int(float(assessment_id)))
+            if not assessment:
+                raise ValueError("Evaluación clínica no encontrada.")
+            payload = tracking_service.merge_assessment_payload(assessment, payload)
+        payload["nss"] = str(payload.get("nss", "")).strip()
+        payload["full_name"] = str(payload.get("full_name", "")).strip()
+        if not payload["nss"] or not payload["full_name"]:
+            raise ValueError("Se requieren NSS y nombre completo para iniciar el consentimiento.")
+        source_context = str(data.get("source_context") or "wizard")
+        return jsonify({"success": True, **create_consent_draft(payload, source_context=source_context)})
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/research/consent/draft/<int:draft_id>", methods=["GET"])
+def research_get_consent_draft(draft_id: int) -> tuple:
+    try:
+        draft = get_consent_draft_payload(draft_id)
+        if not draft:
+            return jsonify({"success": False, "error": "Borrador no encontrado."}), 404
+        return jsonify({"success": True, "draft": draft})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/research/consent/draft/<int:draft_id>/sign", methods=["POST"])
+def research_sign_consent_draft(draft_id: int) -> tuple:
+    try:
+        payload = _parse_json()
+        result = sign_consent_draft_payload(draft_id, payload)
+        return jsonify({"success": True, **result})
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/research/consent/draft/<int:draft_id>/finalize", methods=["POST"])
+def research_finalize_consent_draft(draft_id: int) -> tuple:
+    try:
+        result = finalize_consent_draft_payload(draft_id)
+        return jsonify({"success": True, **result})
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/research/cohorts", methods=["GET", "POST"])
+def research_cohorts() -> tuple:
+    try:
+        if request.method == "GET":
+            return jsonify({"success": True, "cohorts": list_dynamic_cohort_payload()})
+        data = _parse_json()
+        title = str(data.get("title", "")).strip()
+        filters = list(data.get("filters") or [])
+        if not title or not filters:
+            raise ValueError("Se requieren título y filtros para crear una cohorte.")
+        cohort = create_dynamic_cohort(
+            title=title,
+            filters=filters,
+            description=str(data.get("description") or "").strip(),
+        )
+        return jsonify({"success": True, "cohort": cohort})
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/research/cohorts/<int:cohort_id>", methods=["GET"])
+def research_cohort_detail(cohort_id: int) -> tuple:
+    try:
+        cohort = get_dynamic_cohort_payload(cohort_id)
+        if not cohort:
+            return jsonify({"success": False, "error": "Cohorte no encontrada."}), 404
+        return jsonify({"success": True, "cohort": cohort})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/research/survival-curves", methods=["GET"])
+def research_survival_curves() -> tuple:
+    try:
+        endpoint = request.args.get("endpoint", "OS")
+        cohort_id = request.args.get("cohort_id")
+        stratify_by = request.args.get("stratify_by", "reconciled_state")
+        payload = build_survival_registry_payload(
+            endpoint=endpoint,
+            cohort_id=int(cohort_id) if cohort_id not in (None, "") else None,
+            stratify_by=stratify_by,
+        )
+        return jsonify({"success": True, **payload})
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/research/survival-analysis/cox", methods=["GET"])
+def research_survival_cox() -> tuple:
+    try:
+        endpoint = request.args.get("endpoint", "OS")
+        cohort_id = request.args.get("cohort_id")
+        covariates = [item for item in request.args.getlist("covariate") if item]
+        payload = build_cox_payload(
+            endpoint=endpoint,
+            cohort_id=int(cohort_id) if cohort_id not in (None, "") else None,
+            covariates=covariates or None,
+        )
+        return jsonify({"success": True, **payload})
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/research/survival-analysis/logistic", methods=["GET"])
+def research_logistic() -> tuple:
+    try:
+        outcome = request.args.get("outcome", "molecular_report_available")
+        cohort_id = request.args.get("cohort_id")
+        covariates = [item for item in request.args.getlist("covariate") if item]
+        payload = build_logistic_payload(
+            outcome=outcome,
+            cohort_id=int(cohort_id) if cohort_id not in (None, "") else None,
+            covariates=covariates or None,
+        )
+        return jsonify({"success": True, **payload})
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/research/propensity", methods=["POST"])
+def research_propensity() -> tuple:
+    try:
+        data = _parse_json()
+        payload = run_propensity_analysis(
+            cohort_id=int(data.get("cohort_id")),
+            treatment_field=str(data.get("treatment_field")),
+            treatment_value=str(data.get("treatment_value")),
+            control_value=str(data.get("control_value")),
+            outcome_field=str(data.get("outcome_field") or "survival_os_event"),
+            covariates=list(data.get("covariates") or []),
+            caliper=float(data.get("caliper") or 0.2),
+        )
+        return jsonify({"success": True, **payload})
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/research/outcomes/operational", methods=["GET"])
+def research_operational_outcomes() -> tuple:
+    try:
+        conn = tracking_db._connect()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM patient_identity ORDER BY id ASC")
+        records = [tracking_db.get_patient_full_record(int(row["id"])) for row in cursor.fetchall()]
+        conn.close()
+        payload = build_operational_outcomes_payload([record for record in records if record])
+        return jsonify({"success": True, **payload})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/research/quality-indicators", methods=["GET"])
+def research_quality_indicators() -> tuple:
+    try:
+        conn = tracking_db._connect()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM patient_identity ORDER BY id ASC")
+        records = [tracking_db.get_patient_full_record(int(row["id"])) for row in cursor.fetchall()]
+        conn.close()
+        payload = build_quality_indicator_payload([record for record in records if record])
+        return jsonify({"success": True, **payload})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/research/benchmarks", methods=["GET"])
+def research_benchmarks() -> tuple:
+    try:
+        conn = tracking_db._connect()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM patient_identity ORDER BY id ASC")
+        records = [tracking_db.get_patient_full_record(int(row["id"])) for row in cursor.fetchall()]
+        conn.close()
+        payload = build_institutional_benchmark_payload([record for record in records if record])
+        return jsonify({"success": True, **payload})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/research/export/csv", methods=["GET"])
+def research_export_csv() -> tuple:
+    try:
+        cohort_id = request.args.get("cohort_id")
+        payload = build_csv_export_payload(cohort_id=int(cohort_id) if cohort_id not in (None, "") else None)
+        return jsonify({"success": True, **payload})
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/research/export/redcap", methods=["GET"])
+def research_export_redcap() -> tuple:
+    try:
+        cohort_id = request.args.get("cohort_id")
+        payload = build_redcap_export_payload(cohort_id=int(cohort_id) if cohort_id not in (None, "") else None)
+        return jsonify({"success": True, **payload})
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/research/export/cdisc", methods=["GET"])
+def research_export_cdisc() -> tuple:
+    try:
+        cohort_id = request.args.get("cohort_id")
+        payload = build_cdisc_mapping_payload(cohort_id=int(cohort_id) if cohort_id not in (None, "") else None)
+        return jsonify({"success": True, **payload})
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500
 

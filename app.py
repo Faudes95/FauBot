@@ -154,74 +154,9 @@ def _reconciled_patient_snapshot(record):
 
 
 def _analysis_dataset_payload():
-    import tracking_db
-    from prostanet.domains.patient_tracking.cohort_analytics import (
-        build_analysis_dataset_row,
-        compute_patient_cohort_completeness,
-        compute_patient_endpoint_readiness,
-        compute_patient_research_readiness,
-        summarize_cohort,
-    )
+    from prostanet.domains.dashboard.dashboard_facade import get_analysis_dataset_bundle
 
-    stats_conn = tracking_db._connect()
-    stats_conn.row_factory = sqlite3.Row
-    cursor = stats_conn.cursor()
-    cursor.execute("SELECT id FROM patient_identity ORDER BY id ASC")
-    patient_ids = [row["id"] for row in cursor.fetchall()]
-    stats_conn.close()
-
-    analysis_rows = []
-    enriched_records = []
-    for patient_id in patient_ids:
-        record = tracking_db.get_patient_full_record(patient_id)
-        if not record:
-            continue
-        reconciliation = _reconciled_patient_snapshot(record)
-        state = reconciliation["reconciled_state"]
-        management_track = reconciliation["reconciled_management_track"]
-        latest_signals = dict(record.get("latest_signal_snapshot") or {})
-        latest_signals.update(reconciliation)
-        record["reconciled_state"] = state
-        record["reconciled_management_track"] = management_track
-        record["latest_signal_snapshot"] = latest_signals
-        analysis_rows.append(build_analysis_dataset_row(record, state, management_track, latest_signals))
-        enriched_records.append(record)
-
-    summary = summarize_cohort(enriched_records)
-    completeness_rows = [
-        {
-            "patient_uid": row["patient_uid"],
-            "nss_hash_hint": row["nss_hash_hint"],
-            "reconciled_state": row["reconciled_state"],
-            **compute_patient_cohort_completeness(record, record["reconciled_state"]),
-        }
-        for row, record in zip(analysis_rows, enriched_records)
-    ]
-    readiness_rows = [
-        {
-            "patient_uid": row["patient_uid"],
-            "nss_hash_hint": row["nss_hash_hint"],
-            "reconciled_state": row["reconciled_state"],
-            **compute_patient_research_readiness(record, record["reconciled_state"]),
-        }
-        for row, record in zip(analysis_rows, enriched_records)
-    ]
-    endpoint_rows = [
-        {
-            "patient_uid": row["patient_uid"],
-            "nss_hash_hint": row["nss_hash_hint"],
-            "reconciled_state": row["reconciled_state"],
-            **compute_patient_endpoint_readiness(record, record["reconciled_state"]),
-        }
-        for row, record in zip(analysis_rows, enriched_records)
-    ]
-    return {
-        "analysis_rows": analysis_rows,
-        "cohort_completeness_rows": completeness_rows,
-        "research_readiness_rows": readiness_rows,
-        "endpoint_readiness_rows": endpoint_rows,
-        "summary": summary,
-    }
+    return get_analysis_dataset_bundle()
 
 
 def ensure_model_loaded():
@@ -1505,249 +1440,61 @@ def api_pivotal_match(nss):
 
 
 # ── Dashboard Analytics Avanzado ──────────────────────────────────────────────
+@app.route('/api/dashboard/summary', methods=['GET'])
+def api_dashboard_summary():
+    try:
+        from prostanet.domains.dashboard.dashboard_facade import get_dashboard_summary_payload
+
+        return jsonify({"success": True, **get_dashboard_summary_payload()})
+    except Exception as e:
+        logger.error(f"Error en dashboard_summary: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/dashboard/analytics', methods=['GET'])
+def api_dashboard_analytics():
+    try:
+        from prostanet.domains.dashboard.dashboard_facade import get_dashboard_analytics_bundle
+
+        return jsonify({"success": True, **get_dashboard_analytics_bundle()})
+    except Exception as e:
+        logger.error(f"Error en dashboard_analytics: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/dashboard/calibration', methods=['GET'])
+def api_dashboard_calibration():
+    try:
+        from prostanet.domains.dashboard.dashboard_facade import get_dashboard_calibration_bundle
+
+        return jsonify({"success": True, **get_dashboard_calibration_bundle()})
+    except Exception as e:
+        logger.error(f"Error en dashboard_calibration: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/dashboard/research-intelligence', methods=['GET'])
+def api_dashboard_research_intelligence():
+    try:
+        from prostanet.domains.dashboard.dashboard_facade import get_dashboard_research_bundle
+
+        return jsonify({"success": True, **get_dashboard_research_bundle()})
+    except Exception as e:
+        logger.error(f"Error en dashboard_research_intelligence: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route('/api/dashboard_stats', methods=['GET'])
 def api_dashboard_stats():
-    """Retorna estadísticas avanzadas para el dashboard ejecutivo."""
+    """Alias rápido y compatible para el tablero ejecutivo."""
     try:
-        import sqlite3
-        conn = sqlite3.connect(app.config["DB_PATH"])
-        conn.row_factory = sqlite3.Row
-        c = conn.cursor()
+        from prostanet.domains.dashboard.dashboard_facade import get_dashboard_summary_payload
 
-        stats = {}
-
-        # Total patients (identity table)
-        c.execute("SELECT COUNT(*) as n FROM patient_identity")
-        stats['total_patients'] = c.fetchone()['n']
-
-        # Metastasis distribution
-        c.execute("""SELECT COALESCE(cb.metastasis_site, 'M0') as site, COUNT(*) as n
-                     FROM patient_identity pi
-                     LEFT JOIN clinical_baseline cb ON cb.patient_id = pi.id
-                     GROUP BY site""")
-        stats['metastasis_distribution'] = {r['site']: r['n'] for r in c.fetchall()}
-
-        # Volume distribution
-        c.execute("""SELECT COALESCE(cb.volume_disease, 'No registrado') as vol, COUNT(*) as n
-                     FROM patient_identity pi
-                     LEFT JOIN clinical_baseline cb ON cb.patient_id = pi.id
-                     GROUP BY vol""")
-        stats['volume_distribution'] = {r['vol']: r['n'] for r in c.fetchall()}
-
-        # ECOG distribution
-        c.execute("""SELECT COALESCE(cb.ecog_score, 0) as ecog, COUNT(*) as n
-                     FROM patient_identity pi
-                     LEFT JOIN clinical_baseline cb ON cb.patient_id = pi.id
-                     GROUP BY ecog""")
-        stats['ecog_distribution'] = {str(r['ecog']): r['n'] for r in c.fetchall()}
-
-        # PSA values for histogram
-        c.execute(
-            """
-            SELECT CAST(cb.baseline_psa AS REAL) AS baseline_psa
-            FROM clinical_baseline cb
-            WHERE NULLIF(TRIM(COALESCE(cb.baseline_psa, '')), '') IS NOT NULL
-              AND CAST(cb.baseline_psa AS REAL) > 0
-            """
-        )
-        stats['psa_values'] = [r['baseline_psa'] for r in c.fetchall()]
-
-        # Monthly enrollment
-        c.execute("""SELECT strftime('%Y-%m', pi.diagnosis_date) as month, COUNT(*) as n
-                     FROM patient_identity pi
-                     WHERE pi.diagnosis_date IS NOT NULL
-                     GROUP BY month ORDER BY month""")
-        stats['enrollment_by_month'] = {r['month']: r['n'] for r in c.fetchall()}
-
-        # Alert counts by type
-        c.execute("""SELECT alert_type, COUNT(*) as n FROM smart_alerts
-                     WHERE acknowledged = 0 AND COALESCE(active, 1) = 1 GROUP BY alert_type""")
-        stats['active_alerts_by_type'] = {r['alert_type']: r['n'] for r in c.fetchall()}
-
-        # Total active alerts
-        c.execute("SELECT COUNT(*) as n FROM smart_alerts WHERE acknowledged = 0 AND COALESCE(active, 1) = 1")
-        stats['total_active_alerts'] = c.fetchone()['n']
-
-        # Data completeness
-        c.execute("SELECT COUNT(*) as n FROM patient_demographics")
-        stats['demographics_count'] = c.fetchone()['n']
-
-        c.execute("SELECT COUNT(*) as n FROM genomic_profile")
-        stats['genomics_count'] = c.fetchone()['n']
-
-        c.execute("SELECT COUNT(*) as n FROM biopsy_details")
-        stats['biopsies_count'] = c.fetchone()['n']
-
-        c.execute("SELECT COUNT(*) as n FROM imaging_studies")
-        stats['imaging_count'] = c.fetchone()['n']
-
-        c.execute("SELECT COUNT(*) as n FROM patient_pros")
-        stats['pros_count'] = c.fetchone()['n']
-
-        c.execute("SELECT COUNT(*) as n FROM surgical_details")
-        stats['surgeries_count'] = c.fetchone()['n']
-
-        c.execute("SELECT COUNT(*) as n FROM active_surveillance WHERE exit_date IS NULL")
-        stats['active_surveillance_count'] = c.fetchone()['n']
-
-        c.execute("SELECT COUNT(*) as n FROM follow_up_visits")
-        stats['total_followups'] = c.fetchone()['n']
-
-        c.execute("PRAGMA table_info(clinical_assessments)")
-        assessment_columns = {row["name"] for row in c.fetchall()}
-        input_snapshot_column = (
-            "input_snapshot_json"
-            if "input_snapshot_json" in assessment_columns
-            else "input_snapshot"
-        )
-
-        c.execute(
-            f"""
-            SELECT ca.state, ca.{input_snapshot_column} AS input_snapshot_payload
-            FROM clinical_assessments ca
-            INNER JOIN prior_clinical_history ph ON ph.latest_assessment_id = ca.id
-            """
-        )
-        assessment_rows = c.fetchall()
-        stats["latest_assessment_count"] = len(assessment_rows)
-
-        advanced_states = {
-            "mcspc_oligo_metachronous",
-            "mcspc_low_volume_sync_oligo",
-            "mcspc_high_volume_sync",
-            "mcspc_high_volume_metachronous",
-            "mcspc_high_volume",
-            "m0_crpc",
-            "m1_crpc",
-        }
-        mhspc_states = {
-            "mcspc_oligo_metachronous",
-            "mcspc_low_volume_sync_oligo",
-            "mcspc_high_volume_sync",
-            "mcspc_high_volume_metachronous",
-            "mcspc_high_volume",
-        }
-
-        def _truthy(value):
-            return str(value).lower() in {"1", "true", "yes", "si", "on"}
-
-        biomarker_complete = 0
-        pros_baseline = 0
-        ddi_reviewed = 0
-        cv_documented = 0
-        lft_documented = 0
-        psma_documented = 0
-        dxa_documented = 0
-        bone_protection = 0
-        salvage_documented = 0
-        line_context_documented = 0
-        molecular_reported = 0
-
-        for row in assessment_rows:
-            payload = json.loads(row["input_snapshot_payload"] or "{}")
-            state = row["state"]
-            if state in advanced_states and payload.get("hrr_gene") not in (None, "", "Desconocido") and payload.get("biomarker_source") not in (None, "", "Desconocida"):
-                biomarker_complete += 1
-            if any(payload.get(field) not in (None, "") for field in ["baseline_qol", "baseline_urinary_qol", "baseline_sexual_qol", "baseline_bowel_qol"]):
-                pros_baseline += 1
-            if _truthy(payload.get("drug_interaction_reviewed")):
-                ddi_reviewed += 1
-            if _truthy(payload.get("cv_risk_documented")):
-                cv_documented += 1
-            if payload.get("child_pugh_score") or _truthy(payload.get("hepatic_risk_factors")):
-                lft_documented += 1
-            if _truthy(payload.get("psma_positive")) and not _truthy(payload.get("psma_negative_dominant_lesions")):
-                psma_documented += 1
-            if state in mhspc_states and _truthy(payload.get("dxa_baseline_done")):
-                dxa_documented += 1
-            if state in mhspc_states and (_truthy(payload.get("bone_protection_started")) or _truthy(payload.get("calcium_vitd_started"))):
-                bone_protection += 1
-            if state in {"recurrence_bcr", "post_prostatectomy"} and (
-                payload.get("salvage_local_feasible") not in (None, "")
-                or payload.get("eligible_pelvic_therapy") not in (None, "")
-            ):
-                salvage_documented += 1
-            if state == "m1_crpc" and payload.get("mcrpc_line_context"):
-                line_context_documented += 1
-            if payload.get("molecular_report_date") or payload.get("molecular_assay_date"):
-                molecular_reported += 1
-
-        stats["biomarker_complete_count"] = biomarker_complete
-        stats["pros_baseline_count"] = pros_baseline
-        stats["ddi_reviewed_count"] = ddi_reviewed
-        stats["cv_documented_count"] = cv_documented
-        stats["lft_documented_count"] = lft_documented
-        stats["psma_eligibility_count"] = psma_documented
-        stats["dxa_documented_count"] = dxa_documented
-        stats["bone_protection_count"] = bone_protection
-        stats["salvage_documented_count"] = salvage_documented
-        stats["mcrpc_line_context_count"] = line_context_documented
-        stats["molecular_report_count"] = molecular_reported
-
-        c.execute(
-            f"""
-            SELECT COUNT(DISTINCT ph.patient_id) as n
-            FROM prior_clinical_history ph
-            INNER JOIN treatment_history th ON th.patient_id = ph.patient_id
-            WHERE ph.current_state IN ({",".join(["?"] * len(mhspc_states))})
-              AND th.drug_scheme IS NOT NULL
-              AND th.drug_scheme != ''
-              AND th.drug_scheme != 'ADT_MONO'
-            """,
-            tuple(mhspc_states),
-        )
-        stats["mhspc_combination_adherence_count"] = c.fetchone()["n"]
-
-        from prostanet.application.module_registry import ModuleRegistry
-        from prostanet.domains.clinical_assessments.scenario_harness import run_scenario_harness
-
-        calibration = run_scenario_harness(ModuleRegistry())
-        stats["scenario_harness"] = {
-            "total_cases": calibration["total_cases"],
-            "passed_cases": calibration["passed_cases"],
-            "failed_cases": calibration["failed_cases"],
-            "concordance_pct": calibration["concordance_pct"],
-            "module_summary": calibration["module_summary"],
-        }
-
-        conn.close()
-
-        analysis_payload = _analysis_dataset_payload()
-        summary = analysis_payload["summary"]
-        stats["cohort_completeness"] = {
-            "average_pct": summary["cohort_average_completeness_pct"],
-            "publishable_ready_count": summary["publishable_ready_count"],
-            "mexico_core_complete_count": summary["mexico_core_complete_count"],
-            "document_verification_coverage_count": summary["document_verification_coverage_count"],
-            "survival_status_complete_count": summary.get("survival_status_complete_count", 0),
-            "structured_biopsy_session_count": summary.get("structured_biopsy_session_count", 0),
-            "active_surveillance_operational_count": summary.get("active_surveillance_operational_count", 0),
-            "skeletal_bone_health_count": summary.get("skeletal_bone_health_count", 0),
-            "radiotherapy_detail_count": summary.get("radiotherapy_detail_count", 0),
-        }
-        stats["research_readiness"] = {
-            "average_pct": summary["cohort_average_research_readiness_pct"],
-            "research_ready_count": summary["research_ready_count"],
-        }
-        stats["endpoint_readiness"] = summary["endpoint_ready_distribution"]
-        stats["risk_tool_stats"] = summary.get("risk_tool_stats", {})
-        stats["capra_distribution"] = summary.get("capra_distribution", {})
-        stats["damico_distribution"] = summary.get("damico_distribution", {})
-        stats["capra_s_distribution"] = summary.get("capra_s_distribution", {})
-        stats["mskcc_bcr_post_rp_stats"] = summary.get("mskcc_bcr_post_rp_stats", {})
-        stats["upgrade_stats"] = {
-            "pathologic_upgrade_count": summary.get("pathologic_upgrade_count", 0),
-            "genomic_upclassification_count": summary.get("genomic_upclassification_count", 0),
-            "unfavorable_intermediate_behaving_like_high_risk_count": summary.get("unfavorable_intermediate_behaving_like_high_risk_count", 0),
-        }
-        stats["prognostic_modifier_stats"] = summary.get("prognostic_modifier_counts", {})
-        stats["backbone_alignment_stats"] = summary.get("backbone_alignment_stats", {})
-        stats["prognostic_followup_impact_count"] = summary.get("followup_impact_count", 0)
-        stats["incomplete_prognostic_scores_count"] = summary.get("incomplete_score_targets_count", 0)
-        stats["high_risk_impact_count"] = summary.get("high_risk_impact_count", 0)
-        stats["analysis_dataset_size"] = len(analysis_payload["analysis_rows"])
-        stats["analysis_dataset_preview"] = analysis_payload["analysis_rows"][:5]
-        return jsonify({"success": True, **stats})
+        summary = get_dashboard_summary_payload()
+        summary["analytics_endpoint"] = "/api/dashboard/analytics"
+        summary["calibration_endpoint"] = "/api/dashboard/calibration"
+        summary["research_endpoint"] = "/api/dashboard/research-intelligence"
+        return jsonify({"success": True, **summary})
     except Exception as e:
         logger.error(f"Error en dashboard_stats: {e}")
         return jsonify({"success": False, "error": str(e)}), 500

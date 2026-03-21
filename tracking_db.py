@@ -1453,6 +1453,17 @@ def _save_radiotherapy_course_detailed(cursor, patient_id, data, *, source_type=
 def init_tracking_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS dashboard_cache_snapshots (
+            cache_key TEXT PRIMARY KEY,
+            payload_json TEXT NOT NULL,
+            generated_at TEXT NOT NULL,
+            ttl_seconds INTEGER NOT NULL
+        )
+        '''
+    )
     
     # ── 1. IDENTIDAD Y DEMOGRÁFICOS (NSS) ────────────────────────────────
     c.execute('''
@@ -3140,6 +3151,260 @@ def init_tracking_db():
             c.execute(ddl)
         except sqlite3.OperationalError:
             pass
+
+    # ── Research Intelligence + Consent Governance ────────────────────────
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS research_survival_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_key TEXT UNIQUE,
+            endpoint TEXT,
+            cohort_key TEXT,
+            payload_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS research_multivariate_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_key TEXT UNIQUE,
+            analysis_type TEXT,
+            cohort_key TEXT,
+            payload_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS research_propensity_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_key TEXT UNIQUE,
+            cohort_key TEXT,
+            treatment_field TEXT,
+            payload_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS operational_outcome_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            event_date DATE,
+            severity TEXT,
+            payload_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS clavien_dindo_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            surgery_date DATE,
+            grade TEXT,
+            event_label TEXT,
+            payload_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS functional_recovery_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            snapshot_date DATE,
+            urinary_recovery_status TEXT,
+            sexual_recovery_status TEXT,
+            continence_pads_per_day REAL,
+            pde5i_use TEXT,
+            payload_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS quality_indicator_definitions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            indicator_key TEXT NOT NULL UNIQUE,
+            title TEXT,
+            clinical_definition TEXT,
+            benchmark_target TEXT,
+            domain TEXT,
+            metadata_json TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS quality_indicator_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            indicator_key TEXT NOT NULL,
+            numerator INTEGER DEFAULT 0,
+            denominator INTEGER DEFAULT 0,
+            percentage REAL DEFAULT 0,
+            trend_json TEXT,
+            result_payload_json TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(indicator_key) REFERENCES quality_indicator_definitions(indicator_key)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS benchmark_reference_library (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            benchmark_key TEXT NOT NULL UNIQUE,
+            title TEXT,
+            endpoint TEXT,
+            source_label TEXT,
+            population_summary TEXT,
+            reference_payload_json TEXT,
+            comparability_tier TEXT DEFAULT 'limited',
+            effective_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS benchmark_comparisons (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            benchmark_key TEXT,
+            cohort_key TEXT,
+            comparison_payload_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS dynamic_cohorts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cohort_key TEXT,
+            title TEXT NOT NULL,
+            description TEXT,
+            filters_json TEXT,
+            system_defined BOOLEAN DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS dynamic_cohort_memberships (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cohort_id INTEGER NOT NULL,
+            patient_id INTEGER NOT NULL,
+            joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(cohort_id) REFERENCES dynamic_cohorts(id),
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS consent_versions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            version_code TEXT NOT NULL UNIQUE,
+            title TEXT NOT NULL,
+            consent_text TEXT NOT NULL,
+            html_snapshot TEXT,
+            effective_at TIMESTAMP NOT NULL,
+            active BOOLEAN DEFAULT 1
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS patient_consents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            consent_version_code TEXT NOT NULL,
+            status TEXT DEFAULT 'signed',
+            signer_name TEXT,
+            signed_at TIMESTAMP,
+            content_hash TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id),
+            FOREIGN KEY(consent_version_code) REFERENCES consent_versions(version_code)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS consent_signature_evidence (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            consent_id INTEGER NOT NULL,
+            signature_data_url TEXT,
+            evidence_html TEXT,
+            audit_metadata_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id),
+            FOREIGN KEY(consent_id) REFERENCES patient_consents(id)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS patient_intake_drafts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_context TEXT,
+            nss TEXT,
+            full_name TEXT,
+            assessment_id INTEGER,
+            payload_json TEXT,
+            signature_json TEXT,
+            status TEXT DEFAULT 'draft',
+            consent_version_code TEXT,
+            patient_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            finalized_at TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id),
+            FOREIGN KEY(consent_version_code) REFERENCES consent_versions(version_code)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS research_export_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            export_type TEXT,
+            cohort_key TEXT,
+            status TEXT DEFAULT 'completed',
+            manifest_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS research_export_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER NOT NULL,
+            file_name TEXT,
+            file_kind TEXT,
+            file_payload TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(job_id) REFERENCES research_export_jobs(id)
+        )
+        '''
+    )
 
     conn.commit()
     conn.close()
@@ -8688,6 +8953,49 @@ def get_patient_full_record(nss_or_id):
         )
         verified_document_facts = _hydrate_verified_fact_rows(c.fetchall())
 
+        c.execute(
+            "SELECT * FROM patient_consents WHERE patient_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+            (patient_id,),
+        )
+        consent_row = c.fetchone()
+        consent_summary = dict(consent_row) if consent_row else {}
+        if consent_summary:
+            c.execute(
+                "SELECT * FROM consent_signature_evidence WHERE consent_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+                (consent_summary.get("id"),),
+            )
+            evidence_row = c.fetchone()
+            consent_evidence = dict(evidence_row) if evidence_row else {}
+            if consent_evidence:
+                consent_evidence["audit_metadata"] = _parse_json_blob(consent_evidence.pop("audit_metadata_json", None), {})
+            consent_summary["evidence"] = consent_evidence
+        else:
+            consent_summary = {"status": "missing", "required_for_new_patients": True}
+
+        c.execute(
+            "SELECT * FROM operational_outcome_events WHERE patient_id = ? ORDER BY event_date DESC, id DESC",
+            (patient_id,),
+        )
+        operational_outcomes = [dict(row) for row in c.fetchall()]
+        for item in operational_outcomes:
+            item["payload"] = _parse_json_blob(item.pop("payload_json", None), {})
+
+        c.execute(
+            "SELECT * FROM clavien_dindo_events WHERE patient_id = ? ORDER BY surgery_date DESC, id DESC",
+            (patient_id,),
+        )
+        clavien_events = [dict(row) for row in c.fetchall()]
+        for item in clavien_events:
+            item["payload"] = _parse_json_blob(item.pop("payload_json", None), {})
+
+        c.execute(
+            "SELECT * FROM functional_recovery_snapshots WHERE patient_id = ? ORDER BY snapshot_date DESC, id DESC",
+            (patient_id,),
+        )
+        functional_recovery = [dict(row) for row in c.fetchall()]
+        for item in functional_recovery:
+            item["payload"] = _parse_json_blob(item.pop("payload_json", None), {})
+
         conn.close()
 
         identity_dict = dict(identity)
@@ -8852,6 +9160,11 @@ def get_patient_full_record(nss_or_id):
             'bone_health_snapshots': bone_health_snapshots,
             'bone_health': bone_health_snapshots[-1] if bone_health_snapshots else {},
             'radiation_details': radiotherapy_courses_detailed,
+            'consent_summary': consent_summary,
+            'consent_evidence': consent_summary.get("evidence", {}),
+            'operational_outcomes': operational_outcomes,
+            'clavien_dindo_events': clavien_events,
+            'functional_recovery_snapshots': functional_recovery,
         }
     except Exception as e:
         logger.error(f"Error fetching full patient record: {e}")

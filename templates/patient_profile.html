@@ -277,6 +277,8 @@
     {% set live_benchmark = profile.live_benchmark if profile else {} %}
     {% set benchmark_reliability = profile.benchmark_reliability if profile else {} %}
     {% set agenda_resolution_trace = profile.agenda_resolution_trace if profile else [] %}
+    {% set consent_summary = profile.consent_summary if profile else {} %}
+    {% set consent_evidence = profile.consent_evidence if profile else {} %}
     {% set supporting_trials = evidence_applicability.supporting_trials if evidence_applicability and evidence_applicability.supporting_trials else [] %}
     {% set focus_primary_trial = supporting_trials[0] if supporting_trials else {} %}
     {% set assessment_display = latest_assessment.display_result if latest_assessment and latest_assessment.display_result else {} %}
@@ -418,6 +420,42 @@
             {% endfor %}
         </section>
         {% endif %}
+
+        <section class="pn-surface">
+            <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div class="lg:max-w-2xl">
+                    <div class="text-xs uppercase tracking-[0.2em] text-cyan-300">Consentimiento de uso secundario de datos</div>
+                    <div class="mt-2 text-sm font-semibold text-white">
+                        {% if consent_summary.status == 'signed' %}
+                        Consentimiento firmado y trazable en expediente.
+                        {% else %}
+                        Consentimiento no documentado en la capa de research governance.
+                        {% endif %}
+                    </div>
+                    <p class="mt-2 text-sm text-slate-400">
+                        {% if consent_summary.status == 'signed' %}
+                        Versión {{ consent_summary.consent_version_code or 'N/D' }} · Firmado por {{ consent_summary.signer_name or 'paciente' }} · {{ consent_summary.signed_at or 'sin fecha' }}
+                        {% else %}
+                        Para pacientes nuevos este consentimiento es obligatorio antes de abrir el expediente.
+                        {% endif %}
+                    </p>
+                    {% if consent_summary.content_hash %}
+                    <p class="mt-2 text-xs font-mono text-slate-500 break-all">Hash de evidencia: {{ consent_summary.content_hash }}</p>
+                    {% endif %}
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 lg:w-[340px]">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Evidencia visible</div>
+                    {% if consent_evidence.signature_data_url %}
+                    <img src="{{ consent_evidence.signature_data_url }}" alt="Firma electrónica del paciente" class="mt-3 w-full rounded-xl border border-slate-700 bg-slate-950/70 p-2">
+                    <div class="mt-3 text-xs text-slate-400">{{ consent_summary.signed_at or '' }}</div>
+                    {% else %}
+                    <div class="mt-3 rounded-xl border border-amber-500/20 bg-amber-950/10 p-3 text-sm text-amber-200">
+                        No existe evidencia de firma asociada a este expediente.
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </section>
 
         {% if current_course_status or last_adjudicated_event or pending_adjudications or current_trial_comparable_profile %}
         <section class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">

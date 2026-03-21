@@ -2826,15 +2826,43 @@ def test_agenda_endpoint_separates_active_and_archived_items(app_client):
 
 
 def test_dashboard_stats_and_analysis_exports_include_research_readiness(app_client):
-    client, _ = app_client
+    client, db_path = app_client
     client.post("/api/register_patient", json=make_patient_payload(nss="93939393939", full_name="Paciente Cohorte"))
+
+    summary = client.get("/api/dashboard/summary")
+    assert summary.status_code == 200
+    summary_payload = summary.get_json()
+    assert "total_patients" in summary_payload
+    assert "cohort_completeness" not in summary_payload
+    assert "scenario_harness" not in summary_payload
+
+    analytics = client.get("/api/dashboard/analytics")
+    assert analytics.status_code == 200
+    analytics_payload = analytics.get_json()
+    assert "cohort_completeness" in analytics_payload
+    assert "research_readiness" in analytics_payload
+    assert "endpoint_readiness" in analytics_payload
+
+    calibration = client.get("/api/dashboard/calibration")
+    assert calibration.status_code == 200
+    assert "scenario_harness" in calibration.get_json()
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT cache_key FROM dashboard_cache_snapshots ORDER BY cache_key")
+    cache_keys = {row["cache_key"] for row in cursor.fetchall()}
+    conn.close()
+    assert "dashboard_analytics_v1" in cache_keys
+    assert "dashboard_calibration_v1" in cache_keys
 
     dashboard = client.get("/api/dashboard_stats")
     assert dashboard.status_code == 200
     payload = dashboard.get_json()
-    assert "cohort_completeness" in payload
-    assert "research_readiness" in payload
-    assert "endpoint_readiness" in payload
+    assert "cohort_completeness" not in payload
+    assert "scenario_harness" not in payload
+    assert payload["analytics_endpoint"] == "/api/dashboard/analytics"
+    assert payload["calibration_endpoint"] == "/api/dashboard/calibration"
 
     dataset = client.get("/api/analysis_dataset_export")
     assert dataset.status_code == 200
@@ -3187,7 +3215,7 @@ def test_dashboard_stats_include_risk_tool_and_upgrade_metrics(app_client):
     patient_id = register.get_json()["patient_id"]
     _seed_latest_assessment_state(db_path, patient_id, "localized_initial")
 
-    dashboard = client.get("/api/dashboard_stats")
+    dashboard = client.get("/api/dashboard/analytics")
 
     assert dashboard.status_code == 200
     payload = dashboard.get_json()
@@ -3278,3 +3306,146 @@ def test_tnm_engine_resolves_metastatic_substages_from_structured_distribution()
     )
     assert visceral["m_stage"] == "M1c"
     assert visceral["m_data"]["image_src"].startswith("data:image/svg+xml")
+
+
+def test_consent_signature_is_required_before_opening_record_and_visible_in_profile(app_client):
+    client, db_path = app_client
+    payload = make_patient_payload(nss="70000000001", full_name="Paciente Consentido")
+
+    draft_response = client.post(
+        "/api/research/consent/draft",
+        json={"payload": payload, "source_context": "pytest"},
+    )
+    assert draft_response.status_code == 200
+    draft_data = draft_response.get_json()
+    assert draft_data["success"] is True
+    draft_id = draft_data["draft_id"]
+
+    blocked_finalize = client.post(f"/api/research/consent/draft/{draft_id}/finalize")
+    assert blocked_finalize.status_code == 400
+    assert "sin consentimiento firmado" in blocked_finalize.get_json()["error"].lower()
+
+    sign_response = client.post(
+        f"/api/research/consent/draft/{draft_id}/sign",
+        json={
+            "signer_name": payload["full_name"],
+            "signature_data_url": "data:image/png;base64,ZmlybWFfZGVtbw==",
+            "accepted": True,
+            "audit_metadata": {"channel": "pytest"},
+        },
+    )
+    assert sign_response.status_code == 200
+    sign_data = sign_response.get_json()
+    assert sign_data["status"] == "signed"
+    assert sign_data["evidence"]["content_hash"]
+
+    finalize_response = client.post(f"/api/research/consent/draft/{draft_id}/finalize")
+    assert finalize_response.status_code == 200
+    finalize_data = finalize_response.get_json()
+    assert finalize_data["success"] is True
+    assert isinstance(finalize_data["patient_id"], int)
+    assert finalize_data["consent"]["status"] == "signed"
+
+    profile_response = client.get(f"/patient_profile/{payload['nss']}")
+    assert profile_response.status_code == 200
+    profile_html = profile_response.get_data(as_text=True)
+    assert "Consentimiento de uso secundario de datos" in profile_html
+    assert "Firma electrónica del paciente" in profile_html
+    assert "Hash de evidencia" in profile_html
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM patient_consents")
+    assert cursor.fetchone()[0] == 1
+    cursor.execute("SELECT COUNT(*) FROM consent_signature_evidence")
+    assert cursor.fetchone()[0] == 1
+    conn.close()
+
+
+def test_dashboard_research_intelligence_endpoint_returns_modular_panels(app_client):
+    client, _ = app_client
+    metastatic_payload = make_patient_payload(nss="70000000002", full_name="Paciente Research 1")
+    metastatic_payload.update(
+        {
+            "metastasis_site": "Bone",
+            "volume_disease": "High",
+            "metastasis_count": 6,
+            "ecog_score": 1,
+            "known_cancer_diagnosis": 1,
+            "metachronous_metastasis": 0,
+        }
+    )
+    localized_payload = make_patient_payload(nss="70000000003", full_name="Paciente Research 2")
+    localized_payload.update({"baseline_psa": 4.2, "metastasis_site": "M0"})
+
+    first = client.post("/api/register_patient", json=metastatic_payload)
+    second = client.post("/api/register_patient", json=localized_payload)
+    assert first.status_code == 200
+    assert second.status_code == 200
+
+    response = client.get("/api/dashboard/research-intelligence")
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["success"] is True
+    assert "survival" in data
+    assert "multivariate" in data
+    assert "comparative_effectiveness" in data
+    assert "operational_outcomes" in data
+    assert "quality_indicators" in data
+    assert "benchmarking" in data
+    assert "dynamic_cohorts" in data
+    assert "consent_governance" in data
+    assert "research_readiness" in data
+    assert isinstance(data["dynamic_cohorts"], list)
+    assert data["consent_governance"]["total_patients"] >= 2
+
+
+def test_research_cohort_survival_and_export_endpoints_work(app_client):
+    client, db_path = app_client
+    first_payload = make_patient_payload(nss="70000000004", full_name="Cohorte Uno")
+    first_payload.update({"baseline_psa": 12.5, "ecog_score": 1})
+    second_payload = make_patient_payload(nss="70000000005", full_name="Cohorte Dos")
+    second_payload.update({"baseline_psa": 3.1, "ecog_score": 0})
+
+    first = client.post("/api/register_patient", json=first_payload)
+    second = client.post("/api/register_patient", json=second_payload)
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_id = first.get_json()["patient_id"]
+    second_id = second.get_json()["patient_id"]
+
+    _update_patient_contact_status(db_path, first_id, last_contact_date="2026-03-12", vital_status="alive")
+    _update_patient_contact_status(db_path, second_id, last_contact_date="2026-03-12", vital_status="alive")
+
+    cohort_response = client.post(
+        "/api/research/cohorts",
+        json={
+            "title": "PSA basal alto",
+            "description": "Pacientes con PSA basal elevado para análisis institucional.",
+            "filters": [{"field": "baseline_psa", "op": "gte", "value": 10}],
+        },
+    )
+    assert cohort_response.status_code == 200
+    cohort = cohort_response.get_json()["cohort"]
+    assert cohort["title"] == "PSA basal alto"
+    assert first_id in cohort["patient_ids"]
+    assert second_id not in cohort["patient_ids"]
+
+    cohort_detail = client.get(f"/api/research/cohorts/{cohort['id']}")
+    assert cohort_detail.status_code == 200
+    assert cohort_detail.get_json()["cohort"]["size"] == 1
+
+    survival_response = client.get(f"/api/research/survival-curves?endpoint=OS&cohort_id={cohort['id']}")
+    assert survival_response.status_code == 200
+    survival_data = survival_response.get_json()
+    assert survival_data["success"] is True
+    assert survival_data["endpoint"] == "OS"
+    assert survival_data["cohort_label"] == "PSA basal alto"
+
+    export_response = client.get(f"/api/research/export/csv?cohort_id={cohort['id']}")
+    assert export_response.status_code == 200
+    export_data = export_response.get_json()
+    assert export_data["success"] is True
+    assert export_data["record_count"] == 1
+    assert "baseline_psa" in export_data["csv"]
+    assert export_data["manifest"]["scope_label"] == "PSA basal alto"

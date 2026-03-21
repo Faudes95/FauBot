@@ -2802,6 +2802,11 @@ def build_patient_profile_view_model(
         "cohort_completeness": cohort_completeness,
         "research_readiness": research_readiness,
         "endpoint_readiness": endpoint_readiness,
+        "consent_summary": patient.get("consent_summary", {}),
+        "consent_evidence": patient.get("consent_evidence", {}),
+        "operational_outcomes": patient.get("operational_outcomes", []),
+        "clavien_dindo_events": patient.get("clavien_dindo_events", []),
+        "functional_recovery_snapshots": patient.get("functional_recovery_snapshots", []),
         "recommendations": recommendations or {},
         "copilot": copilot_sections,
     }

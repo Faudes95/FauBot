@@ -93,6 +93,10 @@ def test_modular_metadata_and_hub_routes_are_available(app_client):
     assert "ui_theme.css" in dashboard_html
     assert "clinical_selects.js" in dashboard_html
     assert "Panorama longitudinal de la cohorte" in dashboard_html
+    assert "/api/dashboard/summary" in dashboard_html
+    assert "/api/dashboard/analytics" in dashboard_html
+    assert "/api/dashboard/calibration" in dashboard_html
+    assert "Promise.all([\n                    fetch('/api/patients').then(r => r.json()),\n                    fetch('/api/dashboard_stats')" not in dashboard_html
 
 
 def test_state_classifier_routes_patients_to_expected_modules(app_client):

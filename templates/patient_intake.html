@@ -1264,13 +1264,18 @@
                 </div>
             </div>
         </div>
+        {% include "components/consent_modal.html" %}
 {% endblock %}
 
 {% block page_scripts %}
+    <script src="{{ url_for('static', filename='js/consent_flow.js') }}"></script>
     <script>
         const humanizeClinicalText = window.clinicalPresentation?.humanize || ((value) => value);
         const assessmentId = '{{ assessment_id or "" }}';
         const therapyCatalogEntries = {{ (therapy_catalog_entries or [])|tojson }};
+        const consentFlow = new window.ProstaNetConsentFlow({
+            onStatus: (message) => console.info('consent-status', message),
+        });
         let assessmentState = '';
         const intakeScopeConfig = {
             diagnostic: {
@@ -1694,21 +1699,13 @@
             }
 
             try {
-                const response = await fetch('/api/register_patient', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data)
+                await consentFlow.open({
+                    payload: data,
+                    sourceContext: 'patient_intake',
+                    redirectUrl: data.nss ? `/patient_profile/${encodeURIComponent(data.nss)}` : '/patients',
                 });
-
-                const result = await response.json();
-
-                if (result.success) {
-                    showResultsModal(result);
-                } else {
-                    alert('Error: ' + result.error);
-                }
             } catch (e) {
-                alert('Error de conexión: ' + e);
+                alert('Error de conexión: ' + e.message);
             }
         }
 

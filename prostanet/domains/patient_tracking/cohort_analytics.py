@@ -273,21 +273,30 @@ def build_analysis_dataset_row(patient: dict[str, Any], state: str, management_t
         display_assessment={},
     )
     return {
+        "patient_id": identity.get("id"),
         "patient_uid": f"PT-{identity.get('id', '')}",
         "nss_hash_hint": str(identity.get("nss", ""))[-4:],
+        "age_at_diagnosis": _safe_float(patient.get("demographics", {}).get("age_at_diagnosis")) or _safe_float(identity.get("age")),
         "diagnosis_date": identity.get("diagnosis_date"),
         "reconciled_state": state,
         "management_track": management_track,
+        "baseline_psa": _safe_float((patient.get("baseline") or {}).get("baseline_psa")),
+        "ecog_score": _safe_float((patient.get("baseline") or {}).get("ecog_score")),
+        "metastatic": 0 if str((patient.get("baseline") or {}).get("metastasis_site") or "M0") == "M0" else 1,
+        "high_volume": 1 if str((patient.get("baseline") or {}).get("volume_disease") or "").lower() in {"high", "alto", "high volume"} else 0,
         "latest_psa": latest_followup.get("psa_current"),
         "latest_testosterone": latest_followup.get("testosterone_current"),
         "latest_biopsy_isup": latest_biopsy.get("isup_grade"),
         "latest_pirads": latest_imaging.get("pirads_score"),
         "latest_imaging_type": latest_imaging.get("study_type"),
         "current_treatment": latest_followup.get("current_treatment"),
+        "current_regimen_code": _latest(patient.get("treatments") or [], "start_date").get("drug_scheme"),
         "line_of_therapy": _latest(patient.get("treatments") or [], "start_date").get("line_of_therapy"),
         "hrr_status": latest_genomic.get("hrr_overall"),
         "brca2_status": latest_genomic.get("brca2_status"),
         "msi_status": latest_genomic.get("msi_status"),
+        "molecular_report_available": bool(latest_genomic.get("test_type") or patient.get("genomic_reports")),
+        "as_protocol_active": bool(patient.get("active_surveillance_protocol")),
         "risk_tools": {
             item.get("tool_key"): {
                 "status": item.get("status"),
@@ -310,6 +319,8 @@ def build_analysis_dataset_row(patient: dict[str, Any], state: str, management_t
         "backbone_alignment_status": str((signals.get("backbone_alignment") or {}).get("alignment_status") or "unknown"),
         "prognostic_followup_adjusted": bool(signals.get("cadence_adjusted_by")),
         "prognostic_capture_target_count": len(signals.get("prognostic_capture_targets") or []),
+        "survival_os_event": 1 if str(patient.get("vital_status") or "").lower() == "dead" else 0,
+        "survival_os_months": _safe_float(((signals.get("trial_endpoints") or {}).get("OS") or {}).get("duration_months")),
     }
 
 

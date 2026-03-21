@@ -147,6 +147,60 @@
                 </div>
             </div>
         </div>
+
+        <div class="chart-container">
+            <div class="mb-4 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                    <h3 class="text-sm font-semibold text-white">Epidemiología, calidad e investigación institucional</h3>
+                    <p class="mt-1 text-xs text-slate-500">Supervivencia, outcomes operativos, quality indicators, benchmarking, cohorting dinámico, consent governance y exports de investigación.</p>
+                </div>
+                <span class="research-badge border border-cyan-500/20 bg-cyan-500/10 text-cyan-200">Research Intelligence</span>
+            </div>
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <h4 class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Curva institucional OS</h4>
+                    <canvas id="chartResearchSurvival" height="220"></canvas>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <h4 class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Readiness de investigación</h4>
+                    <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3" id="researchReadinessGrid"></div>
+                </div>
+            </div>
+            <div class="mt-4 grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <h4 class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Quality indicators</h4>
+                    <div class="mt-4 grid grid-cols-1 gap-3" id="qualityIndicatorGrid"></div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <h4 class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Outcomes operativos</h4>
+                    <canvas id="chartClavien" height="220"></canvas>
+                    <div class="mt-4 grid grid-cols-1 gap-3" id="operationalOutcomeGrid"></div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <h4 class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Benchmarking institucional</h4>
+                    <div class="mt-4 grid grid-cols-1 gap-3" id="institutionalBenchmarkGrid"></div>
+                </div>
+            </div>
+            <div class="mt-4 grid grid-cols-1 xl:grid-cols-4 gap-4">
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <h4 class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Cohortes dinámicas</h4>
+                    <div class="mt-4 grid grid-cols-1 gap-3" id="dynamicCohortGrid"></div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <h4 class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Modelos multivariados</h4>
+                    <div class="mt-4 grid grid-cols-1 gap-3" id="multivariateGrid"></div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <h4 class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Propensity & comparative effectiveness</h4>
+                    <div class="mt-4 grid grid-cols-1 gap-3" id="comparativeGrid"></div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <h4 class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Consent governance & exports</h4>
+                    <div class="mt-4 grid grid-cols-1 gap-3" id="consentGovernanceGrid"></div>
+                    <div class="mt-4 grid grid-cols-1 gap-3" id="exportGovernanceGrid"></div>
+                </div>
+            </div>
+        </div>
     </div>
 {% endblock %}
 
@@ -166,30 +220,148 @@
         const humanizeClinicalText = window.clinicalPresentation?.humanize || ((value) => value);
 
         let allPatients = [];
+        let dashboardSummary = {};
+        let dashboardAnalytics = {};
+        let dashboardCalibration = {};
+        let dashboardResearch = {};
         let dashboardData = {};
+        const dashboardCharts = {};
+
+        function mergeDashboardData() {
+            dashboardData = { ...dashboardSummary, ...dashboardAnalytics, ...dashboardCalibration, ...dashboardResearch };
+        }
+
+        function replaceChart(canvasId, config) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas) return null;
+            if (dashboardCharts[canvasId]) {
+                dashboardCharts[canvasId].destroy();
+            }
+            dashboardCharts[canvasId] = new Chart(canvas, config);
+            return dashboardCharts[canvasId];
+        }
+
+        function renderPanelMessage(containerId, message, tone = 'slate') {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            const accentClass = {
+                slate: 'border-slate-700 bg-slate-950/40 text-slate-400',
+                amber: 'border-amber-500/20 bg-amber-950/10 text-amber-300',
+                rose: 'border-rose-500/20 bg-rose-950/10 text-rose-300'
+            }[tone] || 'border-slate-700 bg-slate-950/40 text-slate-400';
+            container.innerHTML = `<div class="rounded-2xl border ${accentClass} p-4 text-sm leading-relaxed">${humanizeClinicalText(message)}</div>`;
+        }
+
+        function normalizePatients(patients) {
+            return (patients || []).map((patient) => {
+                const normalized = { ...patient };
+                if (normalized.dob) {
+                    const dob = new Date(normalized.dob);
+                    normalized.age = Math.floor((new Date() - dob) / (365.25 * 24 * 60 * 60 * 1000));
+                }
+                return normalized;
+            });
+        }
+
+        function initDeferredPanels() {
+            renderPanelMessage('benchmarkCards', 'Cargando benchmarking operativo de la cohorte…');
+            renderPanelMessage('calibrationCards', 'Cargando calibración del motor clínico…');
+            renderPanelMessage('riskScoreBuckets', 'Cargando distribuciones pronósticas…');
+            renderPanelMessage('riskToolStatsGrid', 'Cargando herramientas pronósticas por estado…');
+            renderPanelMessage('upgradeStatsGrid', 'Cargando métricas de upgrade y reclasificación…');
+            renderPanelMessage('prognosticImpactGrid', 'Cargando impacto pronóstico y alineación terapéutica…');
+            renderPanelMessage('researchReadinessGrid', 'Cargando readiness de investigación…');
+            renderPanelMessage('qualityIndicatorGrid', 'Cargando quality indicators institucionales…');
+            renderPanelMessage('operationalOutcomeGrid', 'Cargando outcomes operativos…');
+            renderPanelMessage('institutionalBenchmarkGrid', 'Cargando benchmarking institucional…');
+            renderPanelMessage('dynamicCohortGrid', 'Cargando cohortes dinámicas…');
+            renderPanelMessage('multivariateGrid', 'Cargando modelos multivariados…');
+            renderPanelMessage('comparativeGrid', 'Cargando análisis comparativo observacional…');
+            renderPanelMessage('consentGovernanceGrid', 'Cargando gobernanza de consentimiento…');
+            renderPanelMessage('exportGovernanceGrid', 'Cargando readiness de exportación…');
+        }
 
         // ── Load All Data ─────────────────────────────────────────────────────
         async function loadDashboard() {
+            initDeferredPanels();
             try {
-                const [patientsRes, statsRes] = await Promise.all([
+                const [patientsRes, summaryRes] = await Promise.all([
                     fetch('/api/patients').then(r => r.json()),
-                    fetch('/api/dashboard_stats').then(r => r.json()).catch(() => null)
+                    fetch('/api/dashboard/summary').then(r => r.json()).catch(() => null)
                 ]);
 
-                if (patientsRes.success) {
-                    allPatients = patientsRes.patients.map(p => {
-                        if (p.dob) {
-                            const dob = new Date(p.dob);
-                            p.age = Math.floor((new Date() - dob) / (365.25 * 24 * 60 * 60 * 1000));
-                        }
-                        return p;
-                    });
+                if (patientsRes?.success) {
+                    allPatients = normalizePatients(patientsRes.patients);
                 }
-                dashboardData = statsRes || {};
-                renderDashboard();
+                dashboardSummary = summaryRes?.success ? summaryRes : {};
+                mergeDashboardData();
+                renderSummaryPanels();
             } catch (e) {
-                console.error('Error loading dashboard:', e);
-                renderDashboard();
+                console.error('Error loading dashboard summary:', e);
+                renderSummaryPanels();
+                renderPanelMessage('benchmarkCards', 'No fue posible cargar el benchmarking operativo.', 'rose');
+                renderPanelMessage('calibrationCards', 'No fue posible cargar la calibración del motor clínico.', 'rose');
+            }
+
+            loadDashboardAnalytics();
+            loadDashboardCalibration();
+            loadDashboardResearch();
+        }
+
+        async function loadDashboardAnalytics() {
+            try {
+                const analyticsRes = await fetch('/api/dashboard/analytics').then(r => r.json());
+                if (!analyticsRes?.success) {
+                    throw new Error(analyticsRes?.error || 'analytics_failed');
+                }
+                dashboardAnalytics = analyticsRes;
+                mergeDashboardData();
+                renderAnalyticsPanels();
+            } catch (e) {
+                console.error('Error loading dashboard analytics:', e);
+                renderPanelMessage('benchmarkCards', 'La analítica avanzada de cohorte no estuvo disponible en esta carga.', 'amber');
+                renderPanelMessage('riskScoreBuckets', 'La distribución de scores pronósticos no estuvo disponible en esta carga.', 'amber');
+                renderPanelMessage('riskToolStatsGrid', 'La analítica pronóstica de la cohorte no estuvo disponible en esta carga.', 'amber');
+                renderPanelMessage('upgradeStatsGrid', 'Las métricas de upgrade no estuvieron disponibles en esta carga.', 'amber');
+                renderPanelMessage('prognosticImpactGrid', 'El impacto pronóstico agregado no estuvo disponible en esta carga.', 'amber');
+            }
+        }
+
+        async function loadDashboardCalibration() {
+            try {
+                const calibrationRes = await fetch('/api/dashboard/calibration').then(r => r.json());
+                if (!calibrationRes?.success) {
+                    throw new Error(calibrationRes?.error || 'calibration_failed');
+                }
+                dashboardCalibration = calibrationRes;
+                mergeDashboardData();
+                renderCalibrationPanels();
+            } catch (e) {
+                console.error('Error loading dashboard calibration:', e);
+                renderPanelMessage('calibrationCards', 'La calibración del motor no estuvo disponible en esta carga.', 'amber');
+            }
+        }
+
+        async function loadDashboardResearch() {
+            try {
+                const researchRes = await fetch('/api/dashboard/research-intelligence').then(r => r.json());
+                if (!researchRes?.success) {
+                    throw new Error(researchRes?.error || 'research_failed');
+                }
+                dashboardResearch = researchRes;
+                mergeDashboardData();
+                renderResearchPanels();
+            } catch (e) {
+                console.error('Error loading dashboard research intelligence:', e);
+                renderPanelMessage('researchReadinessGrid', 'La capa de research intelligence no estuvo disponible en esta carga.', 'amber');
+                renderPanelMessage('qualityIndicatorGrid', 'Los quality indicators no estuvieron disponibles en esta carga.', 'amber');
+                renderPanelMessage('operationalOutcomeGrid', 'Los outcomes operativos no estuvieron disponibles en esta carga.', 'amber');
+                renderPanelMessage('institutionalBenchmarkGrid', 'El benchmarking institucional no estuvo disponible en esta carga.', 'amber');
+                renderPanelMessage('dynamicCohortGrid', 'Las cohortes dinámicas no estuvieron disponibles en esta carga.', 'amber');
+                renderPanelMessage('multivariateGrid', 'El análisis multivariado no estuvo disponible en esta carga.', 'amber');
+                renderPanelMessage('comparativeGrid', 'El análisis comparativo no estuvo disponible en esta carga.', 'amber');
+                renderPanelMessage('consentGovernanceGrid', 'La gobernanza de consentimiento no estuvo disponible en esta carga.', 'amber');
+                renderPanelMessage('exportGovernanceGrid', 'La capa de exportación no estuvo disponible en esta carga.', 'amber');
             }
         }
 
@@ -201,7 +373,7 @@
         }
 
         // ── Render Dashboard ──────────────────────────────────────────────────
-        function renderDashboard() {
+        function renderSummaryPanels() {
             const n = allPatients.length;
 
             // KPIs
@@ -234,9 +406,29 @@
             renderRecentPatients();
             renderCompletenessMetrics();
             renderResearchLines();
+        }
+
+        function renderAnalyticsPanels() {
+            renderCompletenessMetrics();
             renderBenchmarkCards();
-            renderCalibrationCards();
             renderRiskToolStats();
+        }
+
+        function renderCalibrationPanels() {
+            renderCalibrationCards();
+        }
+
+        function renderResearchPanels() {
+            renderResearchSurvivalChart();
+            renderResearchReadinessPanels();
+            renderQualityIndicatorPanels();
+            renderOperationalOutcomePanels();
+            renderInstitutionalBenchmarkPanels();
+            renderDynamicCohortPanels();
+            renderMultivariatePanels();
+            renderComparativePanels();
+            renderConsentGovernancePanels();
+            renderExportGovernancePanels();
         }
 
         // ── Chart: Metastasis Distribution ────────────────────────────────────
@@ -248,7 +440,7 @@
             });
             const labels = Object.keys(counts).map((label) => humanizeClinicalText(label));
             const data = Object.values(counts);
-            new Chart(document.getElementById('chartMetastasis'), {
+            replaceChart('chartMetastasis', {
                 type: 'doughnut',
                 data: {
                     labels, datasets: [{
@@ -274,7 +466,7 @@
                 else if (vol.includes('Low') || vol.includes('low') || vol.includes('Bajo')) counts['Low']++;
                 else counts['No Aplica']++;
             });
-            new Chart(document.getElementById('chartVolume'), {
+            replaceChart('chartVolume', {
                 type: 'doughnut',
                 data: {
                     labels: Object.keys(counts).map(label => humanizeClinicalText(label)),
@@ -298,7 +490,7 @@
                 const ecog = p.ecog_score != null ? Math.min(p.ecog_score, 4) : 0;
                 counts[ecog]++;
             });
-            new Chart(document.getElementById('chartECOG'), {
+            replaceChart('chartECOG', {
                 type: 'bar',
                 data: {
                     labels: [
@@ -334,7 +526,7 @@
                 else if (v <= 100) counts[4]++;
                 else counts[5]++;
             });
-            new Chart(document.getElementById('chartPSA'), {
+            replaceChart('chartPSA', {
                 type: 'bar',
                 data: {
                     labels: bins,
@@ -372,7 +564,7 @@
             const cumulative = [];
             data.reduce((sum, v, i) => { cumulative.push(sum + v); return sum + v; }, 0);
 
-            new Chart(document.getElementById('chartEnrollment'), {
+            replaceChart('chartEnrollment', {
                 type: 'bar',
                 data: {
                     labels: labels.map(l => l.replace('-', '/')),
@@ -405,7 +597,7 @@
             const noAlerts = allPatients.length - withAlerts.length;
             const total = withAlerts.reduce((s, p) => s + p.alert_count, 0);
 
-            new Chart(document.getElementById('chartAlerts'), {
+            replaceChart('chartAlerts', {
                 type: 'doughnut',
                 data: {
                     labels: ['Sin alertas', 'Con alertas'],
@@ -476,9 +668,14 @@
                 { label: 'Factibilidad de rescate local documentada', count: dashboardData.salvage_documented_count || 0, denominator: nAssessments },
                 { label: 'Contexto de línea mCRPC documentado', count: dashboardData.mcrpc_line_context_count || 0, denominator: nAssessments },
                 { label: 'Informe molecular fechado', count: dashboardData.molecular_report_count || 0, denominator: nAssessments },
-                { label: 'Cohorte México completa', count: dashboardData.cohort_completeness?.mexico_core_complete_count || 0, denominator: n },
-                { label: 'Cobertura de documentos verificados', count: dashboardData.cohort_completeness?.document_verification_coverage_count || 0, denominator: n },
             ];
+
+            if (dashboardData.cohort_completeness) {
+                metrics.push(
+                    { label: 'Cohorte México completa', count: dashboardData.cohort_completeness?.mexico_core_complete_count || 0, denominator: n },
+                    { label: 'Cobertura de documentos verificados', count: dashboardData.cohort_completeness?.document_verification_coverage_count || 0, denominator: n },
+                );
+            }
 
             container.innerHTML = metrics.map(m => {
                 const denominator = m.denominator || n;
@@ -903,6 +1100,247 @@
             window.clinicalPresentation?.normalizeDocument(toolGrid);
             window.clinicalPresentation?.normalizeDocument(prognosticGrid);
             window.clinicalPresentation?.normalizeDocument(upgradeGrid);
+        }
+
+        function renderResearchSurvivalChart() {
+            const bundle = dashboardResearch?.survival?.os?.curve?.curve || {};
+            const times = bundle.times || [];
+            const probs = (bundle.survival_probs || []).map((value) => Number((value * 100).toFixed(1)));
+            replaceChart('chartResearchSurvival', {
+                type: 'line',
+                data: {
+                    labels: times,
+                    datasets: [{
+                        label: 'OS institucional',
+                        data: probs,
+                        borderColor: COLORS.cyan,
+                        backgroundColor: 'rgba(6, 182, 212, 0.15)',
+                        fill: true,
+                        tension: 0.2,
+                        pointRadius: 2,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { display: false },
+                        title: {
+                            display: true,
+                            text: bundle.total_patients ? `n=${bundle.total_patients} · eventos=${bundle.total_events || 0}` : 'Sin datos suficientes',
+                            color: '#94a3b8',
+                            font: { size: 11 },
+                        },
+                    },
+                    scales: {
+                        x: { title: { display: true, text: 'Meses' } },
+                        y: { beginAtZero: true, max: 100, title: { display: true, text: 'Supervivencia (%)' } },
+                    },
+                },
+            });
+        }
+
+        function renderResearchReadinessPanels() {
+            const container = document.getElementById('researchReadinessGrid');
+            const readiness = dashboardResearch.research_readiness || {};
+            const consent = dashboardResearch.consent_governance || {};
+            const cards = [
+                { title: 'Pacientes research-ready', value: readiness.research_ready_patients || 0, detail: 'Pacientes con señal longitudinal utilizable y snapshots clínicos disponibles.' },
+                { title: 'Cobertura de consentimiento', value: `${consent.coverage_pct || 0}%`, detail: `${consent.signed_count || 0} firmados / ${consent.total_patients || 0} registrados` },
+                { title: 'Cohortes dinámicas', value: readiness.dynamic_cohort_count || 0, detail: 'Cohortes reutilizables para KM, Cox, logistic, PSM y export.' },
+                { title: 'Registros exportables', value: readiness.exportable_records || 0, detail: 'Pacientes disponibles en export canónico REDCap/CSV.' },
+            ];
+            container.innerHTML = cards.map((card) => `
+                <div class="rounded-2xl border border-cyan-500/15 bg-cyan-950/10 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">${humanizeClinicalText(card.title)}</div>
+                    <div class="mt-2 text-2xl font-bold text-cyan-200">${card.value}</div>
+                    <p class="mt-2 text-xs text-slate-400">${humanizeClinicalText(card.detail)}</p>
+                </div>
+            `).join('');
+            window.clinicalPresentation?.normalizeDocument(container);
+        }
+
+        function renderQualityIndicatorPanels() {
+            const container = document.getElementById('qualityIndicatorGrid');
+            const results = dashboardResearch?.quality_indicators?.results || [];
+            container.innerHTML = results.length ? results.map((item) => `
+                <div class="rounded-2xl border border-emerald-500/15 bg-emerald-950/10 p-4">
+                    <div class="text-sm font-semibold text-white">${humanizeClinicalText(item.title || item.indicator_key)}</div>
+                    <div class="mt-2 text-2xl font-bold text-emerald-200">${item.percentage || 0}%</div>
+                    <div class="mt-2 text-xs text-slate-400">${item.numerator || 0}/${item.denominator || 0} · Target ${item.benchmark_target || 'institucional'}</div>
+                </div>
+            `).join('') : '<div class="text-sm text-slate-500">Sin indicadores disponibles.</div>';
+            window.clinicalPresentation?.normalizeDocument(container);
+        }
+
+        function renderOperationalOutcomePanels() {
+            const chartData = dashboardResearch?.operational_outcomes?.clavien_distribution || {};
+            replaceChart('chartClavien', {
+                type: 'bar',
+                data: {
+                    labels: Object.keys(chartData).length ? Object.keys(chartData).map((label) => `Clavien ${label}`) : ['Sin eventos'],
+                    datasets: [{
+                        data: Object.keys(chartData).length ? Object.values(chartData) : [0],
+                        backgroundColor: COLORS.orange,
+                        borderRadius: 6,
+                        borderSkipped: false,
+                    }],
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } },
+                },
+            });
+            const container = document.getElementById('operationalOutcomeGrid');
+            const payload = dashboardResearch?.operational_outcomes || {};
+            const cards = [
+                { title: 'Cirugías con outcomes estructurados', value: payload.surgery_count || 0, detail: 'Expedientes con registro operatorio utilizable.' },
+                { title: 'Márgenes positivos', value: `${payload.positive_margin_rate || 0}%`, detail: `${payload.positive_margin_count || 0} casos con margen positivo.` },
+                { title: 'Continencia recuperada', value: payload.continence_recovered_count || 0, detail: 'Pacientes con recuperación urinaria documentada.' },
+                { title: 'Potencia funcional', value: payload.potency_recovered_count || 0, detail: 'Pacientes con recuperación sexual útil documentada.' },
+            ];
+            container.innerHTML = cards.map((card) => `
+                <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">${humanizeClinicalText(card.title)}</div>
+                    <div class="mt-2 text-xl font-bold text-white">${card.value}</div>
+                    <div class="mt-2 text-xs text-slate-400">${humanizeClinicalText(card.detail)}</div>
+                </div>
+            `).join('');
+            window.clinicalPresentation?.normalizeDocument(container);
+        }
+
+        function renderInstitutionalBenchmarkPanels() {
+            const container = document.getElementById('institutionalBenchmarkGrid');
+            const comparisons = dashboardResearch?.benchmarking?.comparisons || [];
+            container.innerHTML = comparisons.length ? comparisons.map((item) => `
+                <div class="rounded-2xl border border-purple-500/15 bg-purple-950/10 p-4">
+                    <div class="text-sm font-semibold text-white">${humanizeClinicalText(item.title || item.benchmark_key)}</div>
+                    <div class="mt-2 text-xs text-slate-400">${humanizeClinicalText(item.source_label || '')}</div>
+                    <div class="mt-3 text-xs uppercase tracking-[0.18em] text-purple-200">${humanizeClinicalText(item.comparability_tier || 'limited')}</div>
+                    <div class="mt-2 text-xs text-slate-300">${humanizeClinicalText(item.gap_label || 'Comparación institucional')}</div>
+                </div>
+            `).join('') : '<div class="text-sm text-slate-500">Sin comparaciones benchmark disponibles.</div>';
+            window.clinicalPresentation?.normalizeDocument(container);
+        }
+
+        function renderDynamicCohortPanels() {
+            const container = document.getElementById('dynamicCohortGrid');
+            const cohorts = dashboardResearch?.dynamic_cohorts || [];
+            container.innerHTML = cohorts.length ? cohorts.map((cohort) => `
+                <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
+                    <div class="flex items-center justify-between gap-3">
+                        <div class="text-sm font-semibold text-white">${humanizeClinicalText(cohort.title)}</div>
+                        <span class="rounded-full border border-slate-700 px-2 py-1 text-[11px] text-slate-300">${cohort.member_count || cohort.patient_ids?.length || 0}</span>
+                    </div>
+                    <div class="mt-2 text-xs text-slate-400">${humanizeClinicalText(cohort.description || 'Cohorte reusable del sistema')}</div>
+                </div>
+            `).join('') : '<div class="text-sm text-slate-500">Sin cohortes dinámicas disponibles.</div>';
+            window.clinicalPresentation?.normalizeDocument(container);
+        }
+
+        function renderMultivariatePanels() {
+            const container = document.getElementById('multivariateGrid');
+            const cox = dashboardResearch?.multivariate?.cox || {};
+            const logistic = dashboardResearch?.multivariate?.logistic || {};
+            const coxRows = cox?.result?.cox_model?.summary || [];
+            const logisticRows = logistic?.rows || [];
+            container.innerHTML = `
+                <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
+                    <div class="text-sm font-semibold text-white">Cox proporcional</div>
+                    <div class="mt-2 text-xs text-slate-400">${cox?.result?.status || 'Sin ejecución'}</div>
+                    <div class="mt-3 space-y-2">
+                        ${coxRows.slice(0, 4).map((row) => `
+                            <div class="flex items-center justify-between text-xs">
+                                <span class="text-slate-400">${humanizeClinicalText(row.covariate || '')}</span>
+                                <span class="font-medium text-white">HR ${Number(row['exp(coef)'] || 0).toFixed(2)}</span>
+                            </div>
+                        `).join('') || '<div class="text-xs text-slate-500">Sin covariables utilizables todavía.</div>'}
+                    </div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
+                    <div class="text-sm font-semibold text-white">Regresión logística</div>
+                    <div class="mt-2 text-xs text-slate-400">${logistic?.eligible === false ? humanizeClinicalText(logistic.reason || 'No disponible') : `AUC ${logistic?.metrics?.auc ?? 'N/D'}`}</div>
+                    <div class="mt-3 space-y-2">
+                        ${logisticRows.slice(0, 4).map((row) => `
+                            <div class="flex items-center justify-between text-xs">
+                                <span class="text-slate-400">${humanizeClinicalText(row.covariate || '')}</span>
+                                <span class="font-medium text-white">OR ${row.odds_ratio ?? 'N/D'}</span>
+                            </div>
+                        `).join('') || '<div class="text-xs text-slate-500">Sin modelo logístico usable todavía.</div>'}
+                    </div>
+                </div>
+            `;
+            window.clinicalPresentation?.normalizeDocument(container);
+        }
+
+        function renderComparativePanels() {
+            const container = document.getElementById('comparativeGrid');
+            const payload = dashboardResearch?.comparative_effectiveness || {};
+            if (!payload.eligible) {
+                container.innerHTML = `<div class="rounded-2xl border border-amber-500/20 bg-amber-950/10 p-4 text-sm text-amber-200">${humanizeClinicalText(payload.reason || 'El análisis observacional no estuvo disponible.')}</div>`;
+                return;
+            }
+            container.innerHTML = `
+                <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
+                    <div class="text-sm font-semibold text-white">Pairs emparejados</div>
+                    <div class="mt-2 text-2xl font-bold text-white">${payload.matched_pairs || 0}</div>
+                    <div class="mt-2 text-xs text-slate-400">${humanizeClinicalText(payload.treatment_field || '')}: ${humanizeClinicalText(payload.treatment_value || '')} vs ${humanizeClinicalText(payload.control_value || '')}</div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
+                    <div class="text-sm font-semibold text-white">Balance de covariables</div>
+                    <div class="mt-3 space-y-2">
+                        ${(payload.balance || []).slice(0, 4).map((row) => `
+                            <div class="flex items-center justify-between text-xs">
+                                <span class="text-slate-400">${humanizeClinicalText(row.covariate || '')}</span>
+                                <span class="font-medium text-white">SMD ${row.smd ?? '0.0'}</span>
+                            </div>
+                        `).join('') || '<div class="text-xs text-slate-500">Sin balance disponible.</div>'}
+                    </div>
+                </div>
+            `;
+            window.clinicalPresentation?.normalizeDocument(container);
+        }
+
+        function renderConsentGovernancePanels() {
+            const container = document.getElementById('consentGovernanceGrid');
+            const payload = dashboardResearch?.consent_governance || {};
+            const recent = payload.recent_consents || [];
+            container.innerHTML = `
+                <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
+                    <div class="text-sm font-semibold text-white">Cobertura de consentimiento</div>
+                    <div class="mt-2 text-2xl font-bold text-white">${payload.coverage_pct || 0}%</div>
+                    <div class="mt-2 text-xs text-slate-400">${payload.signed_count || 0} firmados / ${payload.total_patients || 0} pacientes</div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
+                    <div class="text-sm font-semibold text-white">Versión vigente</div>
+                    <div class="mt-2 text-xs uppercase tracking-[0.18em] text-cyan-200">${payload.current_version?.version_code || 'N/D'}</div>
+                    <div class="mt-2 text-xs text-slate-400">${humanizeClinicalText(payload.current_version?.title || '')}</div>
+                    <div class="mt-3 space-y-2">
+                        ${recent.slice(0, 3).map((item) => `
+                            <div class="text-xs text-slate-300">${humanizeClinicalText(item.full_name || item.nss)} · ${humanizeClinicalText(item.status || '')}</div>
+                        `).join('') || '<div class="text-xs text-slate-500">Sin firmas recientes.</div>'}
+                    </div>
+                </div>
+            `;
+            window.clinicalPresentation?.normalizeDocument(container);
+        }
+
+        function renderExportGovernancePanels() {
+            const container = document.getElementById('exportGovernanceGrid');
+            const payload = dashboardResearch?.exports || {};
+            const cards = [
+                { title: 'CSV canónico', manifest: payload.csv_manifest },
+                { title: 'REDCap', manifest: payload.redcap_manifest },
+                { title: 'CDISC mapping', manifest: payload.cdisc_manifest },
+            ];
+            container.innerHTML = cards.map((card) => `
+                <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
+                    <div class="text-sm font-semibold text-white">${humanizeClinicalText(card.title)}</div>
+                    <div class="mt-2 text-xs text-slate-400">Schema ${card.manifest?.schema_version || 'N/D'}</div>
+                    <div class="mt-2 text-xs text-slate-300">${card.manifest?.record_count || 0} registros</div>
+                </div>
+            `).join('');
+            window.clinicalPresentation?.normalizeDocument(container);
         }
 
         // ── Init ──────────────────────────────────────────────────────────────
