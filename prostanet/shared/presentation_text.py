@@ -15,6 +15,8 @@ MODULE_TITLE_MAP = {
     "adt_progression_verification": "Progresión bajo ADT / verificación de castración",
     "mcspc_oligo_metachronous": "Enfermedad metastásica sensible a la castración oligometastásica metacrónica",
     "mcspc_low_volume_sync_oligo": "Enfermedad metastásica sensible a la castración de bajo volumen u oligometastásica sincrónica",
+    "mcspc_high_volume_sync": "Enfermedad metastásica sensible a la castración de alto volumen sincrónica",
+    "mcspc_high_volume_metachronous": "Enfermedad metastásica sensible a la castración de alto volumen metacrónica",
     "mcspc_high_volume": "Enfermedad metastásica sensible a la castración de alto volumen",
     "m0_crpc": "Enfermedad resistente a la castración sin metástasis",
     "m1_crpc": "Enfermedad resistente a la castración con metástasis",
@@ -44,6 +46,13 @@ OPTION_LABELS = {
     "volume_disease": {
         "Low": "Bajo volumen",
         "High": "Alto volumen",
+    },
+    "peripheral_neuropathy_grade": {
+        "0": "Grado 0",
+        "1": "Grado 1",
+        "2": "Grado 2",
+        "3": "Grado 3",
+        "4": "Grado 4",
     },
     "castration_resistant": {"0": "No", "1": "Sí"},
     "systemic_progression_context": {
@@ -634,6 +643,19 @@ def _humanize_value(value):
 def humanize_result(result: dict) -> dict:
     normalized = normalize_legacy_result(result)
     translated = _humanize_value(deepcopy(normalized))
+    if normalized.get("trial_matches"):
+        translated["trial_matches"] = _humanize_value(deepcopy(normalized.get("trial_matches", [])))
+        for original, item in zip(normalized.get("trial_matches", []), translated["trial_matches"]):
+            raw_trial = original.get("trial", "")
+            raw_study_name = original.get("study_name", "")
+            if raw_trial:
+                item["trial_key"] = raw_trial
+                item["trial_label"] = item.get("trial", "")
+                item["trial"] = raw_trial
+            if raw_study_name:
+                item["study_name_key"] = raw_study_name
+                item["study_name_label"] = item.get("study_name", "")
+                item["study_name"] = raw_study_name
     if normalized.get("source_citations"):
         translated["source_citations"] = humanize_sources(normalized.get("source_citations", []))
     if normalized.get("validated_algorithms"):

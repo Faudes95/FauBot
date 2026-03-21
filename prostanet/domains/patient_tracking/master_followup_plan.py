@@ -87,6 +87,24 @@ SCENARIO_FOLLOWUP_MATRIX: dict[str, dict[str, Any]] = {
         "required_tasks": ["therapy_review", "lab_panel", "supportive_care", "imaging"],
         "escalation_rules": ["Cualquier cambio de línea o progresión radiográfica acelera encounter clínico."],
     },
+    "mcspc_high_volume_sync": {
+        "phase_label": "Fase 1",
+        "guideline_basis": ["NCCN 2026 mHSPC high-volume", "EAU 2026 mHSPC", "ARASENS", "PEACE-1", "ARANOTE"],
+        "anchor_priority": ["treatment_history.start_date", "stage_visit_records.visit_date", "source_documents.source_date"],
+        "cadence_rules": ["Seguimiento sistémico intensivo con laboratorios, imagen y bundles de seguridad.", "Monitorizar respuesta biológica, aptitud a docetaxel y tolerancia por línea terapéutica en enfermedad sincrónica / de novo."],
+        "encounter_templates": ["systemic_followup", "restaging", "documentation"],
+        "required_tasks": ["therapy_review", "lab_panel", "supportive_care", "imaging"],
+        "escalation_rules": ["Síntomas o carga tumoral creciente adelantan reestadificación.", "Si docetaxel deja de ser apropiado, reabrir selección de doblete visible con darolutamida."],
+    },
+    "mcspc_high_volume_metachronous": {
+        "phase_label": "Fase 1",
+        "guideline_basis": ["NCCN 2026 mHSPC high-volume", "EAU 2026 mHSPC", "ARASENS", "ARANOTE"],
+        "anchor_priority": ["treatment_history.start_date", "stage_visit_records.visit_date", "source_documents.source_date"],
+        "cadence_rules": ["Seguimiento sistémico intensivo con laboratorios, imagen y bundles de seguridad.", "Monitorizar respuesta biológica y tolerancia por línea evitando sobreextrapolar PEACE-1 como backbone metacrónico principal."],
+        "encounter_templates": ["systemic_followup", "restaging", "documentation"],
+        "required_tasks": ["therapy_review", "lab_panel", "supportive_care", "imaging"],
+        "escalation_rules": ["Síntomas o carga tumoral creciente adelantan reestadificación.", "Si docetaxel deja de ser apropiado, reabrir selección de doblete visible con darolutamida."],
+    },
     "mcspc_high_volume": {
         "phase_label": "Fase 1",
         "guideline_basis": ["NCCN 2026 mHSPC high-volume", "EAU 2026 mHSPC"],
@@ -261,6 +279,19 @@ def build_master_followup_plan(
     comparator_basis = _unique_preserving(
         [str(item.get("title") or item.get("label") or "") for item in comparators if str(item.get("title") or item.get("label") or "")]
     )
+    prognostic_modifiers = [dict(item) for item in list(signals.get("prognostic_modifiers") or []) if isinstance(item, dict)]
+    backbone_alignment = dict(signals.get("backbone_alignment") or {})
+    cadence_adjusted_by = [str(item) for item in list(signals.get("cadence_adjusted_by") or []) if str(item or "").strip()]
+    prognostic_rationale = [
+        {
+            "title": str(item.get("title") or item.get("modifier_key") or "Impacto pronóstico"),
+            "severity": str(item.get("severity") or "info"),
+            "why_it_matters_now": str(item.get("why_it_matters_now") or ""),
+            "followup_impact": list(item.get("followup_impact") or []),
+            "recommended_actions": list(item.get("recommended_actions") or []),
+        }
+        for item in prognostic_modifiers[:4]
+    ]
     anchor = ScheduleAnchorAssessment(
         anchor_date=str(protocol_trace.get("anchor_date") or ""),
         anchor_source=str(protocol_trace.get("anchor_source") or ""),
@@ -293,12 +324,18 @@ def build_master_followup_plan(
     )
     highlight_actions = _unique_preserving(
         list((next_best_action or {}).get("immediate_actions") or [])
+        + [str(action) for item in prognostic_modifiers for action in list(item.get("recommended_actions") or [])]
         + [str(alert.get("recommended_action") or "") for alert in blocking_alerts]
         + [str(item.get("recommended_action") or item.get("title") or "") for item in list(signals.get("pending_adjudications") or [])]
         + [str(task.get("title") or "") for task in list((next_encounter or {}).get("tasks") or [])[:3]]
     )[:8]
     gaps_to_close = _unique_preserving(
         list(signals.get("critical_missing") or [])
+        + [
+            f"{item.get('title')}: {', '.join(item.get('fields', []) or item.get('raw_fields', []) or [])}"
+            for item in list(signals.get("prognostic_capture_targets") or [])
+            if list(item.get("fields") or item.get("raw_fields") or [])
+        ]
         + [str(item.get("title") or "") for item in list(signals.get("pending_adjudications") or [])]
         + [
             f"{alert.get('title')}: {', '.join(alert.get('fields_to_capture') or [])}"
@@ -321,6 +358,8 @@ def build_master_followup_plan(
         "plan_status": "provisional" if anchor.get("is_fallback") else "active",
         "current_course_status": str(signals.get("current_course_status") or ""),
         "last_adjudicated_event": str((signals.get("last_adjudicated_event") or {}).get("summary") or ""),
+        "prognostic_modifier_count": len(prognostic_modifiers),
+        "cadence_adjusted_count": len(cadence_adjusted_by),
     }
     return MasterFollowupPlan(
         plan_version=PLAN_VERSION,
@@ -344,6 +383,9 @@ def build_master_followup_plan(
         optional_items=optional_items[:6],
         highlight_actions=highlight_actions,
         gaps_to_close=gaps_to_close,
+        prognostic_rationale=prognostic_rationale,
+        cadence_adjusted_by=cadence_adjusted_by,
+        backbone_alignment=backbone_alignment,
         summary=summary,
         inline_actions_enabled=any(bool(encounter.get("inline_actions_enabled")) for encounter in timeline),
     ).to_dict()

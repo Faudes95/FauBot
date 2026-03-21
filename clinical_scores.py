@@ -1103,8 +1103,22 @@ def damico_classification(patient: dict[str, Any]) -> dict[str, Any]:
         Intermedio:   PSA 10–20 OR Gleason 7 OR T2b
         Alto:         PSA >20 OR Gleason 8–10 OR T2c-T3
     """
-    psa = patient.get('psa', 0)
-    gleason = patient.get('gleason', patient.get('gleason_total', 6))
+    psa = patient.get('psa', patient.get('baseline_psa', 0))
+    gp = patient.get('gleason_primary', patient.get('pathology_gleason_primary'))
+    gs = patient.get('gleason_secondary', patient.get('pathology_gleason_secondary'))
+    isup = patient.get('isup_grade', patient.get('pathological_isup'))
+
+    if gp not in (None, '') and gs not in (None, ''):
+        gleason = int(gp) + int(gs)
+    elif patient.get('gleason') not in (None, ''):
+        gleason = int(patient.get('gleason'))
+    elif patient.get('gleason_total') not in (None, ''):
+        gleason = int(patient.get('gleason_total'))
+    elif isup not in (None, ''):
+        isup_value = int(isup)
+        gleason = {1: 6, 2: 7, 3: 7, 4: 8, 5: 9}.get(isup_value, 6)
+    else:
+        gleason = 6
     tstage = str(patient.get('clinical_tstage', patient.get('dre_findings', 'T2a'))).upper()
 
     # Determine T numeric value for comparison
@@ -1319,6 +1333,134 @@ def mskcc_pre_rp_bcr(patient: dict[str, Any]) -> dict[str, Any]:
         'risk_category': risk_cat,
         'interpretation': interpretation,
         'reference': 'Stephenson AJ et al. J Clin Oncol 2006;24:3973-8'
+    }
+
+
+# ============================================================================
+# 13. MSKCC POST-RP NOMOGRAM — BCR-FREE SURVIVAL
+#     Dynamic Prostate Cancer Nomogram: Coefficients (MSKCC, updated 2024-12-12)
+# ============================================================================ 
+
+def _grade_group_from_patterns(primary: Any, secondary: Any, isup: Any = None) -> int:
+    if isup not in (None, ''):
+        return max(1, min(int(isup), 5))
+    if primary in (None, '') or secondary in (None, ''):
+        return 1
+    gp = int(primary)
+    gs = int(secondary)
+    total = gp + gs
+    if total <= 6:
+        return 1
+    if total == 7 and gp == 3:
+        return 2
+    if total == 7 and gp == 4:
+        return 3
+    if total == 8:
+        return 4
+    return 5
+
+
+def _truthy_binary(value: Any) -> int:
+    return 1 if str(value).strip().lower() in {'1', 'true', 'yes', 'si', 'sí', 'positive', 'positivo'} else 0
+
+
+def _restricted_cubic_spline_terms(value: float, knot_1: float, knot_2: float, knot_3: float, knot_4: float) -> tuple[float, float]:
+    def cubic_term(x: float) -> float:
+        return max(x, 0.0) ** 3
+
+    denominator = knot_4 - knot_3
+    spline_1 = (
+        cubic_term(value - knot_1)
+        - cubic_term(value - knot_3) * ((knot_4 - knot_1) / denominator)
+        + cubic_term(value - knot_4) * ((knot_3 - knot_1) / denominator)
+    )
+    spline_2 = (
+        cubic_term(value - knot_2)
+        - cubic_term(value - knot_3) * ((knot_4 - knot_2) / denominator)
+        + cubic_term(value - knot_4) * ((knot_3 - knot_2) / denominator)
+    )
+    return spline_1, spline_2
+
+
+def _msk_loglogistic_survival(linear_predictor: float, years: float, gamma: float) -> float:
+    if years <= 0:
+        return 1.0
+    return 1.0 / (1.0 + ((math.exp(-linear_predictor) * years) ** (1.0 / gamma)))
+
+
+def mskcc_bcr_post_rp(patient: dict[str, Any]) -> dict[str, Any]:
+    """
+    Calcula el nomograma MSKCC post-prostatectomía radical para libertad de
+    recurrencia bioquímica usando los coeficientes oficiales publicados por MSKCC.
+
+    Modelo usado:
+        survival Postoperative BCR (sin clinical grade/stage)
+        Última actualización oficial reportada: 12-Dic-2024
+    """
+    age = float(patient.get('age', 65))
+    psa_preop = float(patient.get('psa_preop', patient.get('baseline_psa', patient.get('psa', 0))))
+    gg = _grade_group_from_patterns(
+        patient.get('pathology_gleason_primary', patient.get('gleason_primary')),
+        patient.get('pathology_gleason_secondary', patient.get('gleason_secondary')),
+        patient.get('pathological_isup', patient.get('pathologic_isup')),
+    )
+    margin = _truthy_binary(patient.get('surgical_margin_status', patient.get('surgical_margin', 0)))
+    ece = _truthy_binary(patient.get('extracapsular_extension', patient.get('ece_status', 0)))
+    svi = _truthy_binary(patient.get('seminal_vesicle_invasion', patient.get('svi_status', 0)))
+    lni = _truthy_binary(patient.get('lymph_node_invasion', patient.get('lni_status', 0)))
+
+    psa_spline_1, psa_spline_2 = _restricted_cubic_spline_terms(
+        psa_preop,
+        knot_1=0.2,
+        knot_2=4.8,
+        knot_3=7.35,
+        knot_4=307.0,
+    )
+
+    linear_predictor = 5.76763364
+    linear_predictor += 0.00310155 * age
+    linear_predictor += -0.28599905 * psa_preop
+    linear_predictor += 0.0025746 * psa_spline_1
+    linear_predictor += -0.0071869 * psa_spline_2
+    linear_predictor += {
+        1: 0.0,
+        2: -1.10495679,
+        3: -2.15504092,
+        4: -2.68503229,
+        5: -2.73858376,
+    }.get(gg, 0.0)
+    linear_predictor += -0.66726362 * ece
+    linear_predictor += -0.46645624 * svi
+    linear_predictor += -1.222055 * lni
+    linear_predictor += -0.93530105 * margin
+
+    gamma = 0.95008472
+    bcr_free_2y = _msk_loglogistic_survival(linear_predictor, 2, gamma)
+    bcr_free_5y = _msk_loglogistic_survival(linear_predictor, 5, gamma)
+    bcr_free_7y = _msk_loglogistic_survival(linear_predictor, 7, gamma)
+    bcr_free_10y = _msk_loglogistic_survival(linear_predictor, 10, gamma)
+
+    if bcr_free_5y >= 0.85:
+        risk_category = 'FAVORABLE'
+        interpretation = 'Riesgo relativamente bajo de recurrencia bioquímica posprostatectomía.'
+    elif bcr_free_5y >= 0.65:
+        risk_category = 'INTERMEDIO'
+        interpretation = 'Riesgo intermedio de recurrencia bioquímica; conviene vigilancia y ventana de rescate bien trazada.'
+    else:
+        risk_category = 'DESFAVORABLE'
+        interpretation = 'Riesgo alto de recurrencia bioquímica; se relaciona con vigilancia estrecha y discusión temprana de rescate.'
+
+    return {
+        'classification': 'MSKCC Post-RP BCR Nomogram',
+        'bcr_free_2y': f'{bcr_free_2y * 100:.1f}%',
+        'bcr_free_5y': f'{bcr_free_5y * 100:.1f}%',
+        'bcr_free_7y': f'{bcr_free_7y * 100:.1f}%',
+        'bcr_free_10y': f'{bcr_free_10y * 100:.1f}%',
+        'risk_category': risk_category,
+        'interpretation': interpretation,
+        'model_fidelity': 'official_coefficients',
+        'reference': 'MSKCC Dynamic Prostate Cancer Nomogram: Post-Radical Prostatectomy coefficients (updated 2024-12-12)',
+        'source_url': 'https://www.mskcc.org/nomograms/prostate/post_op/coefficients',
     }
 
 
@@ -2675,4 +2817,90 @@ def treatment_fit_score(ecog: int = 0, cci: int = 0, g8: float = None,
             "frailty_penalty": frailty_penalty,
         },
         "reference": "Palumbo A et al. Blood 2015 / Hurria A et al. J Clin Oncol 2016",
+    }
+
+
+def docetaxel_fitness(patient: dict[str, Any]) -> dict[str, Any]:
+    """
+    Evalúa aptitud estructurada para docetaxel.
+
+    Regla operativa:
+      - no fit: ECOG > 1, neuropatía periférica >= 2, frailty = Frail, Child-Pugh = C
+      - cautela: Child-Pugh = B, riesgo cardiovascular documentado,
+        o revisión de interacciones no documentada
+    """
+
+    def _to_int(value: Any) -> int | None:
+        try:
+            if value in (None, ""):
+                return None
+            return int(float(value))
+        except (TypeError, ValueError):
+            return None
+
+    def _truthy(value: Any) -> bool:
+        return str(value).strip().lower() in {"1", "true", "yes", "si", "sí", "on", "documentado"}
+
+    ecog = _to_int(patient.get("ecog_score", patient.get("ecog")))
+    neuropathy = _to_int(patient.get("peripheral_neuropathy_grade"))
+    frailty = str(patient.get("frailty_status", "") or "").strip().lower()
+    child_pugh = str(patient.get("child_pugh_score", "A") or "A").strip().upper()
+    cv_risk = _truthy(patient.get("cv_risk_documented")) or _truthy(patient.get("comorbidity_cardio"))
+    ddi_reviewed = _truthy(patient.get("drug_interaction_reviewed"))
+
+    hard_stop_reasons: list[str] = []
+    caution_reasons: list[str] = []
+    missing_inputs: list[str] = []
+
+    if ecog is None:
+        missing_inputs.append("ecog_score")
+    elif ecog > 1:
+        hard_stop_reasons.append("ECOG mayor de 1")
+
+    if neuropathy is None:
+        missing_inputs.append("peripheral_neuropathy_grade")
+    elif neuropathy >= 2:
+        hard_stop_reasons.append("Neuropatía periférica grado 2 o mayor")
+
+    if frailty == "frail":
+        hard_stop_reasons.append("Fragilidad clínica Frail")
+    elif not frailty:
+        missing_inputs.append("frailty_status")
+
+    if child_pugh == "C":
+        hard_stop_reasons.append("Child-Pugh C")
+    elif child_pugh == "B":
+        caution_reasons.append("Child-Pugh B")
+
+    if cv_risk:
+        caution_reasons.append("Riesgo cardiovascular documentado")
+
+    if not ddi_reviewed:
+        caution_reasons.append("Revisión de interacciones farmacológicas pendiente")
+
+    if missing_inputs:
+        caution_reasons.append(
+            "Faltan datos para confirmar aptitud completa: "
+            + ", ".join(sorted(dict.fromkeys(missing_inputs)))
+        )
+
+    fit_for_docetaxel = not hard_stop_reasons
+    if hard_stop_reasons:
+        fit_status = "not_fit"
+        fit_summary = "No fit para docetaxel: " + "; ".join(hard_stop_reasons) + "."
+    elif caution_reasons:
+        fit_status = "fit_with_caution"
+        fit_summary = "Apto para docetaxel con cautela: " + "; ".join(caution_reasons) + "."
+    else:
+        fit_status = "fit"
+        fit_summary = "Apto para docetaxel sin banderas mayores de seguridad."
+
+    return {
+        "fit_for_docetaxel": fit_for_docetaxel,
+        "fit_status": fit_status,
+        "docetaxel_hard_stop_reasons": hard_stop_reasons,
+        "docetaxel_caution_reasons": caution_reasons,
+        "docetaxel_fit_summary": fit_summary,
+        "missing_inputs": missing_inputs,
+        "reference": "Política estructurada del producto alineada a ECOG, CTCAE neuropatía, fragilidad y reserva hepática.",
     }

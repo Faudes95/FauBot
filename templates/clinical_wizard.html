@@ -272,6 +272,129 @@
             }).join('');
         }
 
+        function renderTripletDecision(card) {
+            if (!card || !card.show) {
+                return '';
+            }
+            const toneClass = card.tone === 'emerald'
+                ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200'
+                : card.tone === 'cyan'
+                    ? 'border-cyan-500/20 bg-cyan-500/10 text-cyan-200'
+                    : card.tone === 'amber'
+                        ? 'border-amber-500/20 bg-amber-500/10 text-amber-200'
+                        : card.tone === 'rose'
+                            ? 'border-rose-500/20 bg-rose-500/10 text-rose-200'
+                            : 'border-slate-700 bg-slate-950/60 text-slate-300';
+            const whyYes = renderTextList(card.why_yes || [], 'Hoy no existe un argumento suficiente para priorizar triplete.');
+            const whyNo = renderTextList(card.why_no || [], 'Sin limitaciones adicionales documentadas.');
+            const supported = (card.supported_triplet_backbones || []).length
+                ? `<p class="mt-2 text-xs text-slate-500">${(card.supported_triplet_backbones || []).map(humanizeClinicalText).join(', ')}</p>`
+                : '';
+            const missing = (card.missing_inputs || []).length
+                ? `<p class="mt-3 text-xs text-amber-200">Faltan datos: ${(card.missing_inputs || []).map(humanizeClinicalText).join(', ')}</p>`
+                : '';
+            return `
+                <div class="rounded-2xl border border-slate-700 p-4">
+                    <div class="flex items-center justify-between gap-3">
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Triplete en mHSPC</p>
+                            <p class="mt-1 text-sm font-medium text-white">${humanizeClinicalText(card.state_label || 'mHSPC')}</p>
+                        </div>
+                        <span class="rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.18em] ${toneClass}">${humanizeClinicalText(card.status_label || card.status || '')}</span>
+                    </div>
+                    <p class="mt-3 text-sm text-slate-200">${humanizeClinicalText(card.primary_reason || '')}</p>
+                    ${card.docetaxel_fitness_summary ? `<p class="mt-2 text-xs text-slate-400">${humanizeClinicalText(card.docetaxel_fitness_summary)}</p>` : ''}
+                    ${missing}
+                    <div class="mt-4 grid gap-4 md:grid-cols-2">
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Por qué sí</p>
+                            <ul class="mt-2 space-y-2 text-sm text-slate-300">${whyYes}</ul>
+                        </div>
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Por qué no / qué lo limita</p>
+                            <ul class="mt-2 space-y-2 text-sm text-slate-300">${whyNo}</ul>
+                        </div>
+                    </div>
+                    <div class="mt-4 grid gap-4 md:grid-cols-2">
+                        <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-3">
+                            <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Backbone trial-like preferido</p>
+                            <p class="mt-2 text-sm font-medium text-cyan-200">${humanizeClinicalText(card.preferred_triplet_backbone_label || 'No corresponde backbone de triplete en este escenario.')}</p>
+                            ${supported}
+                        </div>
+                        <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-3">
+                            <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Alternativa si no va triplete</p>
+                            <p class="mt-2 text-sm font-medium text-white">${humanizeClinicalText(card.preferred_non_triplet_backbone_label || 'Sin alternativa estructurada visible.')}</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderLiveBenchmarkCard(benchmark) {
+            if (!benchmark || benchmark.status === 'not_applicable') {
+                return '';
+            }
+            const flags = (benchmark.flags || []).length
+                ? (benchmark.flags || []).map((flag) => `<span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-1 text-[11px] uppercase tracking-[0.18em] text-slate-300">${humanizeClinicalText(String(flag).replaceAll('_', ' '))}</span>`).join('')
+                : '<span class="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-1 text-[11px] uppercase tracking-[0.18em] text-slate-300">Sin flags</span>';
+            return `
+                <div class="rounded-2xl border border-slate-700 p-4">
+                    <div class="flex items-center justify-between gap-3">
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Benchmark Vivo</p>
+                            <p class="mt-1 text-sm font-medium text-white">${humanizeClinicalText(benchmark.primary_endpoint_label || 'Comparación longitudinal')}</p>
+                        </div>
+                        <div class="flex flex-wrap justify-end gap-2">${flags}</div>
+                    </div>
+                    <div class="mt-4 grid gap-4 md:grid-cols-3">
+                        <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-3">
+                            <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Paciente</p>
+                            <p class="mt-2 text-sm text-white">${humanizeClinicalText(benchmark.patient_endpoint?.duration_months ?? 'N/D')}</p>
+                            ${benchmark.patient_percentile !== null && benchmark.patient_percentile !== undefined ? `<p class="mt-1 text-xs text-cyan-200">Percentil ${humanizeClinicalText(benchmark.patient_percentile)}</p>` : ''}
+                        </div>
+                        <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-3">
+                            <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Cohorte similar</p>
+                            <p class="mt-2 text-sm text-white">n = ${humanizeClinicalText(benchmark.reliability?.cohort_size ?? 0)}</p>
+                            <p class="mt-1 text-xs text-slate-400">Tier: ${humanizeClinicalText(benchmark.reliability?.cohort_tier || 'none')}</p>
+                        </div>
+                        <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-3">
+                            <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Referencia publicada</p>
+                            <p class="mt-2 text-sm text-white">${humanizeClinicalText(benchmark.published_reference?.label || 'Sin referencia específica')}</p>
+                            ${benchmark.published_reference?.median_months ? `<p class="mt-1 text-xs text-cyan-200">Mediana ${humanizeClinicalText(benchmark.published_reference.median_months)} meses</p>` : ''}
+                        </div>
+                    </div>
+                    <p class="mt-4 text-sm text-slate-300">${humanizeClinicalText(benchmark.narrative || '')}</p>
+                </div>
+            `;
+        }
+
+        function renderPsaForecastCard(forecast) {
+            if (!forecast || forecast.status === 'not_applicable') {
+                return '';
+            }
+            const points = forecast.forecast_points || [];
+            const confidence = forecast.reliability?.confidence_label || forecast.status || 'unknown';
+            const alerts = renderTextList((forecast.predictive_alerts || []).map((item) => item.message), 'Sin alertas predictivas críticas.');
+            return `
+                <div class="rounded-2xl border border-slate-700 p-4">
+                    <div class="flex items-center justify-between gap-3">
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.2em] text-slate-500">PSA prospectivo</p>
+                            <p class="mt-1 text-sm font-medium text-white">${humanizeClinicalText(forecast.current_line_label || 'Línea actual')}</p>
+                        </div>
+                        <span class="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-slate-300">${humanizeClinicalText(confidence)}</span>
+                    </div>
+                    <div class="mt-4 grid gap-4 md:grid-cols-4">
+                        <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-3"><p class="text-xs uppercase tracking-[0.2em] text-slate-500">3m</p><p class="mt-2 text-sm text-white">${humanizeClinicalText(points[0]?.expected_psa ?? 'N/D')}</p></div>
+                        <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-3"><p class="text-xs uppercase tracking-[0.2em] text-slate-500">6m</p><p class="mt-2 text-sm text-white">${humanizeClinicalText(points[1]?.expected_psa ?? 'N/D')}</p></div>
+                        <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-3"><p class="text-xs uppercase tracking-[0.2em] text-slate-500">12m</p><p class="mt-2 text-sm text-white">${humanizeClinicalText(points[2]?.expected_psa ?? 'N/D')}</p></div>
+                        <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-3"><p class="text-xs uppercase tracking-[0.2em] text-slate-500">PSADT proyectado</p><p class="mt-2 text-sm text-white">${humanizeClinicalText(forecast.projected_psadt_months ?? 'N/D')}</p></div>
+                    </div>
+                    <ul class="mt-4 space-y-2 text-sm text-slate-300">${alerts}</ul>
+                </div>
+            `;
+        }
+
         function renderCitationList(items, emptyMessage) {
             if (!items || !items.length) {
                 return `<div class="rounded-2xl border border-slate-700 p-4 text-sm text-slate-300">${emptyMessage}</div>`;
@@ -592,7 +715,10 @@
             const notRecommended = renderTextList(primary.tratamientos_no_priorizados || result.not_recommended || [], 'Sin advertencias adicionales.');
             const durations = renderTextList(primary.condiciones_y_duracion || result.durations_and_conditions || [], 'Sin duraciones adicionales.');
             const missing = renderTextList(primary.advertencias_y_datos_faltantes || result.missing_critical_inputs || [], 'Ninguno.');
-            const trials = (result.trial_matches || []).map(item => `<li>${humanizeClinicalText(item.trial)}: ${item.match ? 'aplica' : 'no aplica'}</li>`).join('');
+            const tripletDecision = renderTripletDecision(result.triplet_decision || result.triplet_decision_card || {});
+            const liveBenchmark = renderLiveBenchmarkCard(result.live_benchmark || {});
+            const psaForecast = renderPsaForecastCard(result.psa_forecast || {});
+            const trials = (result.visible_trial_matches || result.trial_matches || []).map(item => `<li><span class="font-medium text-white">${humanizeClinicalText(item.trial || item.study_name)}</span>: ${item.match ? 'aplica' : 'no aplica'}${item.reason ? `<br><span class="text-slate-400">${humanizeClinicalText(item.reason)}</span>` : ''}</li>`).join('');
             const contraindications = renderTextList(result.contraindications || [], 'Sin contraindicaciones estructuradas.');
             const fundamentals = renderTextList(primary.fundamentos_personalizados || [], 'Sin fundamentos adicionales.');
             const alternatives = renderTextList(primary.alternativas_razonables || [], 'Sin alternativas estructuradas.');
@@ -629,6 +755,9 @@
                         <p class="mt-2 text-sm text-slate-200">${humanizeClinicalText(primary.trayectoria_recomendada || result.nccn_primary.recommendation || '')}</p>
                     </div>
                 </div>
+                ${tripletDecision}
+                ${liveBenchmark}
+                ${psaForecast}
                 <div class="rounded-2xl border border-slate-700 p-4">
                     <p class="text-xs uppercase tracking-[0.2em] text-slate-400">Comparación con la Asociación Europea de Urología (EAU) 2026</p>
                     <p class="mt-2 text-sm text-slate-200">${humanizeClinicalText(result.eau_comparison.label)}</p>

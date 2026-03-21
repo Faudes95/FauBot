@@ -61,6 +61,21 @@ def _validated_bool(value, field_name: str, *, default=None):
     return parsed
 
 
+def _serialize_alerts(alerts):
+    """Acepta tanto ClinicalAlert como dicts ya serializados."""
+    serialized = []
+    for alert in alerts or []:
+        if isinstance(alert, dict):
+            serialized.append(alert)
+        elif hasattr(alert, "to_dict"):
+            serialized.append(alert.to_dict())
+        elif hasattr(alert, "__dict__"):
+            serialized.append(dict(alert.__dict__))
+        else:
+            serialized.append({"value": alert})
+    return serialized
+
+
 @modular_api.route("/api/state-classifier", methods=["POST"])
 def state_classifier() -> tuple:
     try:
@@ -167,6 +182,7 @@ def get_clinical_assessment_draft(assessment_id: int) -> tuple:
         module_id=module_id,
         state=assessment.get("state", ""),
         assessment_input=assessment.get("input_snapshot", {}) or {},
+        assessment_result=assessment.get("result_snapshot", {}) or {},
     )
     return jsonify(
         {
@@ -291,6 +307,9 @@ def patient_schedule(patient_id: int) -> tuple:
             "calendar_horizon_months": (schedule_bundle.get("master_followup_plan") or {}).get("calendar_horizon_months", horizon),
             "timeline": (schedule_bundle.get("master_followup_plan") or {}).get("timeline", []),
             "schedule_anchor_strength": schedule_bundle.get("schedule_anchor_strength", "strong"),
+            "prognostic_rationale": schedule_bundle.get("prognostic_rationale", (schedule_bundle.get("master_followup_plan") or {}).get("prognostic_rationale", [])),
+            "cadence_adjusted_by": schedule_bundle.get("cadence_adjusted_by", (schedule_bundle.get("master_followup_plan") or {}).get("cadence_adjusted_by", [])),
+            "backbone_alignment": schedule_bundle.get("backbone_alignment", (schedule_bundle.get("master_followup_plan") or {}).get("backbone_alignment", {})),
             "milestone_plan": schedule_bundle.get("milestone_plan", []),
             "outcome_anchor": schedule_bundle.get("outcome_anchor", {}),
             "pending_adjudication_tasks": schedule_bundle.get("pending_adjudication_tasks", []),
@@ -329,6 +348,50 @@ def cohort_benchmarks() -> tuple:
     try:
         payload = tracking_db.get_cohort_benchmarks()
         return jsonify({"success": True, **payload})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/patients/<int:patient_id>/risk-tools", methods=["GET"])
+def patient_risk_tools(patient_id: int) -> tuple:
+    import tracking_db
+    from prostanet.domains.patient_tracking.disease_course_outcomes import build_disease_course_bundle
+    from prostanet.domains.patient_tracking.prognostic_impact import build_prognostic_impact_bundle
+    from prostanet.domains.patient_tracking.risk_tools import build_risk_tools_panel
+    from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
+    from prostanet.shared.presentation_text import humanize_assessment
+
+    try:
+        patient = tracking_db.get_patient_full_record(patient_id)
+        if not patient:
+            return jsonify({"success": False, "error": "Paciente no encontrado."}), 404
+        raw_assessment = patient.get("latest_assessment") or {}
+        assessment = humanize_assessment(raw_assessment) if raw_assessment else {}
+        reconciliation = build_reconciled_state(patient, raw_assessment)
+        state = reconciliation.get("reconciled_state") or raw_assessment.get("state") or (patient.get("prior_history") or {}).get("current_state") or ""
+        bundle = build_risk_tools_panel(
+            patient=patient,
+            state=state,
+            raw_assessment=raw_assessment,
+            display_assessment=assessment,
+        )
+        current_trial_profile = dict((patient.get("latest_trial_benchmark_snapshot") or {}).get("current_trial_profile") or {})
+        if not current_trial_profile:
+            current_trial_profile = build_disease_course_bundle(
+                patient,
+                state=state,
+                management_track=reconciliation.get("reconciled_management_track") or "",
+                latest_assessment=raw_assessment,
+            ).get("current_trial_comparable_profile", {})
+        prognostic_bundle = build_prognostic_impact_bundle(
+            patient=patient,
+            state=state,
+            management_track=reconciliation.get("reconciled_management_track") or "",
+            raw_assessment=raw_assessment,
+            risk_tools_bundle=bundle,
+            current_trial_profile=current_trial_profile,
+        )
+        return jsonify({"success": True, **bundle, **prognostic_bundle})
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500
 
@@ -676,7 +739,7 @@ def patient_active_surveillance(patient_id: int) -> tuple:
             "success": True,
             "eligibility": [e.__dict__ if hasattr(e, "__dict__") else e for e in eligibility],
             "protocol_summary": summary,
-            "alerts": [a.to_dict() for a in alerts],
+            "alerts": _serialize_alerts(alerts),
         })
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500
@@ -700,7 +763,7 @@ def patient_radiotherapy_detail(patient_id: int) -> tuple:
         return jsonify({
             "success": True,
             "rt_summary": profile_summary,
-            "alerts": [a.to_dict() for a in alerts],
+            "alerts": _serialize_alerts(alerts),
         })
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500
@@ -739,7 +802,7 @@ def patient_skeletal_events(patient_id: int) -> tuple:
         return jsonify({
             "success": True,
             "sre_profile": summary,
-            "alerts": [a.to_dict() for a in alerts],
+            "alerts": _serialize_alerts(alerts),
         })
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500
@@ -768,8 +831,116 @@ def patient_survival_endpoints(patient_id: int) -> tuple:
         return jsonify({
             "success": True,
             "survival_status": summary,
-            "alerts": [a.to_dict() for a in alerts],
+            "alerts": _serialize_alerts(alerts),
         })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/patients/<int:patient_id>/psa-forecast", methods=["GET"])
+def patient_psa_forecast(patient_id: int) -> tuple:
+    """Devuelve forecast prospectivo de PSA para la línea terapéutica actual."""
+    import tracking_db
+
+    try:
+        if not tracking_db.patient_exists(patient_id):
+            return jsonify({"success": False, "error": "Paciente no encontrado."}), 404
+        bundle = tracking_db.refresh_longitudinal_intelligence(patient_id, force_recompute=False)
+        return jsonify(
+            {
+                "success": True,
+                "psa_forecast": bundle.get("psa_forecast", {}),
+                "forecast_reliability": bundle.get("forecast_reliability", {}),
+            }
+        )
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/patients/<int:patient_id>/live-benchmark", methods=["GET"])
+def patient_live_benchmark(patient_id: int) -> tuple:
+    """Devuelve benchmarking vivo del paciente contra cohorte similar y referencia publicada."""
+    import tracking_db
+
+    try:
+        if not tracking_db.patient_exists(patient_id):
+            return jsonify({"success": False, "error": "Paciente no encontrado."}), 404
+        bundle = tracking_db.refresh_longitudinal_intelligence(patient_id, force_recompute=False)
+        return jsonify(
+            {
+                "success": True,
+                "live_benchmark": bundle.get("live_benchmark", {}),
+                "benchmark_reliability": bundle.get("benchmark_reliability", {}),
+            }
+        )
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/cohorts/survival-curves", methods=["GET"])
+def cohort_survival_curves() -> tuple:
+    """Devuelve curva Kaplan-Meier y dataset tiempo-evento para un endpoint."""
+    import tracking_db
+    from prostanet.domains.patient_tracking.survival_analysis import build_survival_curve_payload
+
+    try:
+        endpoint_type = str(request.args.get("endpoint_type") or request.args.get("endpoint") or "OS").strip() or "OS"
+        state_filter = str(request.args.get("state") or "").strip() or None
+        conn = tracking_db._connect()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM patient_identity ORDER BY id ASC")
+        patient_ids = [int(row["id"]) for row in cursor.fetchall()]
+        conn.close()
+        records = [tracking_db.get_patient_full_record(patient_id) for patient_id in patient_ids]
+        records = [record for record in records if record]
+        payload = build_survival_curve_payload(records, endpoint_type, state_filter=state_filter)
+        return jsonify({"success": True, **payload})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/cohorts/survival-analysis", methods=["GET"])
+def cohort_survival_analysis() -> tuple:
+    """Devuelve análisis Cox PH sobre el endpoint solicitado."""
+    import tracking_db
+    from prostanet.domains.patient_tracking.survival_analysis import build_cox_analysis_payload
+    from prostanet.domains.patient_tracking.psa_forecast import build_psa_forecast_backtest
+
+    try:
+        endpoint_type = str(request.args.get("endpoint_type") or request.args.get("endpoint") or "OS").strip() or "OS"
+        state_filter = str(request.args.get("state") or "").strip() or None
+        conn = tracking_db._connect()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM patient_identity ORDER BY id ASC")
+        patient_ids = [int(row["id"]) for row in cursor.fetchall()]
+        conn.close()
+        records = [tracking_db.get_patient_full_record(patient_id) for patient_id in patient_ids]
+        records = [record for record in records if record]
+        if endpoint_type.upper() == "PSA_FORECAST":
+            payload = build_psa_forecast_backtest(records)
+        else:
+            payload = build_cox_analysis_payload(records, endpoint_type, state_filter=state_filter)
+        return jsonify({"success": True, **payload})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/cohorts/domain-completeness", methods=["GET"])
+def cohort_domain_completeness() -> tuple:
+    """Resume completitud operativa por dominio longitudinal canónico."""
+    import tracking_db
+    from prostanet.domains.patient_tracking.survival_analysis import build_domain_completeness_payload
+
+    try:
+        conn = tracking_db._connect()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM patient_identity ORDER BY id ASC")
+        patient_ids = [int(row["id"]) for row in cursor.fetchall()]
+        conn.close()
+        records = [tracking_db.get_patient_full_record(patient_id) for patient_id in patient_ids]
+        records = [record for record in records if record]
+        payload = build_domain_completeness_payload(records)
+        return jsonify({"success": True, **payload})
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500
 
@@ -899,7 +1070,7 @@ def diagnostic_calculators() -> tuple:
 
 @modular_api.route("/api/patients/<int:patient_id>/response-visualization", methods=["POST"])
 def response_visualization(patient_id: int) -> tuple:
-    """Genera datos de visualización de respuesta terapéutica (waterfall, spider, swimmer)."""
+    """Genera datos de visualización terapéutica con swimmer legacy y timeline integrado en PSA."""
     from prostanet.domains.reporting.response_visualization import ResponseVisualizationService
     from tracking_db import get_full_record
 

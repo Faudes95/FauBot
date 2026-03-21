@@ -100,6 +100,44 @@ def _insert_treatment_line(db_path, patient_id, *, line_of_therapy, drug_scheme,
     conn.close()
 
 
+def _insert_psa_longitudinal_points(db_path, patient_id, points):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    for sample_date, value in points:
+        cursor.execute(
+            """
+            INSERT INTO biomarker_longitudinal (
+                patient_id, biomarker_type, value, unit, sample_date, lab_source
+            ) VALUES (?, 'PSA', ?, 'ng/mL', ?, 'unit_test')
+            """,
+            (patient_id, value, sample_date),
+        )
+    conn.commit()
+    conn.close()
+
+
+def _update_patient_contact_status(
+    db_path,
+    patient_id,
+    *,
+    last_contact_date="2026-03-15",
+    last_contact_status="alive",
+    vital_status="alive",
+):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE patient_identity
+        SET last_contact_date = ?, last_contact_status = ?, vital_status = ?
+        WHERE id = ?
+        """,
+        (last_contact_date, last_contact_status, vital_status, patient_id),
+    )
+    conn.commit()
+    conn.close()
+
+
 def _insert_genomic_profile(db_path, patient_id, *, test_date="2026-03-05", hrr="Positivo", brca2="Positivo", msi="Estable"):
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
@@ -217,6 +255,267 @@ def test_register_patient_validates_required_fields_and_numeric_types(app_client
     missing_required = client.post("/api/register_patient", json={"full_name": "Sin NSS"})
     assert missing_required.status_code == 400
     assert missing_required.get_json()["success"] is False
+
+
+def test_stage_visit_persists_survival_status_and_anchor_events(app_client):
+    client, db_path = app_client
+    payload = make_patient_payload(nss="30000000001", full_name="Supervivencia Demo")
+    register = client.post("/api/register_patient", json=payload)
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "recurrence_bcr")
+    _insert_postlocal_bcr_context(db_path, patient_id, bcr_date="2026-02-20", bcr_psa=0.55)
+
+    visit_response = client.post(
+        f"/api/patients/{patient_id}/visits",
+        json={
+            "state": "recurrence_bcr",
+            "visit_date": "2026-03-15",
+            "psa": 0.62,
+            "survival_status_update": {
+                "vital_status": "alive",
+                "last_contact_date": "2026-03-15",
+                "last_contact_status": "clinic_visit",
+            },
+            "survival_anchor_events": [
+                {"anchor_type": "psa_progression", "anchor_date": "2026-02-20", "anchor_source": "biochemical_recurrence"},
+                {"anchor_type": "treatment_start", "anchor_date": "2024-01-15", "anchor_source": "surgery"},
+            ],
+        },
+    )
+
+    assert visit_response.status_code == 200
+    import tracking_db
+
+    record = tracking_db.get_patient_full_record(patient_id)
+    assert record["survival_status_detail"]["vital_status"] == "alive"
+    assert record["survival_status_detail"]["last_contact_date"] == "2026-03-15"
+    anchor_types = {item["anchor_type"] for item in record["survival_anchor_events"]}
+    assert "psa_progression" in anchor_types
+    assert "treatment_start" in anchor_types
+
+    survival_response = client.get(f"/api/patients/{patient_id}/survival-endpoints")
+    assert survival_response.status_code == 200
+    survival_data = survival_response.get_json()["survival_status"]
+    endpoint_types = {item["type"] for item in survival_data["endpoints"]}
+    assert "OS" in endpoint_types
+    assert "TTR" in endpoint_types
+    assert "BCR_FS" in endpoint_types
+
+
+def test_stage_visit_persists_structured_biopsy_and_active_surveillance(app_client):
+    client, db_path = app_client
+    payload = make_patient_payload(nss="30000000002", full_name="Biopsia VA Demo")
+    register = client.post("/api/register_patient", json=payload)
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "localized_initial")
+
+    visit_response = client.post(
+        f"/api/patients/{patient_id}/visits",
+        json={
+            "state": "localized_initial",
+            "visit_date": "2026-03-10",
+            "structured_biopsy": {
+                "biopsy_date": "2026-03-01",
+                "biopsy_type": "fusion",
+                "biopsy_route": "transperineal",
+                "biopsy_context": "confirmatory_as",
+                "mri_pirads_at_biopsy": 4,
+                "systematic_cores": [
+                    {"core_id": "S1", "location_sextant": "right_base", "core_type": "systematic", "positive": True, "gleason_primary": 3, "gleason_secondary": 3, "isup_grade": 1, "involvement_pct": 20},
+                    {"core_id": "S2", "location_sextant": "left_base", "core_type": "systematic", "positive": False},
+                ],
+                "targeted_cores": [
+                    {"core_id": "T1", "location_sextant": "target_1", "core_type": "targeted", "positive": True, "gleason_primary": 3, "gleason_secondary": 4, "isup_grade": 2, "mri_target_concordance": True}
+                ],
+            },
+            "active_surveillance_update": {
+                "protocol": "PRIAS",
+                "criteria_met": {"isup_max": True},
+                "schedule_items": [
+                    {"item_type": "psa", "title": "PSA protocolizado", "due_date": "2026-06-01", "interval_months": 3, "status": "scheduled", "priority": "mandatory"},
+                    {"item_type": "rebiopsy", "title": "Biopsia confirmatoria", "due_date": "2027-03-01", "interval_months": 12, "status": "scheduled", "priority": "mandatory"},
+                ],
+                "trigger_events": [
+                    {"trigger_type": "mri_new_lesion", "detected_date": "2026-03-10", "detail": "Lesión índice PI-RADS 4", "severity": "monitoring_intensification", "recommended_action": "Mantener vigilancia intensificada"}
+                ],
+            },
+        },
+    )
+
+    assert visit_response.status_code == 200
+    import tracking_db
+
+    record = tracking_db.get_patient_full_record(patient_id)
+    assert len(record["structured_biopsy_sessions"]) == 1
+    assert record["structured_biopsy_sessions"][0]["biopsy_context"] == "confirmatory_as"
+    assert record["structured_biopsy_sessions"][0]["targeted_cores"][0]["positive"] is True
+    assert record["active_surveillance_protocol"]["enrollment_protocol"] == "PRIAS"
+    assert len(record["active_surveillance_protocol"]["schedule"]) == 2
+    assert len(record["active_surveillance_protocol"]["reclassification_triggers"]) == 1
+
+    as_response = client.get(f"/api/patients/{patient_id}/active-surveillance")
+    assert as_response.status_code == 200
+    protocol_summary = as_response.get_json()["protocol_summary"]
+    assert protocol_summary["has_data"] is True
+
+
+def test_stage_visit_persists_sre_bma_bone_health_and_rt_detail(app_client):
+    client, db_path = app_client
+    payload = make_patient_payload(nss="30000000003", full_name="Hueso RT Demo")
+    register = client.post("/api/register_patient", json=payload)
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "m1_crpc")
+    _insert_treatment_line(db_path, patient_id, line_of_therapy=1, drug_scheme="ADT_ABIRATERONE", start_date="2025-12-01", context="mcrpc")
+
+    visit_response = client.post(
+        f"/api/patients/{patient_id}/visits",
+        json={
+            "state": "m1_crpc",
+            "visit_date": "2026-03-12",
+            "skeletal_events": [
+                {"event_type": "pathological_fracture", "event_date": "2026-03-05", "site": "femur", "intervention": "stabilization", "surgical_intervention": True},
+            ],
+            "bone_modifying_agent": {
+                "agent": "denosumab",
+                "start_date": "2026-03-12",
+                "frequency": "q4w",
+                "dental_clearance_done": True,
+                "onj_monitoring": True,
+                "doses_administered": 1,
+            },
+            "bone_health_snapshot": {
+                "snapshot_date": "2026-03-12",
+                "dxa_performed": True,
+                "worst_t_score": -2.7,
+                "frax_major_pct": 18.0,
+                "frax_hip_pct": 5.2,
+                "calcium_level": 9.1,
+                "creatinine": 1.0,
+            },
+            "radiotherapy_course": {
+                "rt_intent": "MDT",
+                "modality": "SBRT",
+                "target_volume": "metastasis_directed",
+                "total_dose_gy": 30,
+                "fractions": 3,
+                "dose_per_fraction_gy": 10,
+                "rt_start_date": "2026-03-20",
+                "rt_end_date": "2026-03-24",
+                "mdt_site_details": [
+                    {"site_location": "left_iliac_bone", "modality": "SBRT", "dose_gy": 30, "fractions": 3, "dose_per_fraction_gy": 10}
+                ],
+                "toxicity": [
+                    {"domain": "GI", "phase": "acute", "grade": 1, "details": "Nausea leve"}
+                ],
+            },
+        },
+    )
+
+    assert visit_response.status_code == 200
+    import tracking_db
+
+    record = tracking_db.get_patient_full_record(patient_id)
+    assert len(record["skeletal_events"]) == 1
+    assert record["bone_modifying_agent"]["agent"] == "denosumab"
+    assert record["bone_health"]["worst_t_score"] == -2.7
+    assert len(record["radiotherapy_courses_detailed"]) == 1
+    assert record["radiotherapy_courses_detailed"][0]["mdt_site_details"][0]["site_location"] == "left_iliac_bone"
+
+    sre_response = client.get(f"/api/patients/{patient_id}/skeletal-events")
+    rt_response = client.get(f"/api/patients/{patient_id}/radiotherapy-detail")
+    assert sre_response.status_code == 200
+    assert rt_response.status_code == 200
+
+
+def test_legacy_domain_writes_dual_write_into_canonical_tables(app_client):
+    client, db_path = app_client
+    payload = make_patient_payload(nss="30000000004", full_name="Legacy Backfill Demo")
+    register = client.post("/api/register_patient", json=payload)
+    patient_id = register.get_json()["patient_id"]
+
+    import tracking_db
+
+    assert tracking_db.save_biopsy(patient_id, {
+        "biopsy_date": "2026-02-01",
+        "biopsy_type": "fusion",
+        "biopsy_context": "diagnostica",
+        "total_cores": 12,
+        "positive_cores": 2,
+        "gleason_primary": 3,
+        "gleason_secondary": 4,
+        "isup_grade": 2,
+    }) is True
+    assert tracking_db.enroll_in_as(patient_id, {
+        "enrollment_date": "2026-02-15",
+        "protocol": "PRIAS",
+        "criteria_met": {"psa_max": True},
+    }) is True
+    assert tracking_db.save_radiation_details(patient_id, {
+        "rt_date": "2026-02-20",
+        "rt_context": "salvamento",
+        "rt_technique": "VMAT",
+        "target": "lecho",
+        "total_dose_gy": 66,
+        "fractions": 33,
+        "dose_per_fraction_gy": 2,
+        "gu_toxicity_grade": 1,
+        "gi_toxicity_grade": 0,
+    }) is True
+
+    record = tracking_db.get_patient_full_record(patient_id)
+    assert len(record["structured_biopsy_sessions"]) == 1
+    assert record["active_surveillance_protocol"]["enrollment_protocol"] == "PRIAS"
+    assert len(record["radiotherapy_courses_detailed"]) == 1
+
+
+def test_cohort_survival_and_domain_completeness_endpoints(app_client):
+    client, db_path = app_client
+    patient_ids = []
+    for idx in range(2):
+        payload = make_patient_payload(nss=f"3000000001{idx}", full_name=f"Cohorte {idx}")
+        register = client.post("/api/register_patient", json=payload)
+        patient_id = register.get_json()["patient_id"]
+        patient_ids.append(patient_id)
+        _seed_latest_assessment_state(db_path, patient_id, "recurrence_bcr")
+        _insert_postlocal_bcr_context(db_path, patient_id, bcr_date=f"2026-02-2{idx}", bcr_psa=0.3 + idx)
+        client.post(
+            f"/api/patients/{patient_id}/visits",
+            json={
+                "state": "recurrence_bcr",
+                "visit_date": f"2026-03-1{idx}",
+                "survival_status_update": {
+                    "vital_status": "deceased" if idx == 1 else "alive",
+                    "date_of_death": "2026-03-18" if idx == 1 else "",
+                    "cause_of_death": "prostate_cancer" if idx == 1 else "",
+                    "last_contact_date": f"2026-03-1{idx}",
+                    "last_contact_status": "clinic_visit",
+                },
+                "survival_anchor_events": [
+                    {"anchor_type": "treatment_start", "anchor_date": "2024-01-15", "anchor_source": "surgery"},
+                    {"anchor_type": "psa_progression", "anchor_date": f"2026-02-2{idx}", "anchor_source": "biochemical_recurrence"},
+                ],
+            },
+        )
+
+    curve_response = client.get("/api/cohorts/survival-curves?endpoint=OS")
+    assert curve_response.status_code == 200
+    curve_data = curve_response.get_json()
+    assert curve_data["success"] is True
+    assert curve_data["n_patients"] >= 2
+    assert "curve" in curve_data
+
+    analysis_response = client.get("/api/cohorts/survival-analysis?endpoint=OS")
+    assert analysis_response.status_code == 200
+    analysis_data = analysis_response.get_json()
+    assert analysis_data["success"] is True
+    assert analysis_data["status"] in {"ok", "insufficient_data", "lifelines_unavailable", "no_usable_covariates"}
+
+    completeness_response = client.get("/api/cohorts/domain-completeness")
+    assert completeness_response.status_code == 200
+    completeness_data = completeness_response.get_json()
+    assert completeness_data["success"] is True
+    assert completeness_data["total_patients"] >= 2
+    assert "domain_counts" in completeness_data
 
     invalid_numeric = client.post(
         "/api/register_patient",
@@ -653,6 +952,7 @@ def test_bcr_without_imaging_stays_non_metastatic_and_pending_restaging(app_clie
     assert "radiographic_progression" not in event_types
     assert any(key.endswith("salvage_imaging") for key in pending_keys)
     assert payload["current_trial_comparable_profile"]["benchmark_family"] == "EMBARK_like"
+    assert payload["current_trial_comparable_profile"]["recommended_trial_backbone_label"] == "ADT + enzalutamida"
     assert "alto riesgo" in payload["current_course_status"].lower()
 
 
@@ -718,6 +1018,7 @@ def test_mhspc_psa_milestones_surface_trial_comparable_endpoints(app_client):
     assert endpoints["psa50"]["status"] == "complete"
     assert endpoints["psa90"]["status"] == "complete"
     assert payload["current_trial_comparable_profile"]["benchmark_family"] == "ARANOTE_ARASENS_PEACE1_like"
+    assert "ADT + darolutamida" in payload["current_trial_comparable_profile"]["recommended_trial_backbone_label"]
     assert "respuesta bioquímica profunda" in payload["current_course_status"].lower()
 
 
@@ -746,6 +1047,7 @@ def test_m1_crpc_psmafore_like_profile_detected(app_client):
     assert "psma_positive_pathway" in event_types
     assert payload["current_trial_comparable_profile"]["benchmark_family"] == "PSMAfore_like"
     assert "PSMAfore" in payload["current_trial_comparable_profile"]["matched_trials"]
+    assert payload["current_trial_comparable_profile"]["recommended_trial_backbone_label"] == "Lutecio-177 PSMA-617"
 
 
 def test_schedule_exposes_pending_adjudication_tasks_and_outcome_anchor(app_client):
@@ -796,6 +1098,212 @@ def test_cohort_benchmarks_endpoint_aggregates_trial_like_families(app_client):
     assert "PSMAfore_like" in families
     assert families["EMBARK_like"]["matched"] >= 1
     assert families["PSMAfore_like"]["matched"] >= 1
+
+
+def test_psa_forecast_endpoint_returns_ready_bundle_for_stable_advanced_line(app_client):
+    client, db_path = app_client
+    register = client.post("/api/register_patient", json=make_patient_payload(nss="39999999993", full_name="Paciente Forecast Ready"))
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "m1_crpc")
+    _insert_treatment_line(
+        db_path,
+        patient_id,
+        line_of_therapy=1,
+        drug_scheme="ENZALUTAMIDE",
+        start_date="2025-10-01",
+        context="mCRPC_first_line",
+    )
+    _insert_psa_longitudinal_points(
+        db_path,
+        patient_id,
+        [
+            ("2025-11-01", 1.2),
+            ("2026-01-01", 1.8),
+            ("2026-03-01", 2.6),
+        ],
+    )
+    _update_patient_contact_status(db_path, patient_id, last_contact_date="2026-03-15")
+
+    response = client.get(f"/api/patients/{patient_id}/psa-forecast")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    forecast = payload["psa_forecast"]
+    assert forecast["status"] in {"ready", "low_confidence"}
+    assert len(forecast["forecast_points"]) == 3
+    assert payload["forecast_reliability"]["confidence_label"] in {"high", "medium", "low"}
+
+
+def test_psa_forecast_endpoint_suppresses_numeric_projection_when_data_is_insufficient(app_client):
+    client, db_path = app_client
+    register = client.post("/api/register_patient", json=make_patient_payload(nss="39999999994", full_name="Paciente Forecast Insuficiente"))
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "m1_crpc")
+    _insert_treatment_line(
+        db_path,
+        patient_id,
+        line_of_therapy=1,
+        drug_scheme="ENZALUTAMIDE",
+        start_date="2026-01-15",
+        context="mCRPC_first_line",
+    )
+    _insert_psa_longitudinal_points(
+        db_path,
+        patient_id,
+        [
+            ("2026-02-01", 1.5),
+            ("2026-03-01", 2.1),
+        ],
+    )
+
+    response = client.get(f"/api/patients/{patient_id}/psa-forecast")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["psa_forecast"]["status"] == "insufficient_data"
+    assert payload["psa_forecast"]["show"] is False
+
+
+def test_live_benchmark_and_profile_cards_render_for_advanced_patient(app_client):
+    client, db_path = app_client
+    target_payload = make_patient_payload(nss="39999999995", full_name="Paciente Benchmark Vivo")
+    register = client.post("/api/register_patient", json=target_payload)
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "m1_crpc")
+    _insert_treatment_line(
+        db_path,
+        patient_id,
+        line_of_therapy=1,
+        drug_scheme="ENZALUTAMIDE",
+        start_date="2025-06-01",
+        context="mCRPC_first_line",
+    )
+    _insert_psa_longitudinal_points(
+        db_path,
+        patient_id,
+        [
+            ("2025-10-01", 1.0),
+            ("2025-12-01", 1.4),
+            ("2026-03-01", 2.0),
+        ],
+    )
+    _update_patient_contact_status(db_path, patient_id, last_contact_date="2026-03-15")
+
+    for idx in range(10):
+        comparator = client.post(
+            "/api/register_patient",
+            json=make_patient_payload(nss=f"4999999999{idx}", full_name=f"Comparator {idx}"),
+        )
+        comparator_id = comparator.get_json()["patient_id"]
+        _seed_latest_assessment_state(db_path, comparator_id, "m1_crpc")
+        _insert_treatment_line(
+            db_path,
+            comparator_id,
+            line_of_therapy=1,
+            drug_scheme="ENZALUTAMIDE",
+            start_date=f"2025-0{(idx % 6) + 1}-01",
+            context="mCRPC_first_line",
+        )
+        _insert_psa_longitudinal_points(
+            db_path,
+            comparator_id,
+            [
+                ("2025-09-01", 0.9 + idx * 0.05),
+                ("2025-12-01", 1.1 + idx * 0.05),
+                ("2026-03-01", 1.5 + idx * 0.06),
+            ],
+        )
+        _update_patient_contact_status(db_path, comparator_id, last_contact_date="2026-03-15")
+
+    benchmark_response = client.get(f"/api/patients/{patient_id}/live-benchmark")
+    profile_response = client.get(f"/patient_profile/{target_payload['nss']}")
+
+    assert benchmark_response.status_code == 200
+    benchmark_payload = benchmark_response.get_json()
+    assert benchmark_payload["live_benchmark"]["status"] == "ready"
+    assert benchmark_payload["benchmark_reliability"]["cohort_size"] >= 10
+    assert profile_response.status_code == 200
+    html = profile_response.get_data(as_text=True)
+    assert "Benchmark Vivo" in html
+    assert "Time-Machine PSA" in html
+
+
+def test_signals_outcomes_and_cohort_survival_analysis_expose_forecast_and_live_benchmark(app_client):
+    client, db_path = app_client
+    target_payload = make_patient_payload(nss="39999999996", full_name="Paciente Señales Prospectivas")
+    register = client.post("/api/register_patient", json=target_payload)
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "m1_crpc")
+    _insert_treatment_line(
+        db_path,
+        patient_id,
+        line_of_therapy=1,
+        drug_scheme="ENZALUTAMIDE",
+        start_date="2025-06-01",
+        context="mCRPC_first_line",
+    )
+    _insert_psa_longitudinal_points(
+        db_path,
+        patient_id,
+        [
+            ("2025-06-01", 0.9),
+            ("2025-09-01", 1.0),
+            ("2025-12-01", 1.3),
+            ("2026-03-01", 1.9),
+        ],
+    )
+    _update_patient_contact_status(db_path, patient_id, last_contact_date="2026-03-15")
+
+    for idx in range(10):
+        comparator = client.post(
+            "/api/register_patient",
+            json=make_patient_payload(nss=f"5999999999{idx}", full_name=f"Comparator Señales {idx}"),
+        )
+        comparator_id = comparator.get_json()["patient_id"]
+        _seed_latest_assessment_state(db_path, comparator_id, "m1_crpc")
+        _insert_treatment_line(
+            db_path,
+            comparator_id,
+            line_of_therapy=1,
+            drug_scheme="ENZALUTAMIDE",
+            start_date="2025-05-01",
+            context="mCRPC_first_line",
+        )
+        _insert_psa_longitudinal_points(
+            db_path,
+            comparator_id,
+            [
+                ("2025-06-01", 0.7 + idx * 0.03),
+                ("2025-09-01", 0.8 + idx * 0.04),
+                ("2025-12-01", 1.0 + idx * 0.05),
+                ("2026-03-01", 1.4 + idx * 0.06),
+            ],
+        )
+        _update_patient_contact_status(db_path, comparator_id, last_contact_date="2026-03-15")
+
+    signals_response = client.get(f"/api/patients/{patient_id}/signals")
+    outcomes_response = client.get(f"/api/patients/{patient_id}/outcomes")
+    cohort_benchmarks_response = client.get("/api/cohorts/benchmarks")
+    forecast_analysis_response = client.get("/api/cohorts/survival-analysis?endpoint=PSA_FORECAST")
+
+    assert signals_response.status_code == 200
+    assert outcomes_response.status_code == 200
+    assert cohort_benchmarks_response.status_code == 200
+    assert forecast_analysis_response.status_code == 200
+
+    signals_payload = signals_response.get_json()
+    outcomes_payload = outcomes_response.get_json()
+    benchmarks_payload = cohort_benchmarks_response.get_json()
+    analysis_payload = forecast_analysis_response.get_json()
+
+    assert signals_payload["psa_forecast"]["status"] in {"ready", "low_confidence"}
+    assert "live_benchmark" in signals_payload
+    assert outcomes_payload["psa_forecast"]["status"] in {"ready", "low_confidence"}
+    assert outcomes_payload["live_benchmark"]["status"] == "ready"
+    assert "live_benchmark_summary" in benchmarks_payload
+    assert "psa_forecast_summary" in benchmarks_payload
+    assert analysis_payload["status"] == "ok"
+    assert "summary_by_horizon" in analysis_payload
 
 
 def test_patient_and_alert_routes_return_404_for_missing_patient(app_client):
@@ -1779,6 +2287,97 @@ def test_response_visualization_falls_back_to_followups_and_stage_visit_writes_b
     conn.close()
 
 
+def test_response_visualization_exposes_integrated_treatment_timeline_and_preserves_swimmer(app_client):
+    client, db_path = app_client
+    register = client.post("/api/register_patient", json=make_patient_payload(nss="88888888891", full_name="Timeline Integrada"))
+    patient_id = register.get_json()["patient_id"]
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE patient_identity SET diagnosis_date = ? WHERE id = ?", ("2025-12-15", patient_id))
+    cursor.execute(
+        """
+        INSERT INTO treatment_history (
+            patient_id, line_of_therapy, drug_scheme, start_date, end_date, outcome,
+            nadir_psa, time_to_nadir_months, regimen_json, line_of_therapy_context
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            patient_id,
+            1,
+            "ADT_ABIRATERONE",
+            "2025-12-15",
+            "2026-02-10",
+            "Progression",
+            8.0,
+            1,
+            json.dumps({
+                "line_of_therapy_number": 1,
+                "drug_scheme": "ADT_ABIRATERONE",
+                "drug_scheme_label": "ADT + Abiraterona",
+                "baseline_psa": 20.0,
+                "nadir_psa": 8.0,
+                "time_to_nadir_months": 1,
+                "line_of_therapy_context": "mHSPC_initial",
+            }),
+            "mHSPC_initial",
+        ),
+    )
+    cursor.execute(
+        """
+        INSERT INTO treatment_history (
+            patient_id, line_of_therapy, drug_scheme, start_date, outcome, regimen_json, line_of_therapy_context
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            patient_id,
+            2,
+            "ADT_DAROLUTAMIDE",
+            "2026-02-11",
+            "Ongoing",
+            json.dumps({
+                "line_of_therapy_number": 2,
+                "drug_scheme": "ADT_DAROLUTAMIDE",
+                "drug_scheme_label": "ADT + Darolutamida",
+                "baseline_psa": 12.0,
+                "nadir_psa": 4.0,
+                "time_to_nadir_months": 1,
+                "line_of_therapy_context": "mHSPC_post_docetaxel",
+            }),
+            "mHSPC_post_docetaxel",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    _insert_psa_longitudinal_points(
+        db_path,
+        patient_id,
+        [
+            ("2025-12-15", 20.0),
+            ("2026-01-15", 8.0),
+            ("2026-02-10", 12.0),
+            ("2026-03-10", 4.0),
+        ],
+    )
+
+    visualization = client.post(f"/api/patients/{patient_id}/response-visualization")
+    assert visualization.status_code == 200
+    payload = visualization.get_json()["visualization"]
+    timeline = payload["psa_trajectory"]["integrated_treatment_timeline"]
+
+    assert payload["swimmer"]
+    assert payload["psa_trajectory"]["has_data"] is True
+    assert timeline["has_integrated_timeline"] is True
+    assert len(timeline["treatment_lanes"]) == 2
+    assert "2025-12-15" in timeline["axis_dates"]
+    assert "2026-02-11" in timeline["axis_dates"]
+    marker_types = {marker["type"] for marker in timeline["lane_markers"]}
+    assert "PSA50" in marker_types
+    assert "PD" in marker_types
+    assert "LINE_CHANGE" in marker_types
+
+
 def test_profile_compass_promotes_parallel_copilot_layers_into_active_orientation(app_client):
     client, _ = app_client
     from prostanet.domains.patient_tracking.profile_compass import build_patient_profile_view_model
@@ -2087,6 +2686,7 @@ def test_profile_view_model_builds_advanced_context_and_evidence_applicability()
     assert profile["advanced_panel_context"]["safety_support_context"]["items"]
     assert profile["evidence_applicability"]["supporting_trials"]
     assert profile["evidence_applicability"]["supporting_trials"][0]["study_name"] == "VISION"
+    assert profile["evidence_applicability"]["supporting_trials"][0]["recommended_trial_backbone_label"] == "Lutecio-177 PSMA-617"
 
 
 def test_patient_profile_hides_persisted_state_timeline_ui(app_client):
@@ -2251,6 +2851,384 @@ def test_dashboard_stats_and_analysis_exports_include_research_readiness(app_cli
     endpoint = client.get("/api/endpoint_readiness")
     assert endpoint.status_code == 200
     assert "endpoint_readiness" in endpoint.get_json()
+
+
+def test_risk_tools_endpoint_shows_only_erspc_in_diagnostic_context(app_client):
+    client, db_path = app_client
+    register = client.post(
+        "/api/register_patient",
+        json=make_patient_payload(nss="94949494949", full_name="Paciente ERSPC") | {
+            "dre_suspicious": 1,
+            "prior_biopsy_count": 1,
+        },
+    )
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "diagnostic_workup")
+
+    response = client.get(f"/api/patients/{patient_id}/risk-tools")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    tool_keys = [card["tool_key"] for card in payload["cards"]]
+    assert tool_keys == ["erspc"]
+    assert payload["cards"][0]["fidelity"] == "proxy_estimate"
+
+
+def test_risk_tools_endpoint_gates_localized_rp_candidate_tools(app_client):
+    client, db_path = app_client
+    register = client.post(
+        "/api/register_patient",
+        json=make_patient_payload(nss="94949494950", full_name="Paciente RP") | {
+            "clinical_tstage": "T2b",
+            "gleason_primary": 4,
+            "gleason_secondary": 3,
+            "isup_grade": 3,
+            "life_expectancy_years": 14,
+            "num_cores_positive": 5,
+            "total_cores": 12,
+            "local_treatment_consideration": "both",
+        },
+    )
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "localized_initial")
+
+    response = client.get(f"/api/patients/{patient_id}/risk-tools")
+
+    assert response.status_code == 200
+    cards = response.get_json()["cards"]
+    tool_keys = {card["tool_key"] for card in cards}
+    assert {"capra", "damico", "predict_prostate", "mskcc_preop", "partin"} <= tool_keys
+    assert "capra_s" not in tool_keys
+    damico = next(card for card in cards if card["tool_key"] == "damico")
+    assert damico["primary_result"] == "INTERMEDIO"
+
+
+def test_risk_tools_endpoint_exposes_prognostic_impact_for_high_risk_localized_case(app_client):
+    client, db_path = app_client
+    register = client.post(
+        "/api/register_patient",
+        json=make_patient_payload(nss="94949494954", full_name="Paciente Riesgo Alto Localizado") | {
+            "baseline_psa": 24.5,
+            "clinical_tstage": "T3a",
+            "gleason_primary": 4,
+            "gleason_secondary": 4,
+            "isup_grade": 4,
+            "life_expectancy_years": 12,
+            "num_cores_positive": 8,
+            "total_cores": 12,
+            "local_treatment_consideration": "both",
+        },
+    )
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "localized_initial")
+
+    response = client.get(f"/api/patients/{patient_id}/risk-tools")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    modifier_keys = {item["modifier_key"] for item in payload["prognostic_modifiers"]}
+    assert "localized_unfavorable_biology" in modifier_keys
+    assert payload["recommended_actions"]
+    assert payload["followup_impact"]
+
+
+def test_risk_tools_endpoint_exposes_capture_targets_for_missing_score_inputs(app_client):
+    client, db_path = app_client
+    register = client.post(
+        "/api/register_patient",
+        json=make_patient_payload(nss="94949494955", full_name="Paciente Score Incompleto") | {
+            "gleason_primary": 4,
+            "gleason_secondary": 3,
+            "isup_grade": 3,
+            "life_expectancy_years": 13,
+            "local_treatment_consideration": "both",
+        },
+    )
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "localized_initial")
+
+    response = client.get(f"/api/patients/{patient_id}/risk-tools")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    capture_targets = {item["tool_key"]: item for item in payload["capture_targets"]}
+    assert "damico" in capture_targets
+    assert "clinical_tstage" in capture_targets["damico"]["raw_fields"]
+
+
+def test_risk_tools_endpoint_hides_surgical_nomograms_for_rt_only_candidates(app_client):
+    client, db_path = app_client
+    register = client.post(
+        "/api/register_patient",
+        json=make_patient_payload(nss="94949494951", full_name="Paciente RT") | {
+            "clinical_tstage": "T2a",
+            "gleason_primary": 3,
+            "gleason_secondary": 4,
+            "isup_grade": 2,
+            "life_expectancy_years": 11,
+            "num_cores_positive": 3,
+            "total_cores": 12,
+            "local_treatment_consideration": "radical_radiotherapy",
+        },
+    )
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "localized_initial")
+
+    response = client.get(f"/api/patients/{patient_id}/risk-tools")
+
+    assert response.status_code == 200
+    tool_keys = {card["tool_key"] for card in response.get_json()["cards"]}
+    assert {"capra", "damico", "predict_prostate"} <= tool_keys
+    assert "mskcc_preop" not in tool_keys
+    assert "partin" not in tool_keys
+
+
+def test_risk_tools_endpoint_prioritizes_capra_s_post_prostatectomy_and_interprets_decipher(app_client):
+    client, db_path = app_client
+    register = client.post(
+        "/api/register_patient",
+        json=make_patient_payload(nss="94949494952", full_name="Paciente CAPRA-S") | {
+            "baseline_psa": 11.2,
+            "gleason_primary": 4,
+            "gleason_secondary": 3,
+        },
+    )
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "post_prostatectomy")
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO surgical_details (
+            patient_id, surgery_date, surgery_type, pathological_stage,
+            pathological_gleason_primary, pathological_gleason_secondary,
+            surgical_margin_status, ece_pathological, svi_pathological, lni_pathological, pathological_isup
+        ) VALUES (?, '2025-02-10', 'RP_robotica', 'pT3a', 4, 3, 1, 1, 0, 0, 3)
+        """,
+        (patient_id,),
+    )
+    cursor.execute(
+        """
+        INSERT INTO genomic_profile (
+            patient_id, test_date, test_type, decipher_score, decipher_risk, hrr_overall
+        ) VALUES (?, '2025-04-01', 'Decipher', 0.81, 'Alto', 'Desconocido')
+        """,
+        (patient_id,),
+    )
+    conn.commit()
+    conn.close()
+
+    response = client.get(f"/api/patients/{patient_id}/risk-tools")
+
+    assert response.status_code == 200
+    cards = response.get_json()["cards"]
+    assert cards[0]["tool_key"] == "capra_s"
+    assert cards[0]["status"] == "calculated"
+    msk_post = next(card for card in cards if card["tool_key"] == "mskcc_bcr_post_rp")
+    assert msk_post["status"] == "calculated"
+    assert "5 años" in msk_post["primary_result"]
+    decipher = next(card for card in cards if card["tool_key"] == "decipher")
+    assert decipher["fidelity"] == "interpreted_from_report"
+    assert "0.81" in decipher["primary_result"]
+
+
+def test_post_rp_prognostic_impact_flows_into_signals_and_schedule(app_client):
+    client, db_path = app_client
+    register = client.post(
+        "/api/register_patient",
+        json=make_patient_payload(nss="94949494956", full_name="Paciente RP Impacto") | {
+            "baseline_psa": 18.6,
+            "gleason_primary": 4,
+            "gleason_secondary": 4,
+        },
+    )
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "post_prostatectomy")
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO surgical_details (
+            patient_id, surgery_date, surgery_type, pathological_stage,
+            pathological_gleason_primary, pathological_gleason_secondary,
+            surgical_margin_status, ece_pathological, svi_pathological, lni_pathological, pathological_isup
+        ) VALUES (?, '2025-03-01', 'RP_robotica', 'pT3a', 4, 4, 1, 1, 1, 0, 4)
+        """,
+        (patient_id,),
+    )
+    conn.commit()
+    conn.close()
+
+    signals_response = client.get(f"/api/patients/{patient_id}/signals")
+    assert signals_response.status_code == 200
+    signals_payload = signals_response.get_json()
+    modifier_keys = {item["modifier_key"] for item in signals_payload["prognostic_modifiers"]}
+    assert "post_rp_high_bcr_risk" in modifier_keys
+    assert signals_payload["prognostic_followup_impact"]
+
+    schedule_response = client.get(f"/api/patients/{patient_id}/schedule")
+    assert schedule_response.status_code == 200
+    schedule_payload = schedule_response.get_json()
+    assert schedule_payload["cadence_adjusted_by"]
+    assert schedule_payload["prognostic_rationale"]
+
+
+def test_psmafore_like_signals_expose_backbone_alignment(app_client):
+    client, db_path = app_client
+    register = client.post("/api/register_patient", json=make_patient_payload(nss="94949494957", full_name="Paciente Alineacion PSMAfore"))
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "m1_crpc")
+    _update_latest_assessment_input(db_path, patient_id, {"psma_positive": "1", "m_substage_resolved": "M1b"})
+    _insert_treatment_line(
+        db_path,
+        patient_id,
+        line_of_therapy=1,
+        drug_scheme="ADT_ABIRATERONE",
+        start_date="2025-01-15",
+        context="mCRPC_post_ARPI_pre_taxane",
+    )
+    _insert_psma_imaging(db_path, patient_id, psma_positive=True)
+
+    response = client.get(f"/api/patients/{patient_id}/signals")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["current_trial_comparable_profile"]["benchmark_family"] == "PSMAfore_like"
+    assert payload["backbone_alignment"]["trial_backbone_label"] == "Lutecio-177 PSMA-617"
+    assert payload["backbone_alignment"]["current_regimen_label"] == "ADT + abiraterona"
+    assert payload["backbone_alignment"]["alignment_status"] == "divergent"
+
+
+def test_clinical_assessment_context_requests_only_missing_score_inputs(app_client):
+    client, _ = app_client
+
+    diagnostic_draft = client.post(
+        "/api/clinical-assessments/draft",
+        json={
+            "module_id": "diagnostic_workup",
+            "payload": {
+                "age": 64,
+                "psa": 6.8,
+            },
+        },
+    )
+    diagnostic_id = diagnostic_draft.get_json()["assessment_id"]
+    diagnostic_context = client.get(f"/api/clinical-assessments/{diagnostic_id}").get_json()
+    assert diagnostic_context["applicable_scores"] == ["erspc"]
+    assert {item["name"] for item in diagnostic_context["score_missing_inputs"]} == {"dre_suspicious"}
+
+    localized_draft = client.post(
+        "/api/clinical-assessments/draft",
+        json={
+            "module_id": "localized_initial",
+            "payload": {
+                "psa": 8.9,
+                "gleason_primary": 4,
+                "gleason_secondary": 3,
+                "life_expectancy_years": 13,
+                "local_treatment_consideration": "both",
+            },
+        },
+    )
+    localized_id = localized_draft.get_json()["assessment_id"]
+    localized_context = client.get(f"/api/clinical-assessments/{localized_id}").get_json()
+    assert set(localized_context["applicable_scores"]) == {"capra", "damico", "predict_prostate", "mskcc_preop", "partin"}
+    missing = {item["name"] for item in localized_context["score_missing_inputs"]}
+    assert "clinical_tstage" in missing
+    assert "isup_grade" in missing
+    assert "num_cores_positive" in missing
+    assert "total_cores" in missing
+
+
+def test_post_rp_assessment_context_requests_mskcc_postop_inputs(app_client):
+    client, _ = app_client
+
+    post_rp_draft = client.post(
+        "/api/clinical-assessments/draft",
+        json={
+            "module_id": "post_prostatectomy",
+            "payload": {
+                "psa": 9.8,
+                "pathologic_stage": "pT3a",
+                "surgical_margin": 1,
+            },
+        },
+    )
+    draft_id = post_rp_draft.get_json()["assessment_id"]
+    context = client.get(f"/api/clinical-assessments/{draft_id}").get_json()
+
+    assert set(context["applicable_scores"]) == {"capra_s", "mskcc_bcr_post_rp"}
+    missing = {item["name"] for item in context["score_missing_inputs"]}
+    assert "pathology_gleason_primary" in missing
+    assert "pathology_gleason_secondary" in missing
+    assert "ece_status" in missing
+    assert "svi_status" in missing
+    assert "lni_status" in missing
+
+
+def test_dashboard_stats_include_risk_tool_and_upgrade_metrics(app_client):
+    client, db_path = app_client
+    register = client.post(
+        "/api/register_patient",
+        json=make_patient_payload(nss="94949494953", full_name="Paciente Cohorte Risk Tools") | {
+            "clinical_tstage": "T2b",
+            "gleason_primary": 4,
+            "gleason_secondary": 3,
+            "isup_grade": 3,
+            "life_expectancy_years": 12,
+            "num_cores_positive": 4,
+            "total_cores": 12,
+            "clinical_risk_group": "intermedio desfavorable",
+            "local_treatment_consideration": "both",
+        },
+    )
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "localized_initial")
+
+    dashboard = client.get("/api/dashboard_stats")
+
+    assert dashboard.status_code == 200
+    payload = dashboard.get_json()
+    assert "risk_tool_stats" in payload
+    assert "capra_distribution" in payload
+    assert "damico_distribution" in payload
+    assert "capra_s_distribution" in payload
+    assert "mskcc_bcr_post_rp_stats" in payload
+    assert "upgrade_stats" in payload
+    assert "pathologic_upgrade_count" in payload["upgrade_stats"]
+    assert "prognostic_modifier_stats" in payload
+    assert "backbone_alignment_stats" in payload
+    assert "prognostic_followup_impact_count" in payload
+    assert "incomplete_prognostic_scores_count" in payload
+
+
+def test_pivotal_match_hides_peace1_for_sync_low_volume_mhspc(app_client):
+    client, db_path = app_client
+    payload = make_patient_payload(nss="40000000004", full_name="mHSPC Low Volume Demo")
+    payload.update(
+        {
+            "metastasis_site": "Bone",
+            "volume_disease": "Low",
+            "ecog_score": 0,
+            "metastasis_count": 2,
+        }
+    )
+    register = client.post("/api/register_patient", json=payload)
+    assert register.status_code == 200
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "mcspc_low_volume_sync_oligo")
+
+    response = client.get(f"/api/pivotal_match/{payload['nss']}")
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["success"] is True
+    visible_names = {str(item.get("study_name", "")) for item in data["eligible_matches"] + data["partial_matches"] + data["ineligible_matches"]}
+    assert "PEACE-1" not in visible_names
+    assert "ARASENS" not in visible_names
+    assert data["hidden_cross_scenario_count"] >= 1
 
 
 def test_tnm_engine_maps_case_specific_real_stage_images():

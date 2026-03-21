@@ -12,8 +12,16 @@ from prostanet.domains.patient_tracking.cohort_analytics import (
     compute_patient_research_readiness,
 )
 from prostanet.domains.patient_tracking.master_followup_plan import build_master_followup_plan
+from prostanet.domains.patient_tracking.mhspc_evidence import (
+    build_triplet_decision,
+    is_mhspc_state,
+    visible_trials_for_mhspc_state,
+)
 from prostanet.domains.patient_tracking.psa_line_monitor import build_psa_by_treatment_line
+from prostanet.domains.patient_tracking.prognostic_impact import build_prognostic_impact_bundle
 from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
+from prostanet.domains.patient_tracking.risk_tools import build_risk_tools_panel
+from prostanet.domains.patient_tracking.therapy_catalog import summarize_trial_backbones, trial_backbone
 from prostanet.domains.patient_tracking.therapy_catalog import regimen_label, therapy_select_options
 from prostanet.shared.official_diagnosis import build_official_diagnosis_context, diagnosis_field_label
 
@@ -25,6 +33,8 @@ ADVANCED_STATES = {
     "adt_progression_verification",
     "mcspc_oligo_metachronous",
     "mcspc_low_volume_sync_oligo",
+    "mcspc_high_volume_sync",
+    "mcspc_high_volume_metachronous",
     "mcspc_high_volume",
     "m0_crpc",
     "m1_crpc",
@@ -39,6 +49,8 @@ PRIMARY_QUESTION_MAP = {
     "adt_progression_verification": "¿Es CRPC confirmado o primero hay que verificar castración?",
     "mcspc_oligo_metachronous": "¿Qué intensificación sistémica y soporte concurrente corresponden en mHSPC?",
     "mcspc_low_volume_sync_oligo": "¿Qué intensificación sistémica y soporte concurrente corresponden en mHSPC?",
+    "mcspc_high_volume_sync": "¿Qué intensificación sistémica y soporte concurrente corresponden en mHSPC de novo de alto volumen?",
+    "mcspc_high_volume_metachronous": "¿Qué intensificación sistémica y soporte concurrente corresponden en mHSPC metacrónico de alto volumen?",
     "mcspc_high_volume": "¿Qué intensificación sistémica y soporte concurrente corresponden en mHSPC?",
     "m0_crpc": "¿Debe intensificarse nmCRPC y con qué prioridad clínica?",
     "m1_crpc": "¿Cuál es la siguiente secuencia sistémica prioritaria según biomarcadores y seguridad?",
@@ -53,6 +65,8 @@ STATE_DISPLAY_MAP = {
     "adt_progression_verification": "Progresión bajo ADT / verificación",
     "mcspc_oligo_metachronous": "mHSPC oligometastásico metacrónico",
     "mcspc_low_volume_sync_oligo": "mHSPC sincrónico de bajo volumen",
+    "mcspc_high_volume_sync": "mHSPC de alto volumen sincrónico",
+    "mcspc_high_volume_metachronous": "mHSPC de alto volumen metacrónico",
     "mcspc_high_volume": "mHSPC de alto volumen",
     "m0_crpc": "CRPC sin metástasis",
     "m1_crpc": "CRPC metastásico",
@@ -1626,11 +1640,45 @@ def _normalize_pivotal_match(match: dict[str, Any]) -> dict[str, Any]:
     normalized["match_score"] = _safe_float(details.get("match_score"))
     normalized["criteria_met"] = details.get("criteria_met", [])
     normalized["criteria_failed"] = details.get("criteria_failed", [])
+    backbone_bundle = details.get("recommended_trial_backbone") or trial_backbone(match.get("study_name"))
+    if isinstance(backbone_bundle, dict):
+        normalized.update(
+            {
+                "recommended_trial_backbone": backbone_bundle.get("recommended_trial_backbone", ""),
+                "recommended_trial_backbone_label": backbone_bundle.get("recommended_trial_backbone_label", ""),
+                "recommended_trial_backbone_source": backbone_bundle.get("recommended_trial_backbone_source", ""),
+                "recommended_trial_backbone_note": backbone_bundle.get("recommended_trial_backbone_note", ""),
+            }
+        )
     return normalized
 
 
-def _build_pivotal_panel(matches: list[dict[str, Any]]) -> dict[str, Any]:
+def _build_triplet_decision_for_profile(
+    *,
+    state: str,
+    raw_assessment: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not is_mhspc_state(state):
+        return {}
+    raw_result = (raw_assessment or {}).get("result_snapshot", {}) if raw_assessment else {}
+    payload = dict((raw_assessment or {}).get("input_snapshot", {}) or {})
+    existing = dict(raw_result.get("triplet_decision") or raw_result.get("triplet_decision_card") or {})
+    if existing:
+        return existing
+    return build_triplet_decision(
+        state,
+        payload,
+        docetaxel_bundle=raw_result.get("docetaxel_fitness"),
+    )
+
+
+def _build_pivotal_panel(matches: list[dict[str, Any]], *, state: str = "") -> dict[str, Any]:
     normalized = [_normalize_pivotal_match(item) for item in _dedupe_pivotal_matches(matches)]
+    hidden_cross_scenario = 0
+    if is_mhspc_state(state):
+        _, hidden_trials = visible_trials_for_mhspc_state(state, {})
+        hidden_cross_scenario = sum(1 for item in normalized if str(item.get("study_name") or "") in hidden_trials)
+        normalized = [item for item in normalized if str(item.get("study_name") or "") not in hidden_trials]
     eligible = [item for item in normalized if item.get("eligible")]
     partial = [item for item in normalized if not item.get("eligible") and (item.get("match_score") or 0) >= 0.7]
     ineligible = [item for item in normalized if item not in eligible and item not in partial]
@@ -1643,6 +1691,7 @@ def _build_pivotal_panel(matches: list[dict[str, Any]]) -> dict[str, Any]:
         "eligible_count": len(eligible),
         "partial_count": len(partial),
         "ineligible_count": len(ineligible),
+        "hidden_cross_scenario_count": hidden_cross_scenario,
         "last_evaluated_at": last_evaluated_at,
         "has_results": bool(normalized),
     }
@@ -1663,7 +1712,7 @@ def _scenario_for_state(state: str) -> str:
         return "mCRPC"
     if state == "adt_progression_verification":
         return "verification"
-    if state in {"mcspc_oligo_metachronous", "mcspc_low_volume_sync_oligo", "mcspc_high_volume"}:
+    if state in {"mcspc_oligo_metachronous", "mcspc_low_volume_sync_oligo", "mcspc_high_volume_sync", "mcspc_high_volume_metachronous", "mcspc_high_volume"}:
         return "mHSPC"
     return ""
 
@@ -1723,6 +1772,10 @@ def _build_evidence_applicability(
                     else "Aún no sostiene una decisión definitiva hasta resolver los gaps clínicos."
                 ),
                 "evidence_strength": "Alta" if is_eligible else "Condicionada",
+                "recommended_trial_backbone": match.get("recommended_trial_backbone", ""),
+                "recommended_trial_backbone_label": match.get("recommended_trial_backbone_label", ""),
+                "recommended_trial_backbone_source": match.get("recommended_trial_backbone_source", ""),
+                "recommended_trial_backbone_note": match.get("recommended_trial_backbone_note", ""),
             }
         )
     return {
@@ -2325,6 +2378,7 @@ def build_patient_profile_view_model(
     state_timeline: list[dict[str, Any]],
     care_overlays: list[dict[str, Any]],
     recommendations: dict[str, Any] | None = None,
+    longitudinal_bundle: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     assessment = latest_assessment or {}
     raw_assessment = latest_assessment_raw or {}
@@ -2349,6 +2403,16 @@ def build_patient_profile_view_model(
         raw_assessment=raw_assessment,
         display_assessment=assessment,
         operational_module_label=operational_module_label,
+    )
+    risk_tools_bundle = build_risk_tools_panel(
+        patient=patient,
+        state=state,
+        raw_assessment=raw_assessment,
+        display_assessment=assessment,
+    )
+    triplet_decision = _build_triplet_decision_for_profile(
+        state=state,
+        raw_assessment=raw_assessment,
     )
     agenda_board = build_agenda_board(patient, state, management_track, raw_assessment)
     persisted_agenda_items = [dict(item) for item in (patient.get("agenda_items") or agenda_board.get("items", []))]
@@ -2413,6 +2477,9 @@ def build_patient_profile_view_model(
             "supporting_evidence": reconciliation.get("supporting_evidence", {}),
         }
     )
+    latest_signal_snapshot.setdefault("critical_missing", [])
+    latest_signal_snapshot.setdefault("awaiting_review", [])
+    latest_signal_snapshot.setdefault("active_safety", [])
     adjudication_snapshot = dict(patient.get("latest_adjudication_snapshot") or {})
     trial_benchmark_snapshot = dict(patient.get("latest_trial_benchmark_snapshot") or {})
     if not adjudication_snapshot or not trial_benchmark_snapshot:
@@ -2444,6 +2511,66 @@ def build_patient_profile_view_model(
         patient_outcome_events = runtime_outcomes.get("outcome_events", [])
     else:
         patient_outcome_events = list(patient.get("outcome_events") or [])
+    current_trial_profile = dict(trial_benchmark_snapshot.get("current_trial_profile") or {})
+    if current_trial_profile and not current_trial_profile.get("recommended_trial_backbone_label"):
+        current_trial_profile.update(
+            summarize_trial_backbones(list(current_trial_profile.get("matched_trials") or []))
+        )
+        trial_benchmark_snapshot["current_trial_profile"] = current_trial_profile
+    longitudinal_bundle = longitudinal_bundle or {}
+    psa_forecast = dict(longitudinal_bundle.get("psa_forecast") or {})
+    live_benchmark = dict(longitudinal_bundle.get("live_benchmark") or {})
+    if not psa_forecast:
+        from prostanet.domains.patient_tracking.psa_forecast import build_psa_forecast
+
+        psa_forecast = build_psa_forecast(patient, state=state)
+    if not live_benchmark:
+        try:
+            import tracking_db
+            from prostanet.domains.patient_tracking.live_benchmark import build_live_benchmark
+
+            conn = tracking_db.connect_db()
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM patient_identity ORDER BY id ASC")
+            cohort_ids = [int(row[0]) for row in cursor.fetchall()]
+            conn.close()
+            cohort_records = [
+                tracking_db.get_patient_full_record(candidate_id)
+                for candidate_id in cohort_ids
+                if candidate_id
+            ]
+            live_benchmark = build_live_benchmark(
+                patient,
+                cohort_records,
+                state=state,
+                management_track=management_track,
+            )
+        except Exception:
+            live_benchmark = {
+                "status": "not_applicable",
+                "show": False,
+                "state": state,
+                "narrative": "Benchmark Vivo no pudo calcularse con el contexto actual.",
+                "flags": ["comparabilidad_limitada"],
+                "reliability": {
+                    "cohort_size": 0,
+                    "percentile_available": False,
+                    "curve_available": False,
+                    "published_reference_available": False,
+                    "confidence_label": "not_applicable",
+                    "cohort_tier": "none",
+                },
+            }
+    forecast_reliability = dict(psa_forecast.get("reliability") or {})
+    benchmark_reliability = dict(live_benchmark.get("reliability") or {})
+    prognostic_impact_bundle = build_prognostic_impact_bundle(
+        patient=patient,
+        state=state,
+        management_track=management_track,
+        raw_assessment=raw_assessment,
+        risk_tools_bundle=risk_tools_bundle,
+        current_trial_profile=current_trial_profile,
+    )
     latest_signal_snapshot.update(
         {
             "outcome_events_summary": adjudication_snapshot.get("outcome_events_summary", {}),
@@ -2453,6 +2580,16 @@ def build_patient_profile_view_model(
             "last_adjudicated_event": adjudication_snapshot.get("last_adjudicated_event", {}),
             "trial_comparable_endpoints": trial_benchmark_snapshot.get("trial_endpoints", []),
             "current_trial_comparable_profile": trial_benchmark_snapshot.get("current_trial_profile", {}),
+            "prognostic_modifiers": prognostic_impact_bundle.get("prognostic_modifiers", []),
+            "prognostic_recommended_actions": prognostic_impact_bundle.get("recommended_actions", []),
+            "prognostic_followup_impact": prognostic_impact_bundle.get("followup_impact", []),
+            "prognostic_capture_targets": prognostic_impact_bundle.get("capture_targets", []),
+            "backbone_alignment": prognostic_impact_bundle.get("backbone_alignment", {}),
+            "cadence_adjusted_by": prognostic_impact_bundle.get("cadence_adjusted_by", []),
+            "psa_forecast": psa_forecast,
+            "forecast_reliability": forecast_reliability,
+            "live_benchmark": live_benchmark,
+            "benchmark_reliability": benchmark_reliability,
         }
     )
     transition_proposals = [
@@ -2497,7 +2634,7 @@ def build_patient_profile_view_model(
             stage_specific_panels.append(modifier_panel)
     if diagnosis_context.get("official_diagnosis_missing_fields_raw"):
         missing_inputs_by_panel["official_diagnosis"] = diagnosis_context.get("official_diagnosis_missing_fields_raw", [])
-    pivotal_panel = _build_pivotal_panel(patient.get("pivotal_matches", []))
+    pivotal_panel = _build_pivotal_panel(patient.get("pivotal_matches", []), state=state)
     evidence_applicability = _build_evidence_applicability(
         state=state,
         pivotal_panel=pivotal_panel,
@@ -2532,6 +2669,33 @@ def build_patient_profile_view_model(
         copilot=copilot_sections,
     )
     psa_observability = _build_psa_observability(patient, copilot_sections)
+    psa_observability["forecast"] = psa_forecast
+    response_visualization = dict(copilot_sections.get("response_visualization") or {})
+    psa_trajectory = dict(response_visualization.get("psa_trajectory") or {})
+    if psa_observability.get("points") and not psa_trajectory.get("points"):
+        psa_trajectory["points"] = list(psa_observability.get("points") or [])
+    if psa_observability.get("treatment_bands") and not psa_trajectory.get("treatment_bands"):
+        psa_trajectory["treatment_bands"] = list(psa_observability.get("treatment_bands") or [])
+    integrated_timeline = dict(psa_trajectory.get("integrated_treatment_timeline") or {})
+    axis_dates = set(psa_trajectory.get("axis_dates") or [])
+    axis_dates.update(point.get("date") for point in (psa_trajectory.get("points") or []) if point.get("date"))
+    psa_trajectory["forecast_curve"] = list(psa_forecast.get("forecast_curve") or [])
+    psa_trajectory["forecast_points"] = list(psa_forecast.get("forecast_points") or [])
+    psa_trajectory["forecast_status"] = psa_forecast.get("status", "")
+    psa_trajectory["forecast_reliability"] = forecast_reliability
+    axis_dates.update(point.get("date") for point in (psa_forecast.get("forecast_curve") or []) if point.get("date"))
+    if integrated_timeline:
+        integrated_axis_dates = set(integrated_timeline.get("axis_dates") or [])
+        integrated_axis_dates.update(axis_dates)
+        integrated_timeline["axis_dates"] = sorted(date_text for date_text in integrated_axis_dates if date_text)
+        psa_trajectory["integrated_treatment_timeline"] = integrated_timeline
+    psa_trajectory["axis_dates"] = sorted(date_text for date_text in axis_dates if date_text)
+    psa_trajectory["has_data"] = bool(
+        psa_trajectory.get("points")
+        or (psa_trajectory.get("integrated_treatment_timeline") or {}).get("has_integrated_timeline")
+    )
+    response_visualization["psa_trajectory"] = psa_trajectory
+    copilot_sections["response_visualization"] = response_visualization
     clinical_journey_events = _build_clinical_journey_events(patient, state)
     for line_event in psa_observability.get("line_events") or []:
         if line_event not in clinical_journey_events:
@@ -2564,6 +2728,18 @@ def build_patient_profile_view_model(
         "official_diagnosis_missing_fields": diagnosis_context.get("official_diagnosis_missing_fields", []),
         "official_diagnosis_source_summary": diagnosis_context.get("official_diagnosis_source_summary", ""),
         "operational_module_label": diagnosis_context.get("operational_module_label", operational_module_label),
+        "risk_tools_panel": risk_tools_bundle.get("cards", []),
+        "upgrade_panel": risk_tools_bundle.get("upgrade_panel", {}),
+        "risk_tool_missing_inputs": risk_tools_bundle.get("missing_inputs", []),
+        "risk_tool_fidelity_summary": risk_tools_bundle.get("fidelity_summary", {}),
+        "prognostic_modifiers": prognostic_impact_bundle.get("prognostic_modifiers", []),
+        "prognostic_recommended_actions": prognostic_impact_bundle.get("recommended_actions", []),
+        "prognostic_followup_impact": prognostic_impact_bundle.get("followup_impact", []),
+        "prognostic_capture_targets": prognostic_impact_bundle.get("capture_targets", []),
+        "backbone_alignment": prognostic_impact_bundle.get("backbone_alignment", {}),
+        "cadence_adjusted_by": prognostic_impact_bundle.get("cadence_adjusted_by", []),
+        "triplet_decision": triplet_decision,
+        "triplet_decision_card": triplet_decision,
         "stage_specific_panels": stage_specific_panels,
         "algorithm_panels": _build_algorithm_panels(
             state=state,
@@ -2584,6 +2760,10 @@ def build_patient_profile_view_model(
         "followup_completion_block": capture_bundle.get("followup_completion_block", {}),
         "clinical_journey_events": clinical_journey_events,
         "psa_observability": psa_observability,
+        "psa_forecast": psa_forecast,
+        "forecast_reliability": forecast_reliability,
+        "live_benchmark": live_benchmark,
+        "benchmark_reliability": benchmark_reliability,
         "agenda_resolution_trace": agenda_resolution_trace,
         "longitudinal_sections": _build_longitudinal_sections(patient, state, assessment),
         "supportive_evidence_context": _as_list(display_result.get("supportive_evidence_context"))[:3],

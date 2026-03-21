@@ -81,7 +81,7 @@ class StateClassifierService:
             if metachronous and metastasis_count <= 5:
                 module = "mcspc_oligo_metachronous"
             elif volume_disease == "high" or metastasis_count >= 4 or metastasis_site.lower() == "visceral" or m_substage == "M1c":
-                module = "mcspc_high_volume"
+                module = "mcspc_high_volume_metachronous" if metachronous else "mcspc_high_volume_sync"
             else:
                 module = "mcspc_low_volume_sync_oligo"
         elif bcr2 or ((prior_prostatectomy or prior_radiation) and self._has_recurrence_signal(payload)):
@@ -117,6 +117,8 @@ class StateClassifierService:
             "recurrence_bcr": "Se detectaron marcadores de recurrencia o de segunda recurrencia bioquímica después de tratamiento local.",
             "mcspc_oligo_metachronous": "Se detectó enfermedad metastásica sensible a la castración, oligometastásica y metacrónica.",
             "mcspc_low_volume_sync_oligo": "Se detectó enfermedad metastásica sensible a la castración con patrón de bajo volumen u oligometastásico sincrónico.",
+            "mcspc_high_volume_sync": "Se detectó enfermedad metastásica sensible a la castración de alto volumen sincrónica / de novo.",
+            "mcspc_high_volume_metachronous": "Se detectó enfermedad metastásica sensible a la castración de alto volumen metacrónica.",
             "mcspc_high_volume": "Se detectó enfermedad metastásica sensible a la castración de alto volumen.",
             "adt_progression_verification": "Se detectó progresión bajo terapia de privación androgénica o una etiqueta de CRPC sin castración confirmada, por lo que primero debe verificarse testosterona en rango de castración y reestadificación convencional.",
             "m0_crpc": "Se detectó enfermedad resistente a la castración sin metástasis.",

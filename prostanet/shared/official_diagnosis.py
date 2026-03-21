@@ -81,7 +81,13 @@ CLINICAL_RISK_GROUP_OPTIONS = [
 
 DIAGNOSTIC_LOCALIZED_STATES = {"diagnostic_workup", "post_negative_biopsy_followup", "localized_initial"}
 POSTLOCAL_STATES = {"post_prostatectomy", "recurrence_bcr"}
-MHSPC_STATES = {"mcspc_oligo_metachronous", "mcspc_low_volume_sync_oligo", "mcspc_high_volume"}
+MHSPC_STATES = {
+    "mcspc_oligo_metachronous",
+    "mcspc_low_volume_sync_oligo",
+    "mcspc_high_volume_sync",
+    "mcspc_high_volume_metachronous",
+    "mcspc_high_volume",
+}
 CRPC_STATES = {"m0_crpc", "m1_crpc"}
 
 

@@ -10,6 +10,8 @@ POSTLOCAL_STATES = {"post_prostatectomy", "recurrence_bcr"}
 MHSPC_STATES = {
     "mcspc_oligo_metachronous",
     "mcspc_low_volume_sync_oligo",
+    "mcspc_high_volume_sync",
+    "mcspc_high_volume_metachronous",
     "mcspc_high_volume",
 }
 ADVANCED_STATES = {
@@ -132,6 +134,14 @@ def _has_local_treatment(patient: dict[str, Any]) -> bool:
     return bool(patient.get("surgery")) or bool(patient.get("radiation"))
 
 
+def _is_metachronous_mhspc(patient: dict[str, Any]) -> bool:
+    baseline = patient.get("baseline") or {}
+    explicit = str(baseline.get("metachronous_metastasis", "") or "").strip().lower()
+    if explicit in {"1", "true", "yes", "si", "sí"}:
+        return True
+    return _has_local_treatment(patient)
+
+
 def _derive_adt_context(patient: dict[str, Any], state: str) -> str:
     haystack = _treatment_text(patient).lower()
     if "orchiect" in haystack:
@@ -156,6 +166,7 @@ def _derive_castrate_status(patient: dict[str, Any], state: str) -> str:
 def _derive_progression_pattern(patient: dict[str, Any], state: str) -> str:
     latest_followup = _latest(patient.get("follow_ups", []), "visit_date")
     disease_status = str(latest_followup.get("disease_status") or "").lower()
+    metachronous = _is_metachronous_mhspc(patient)
     if "radiograf" in disease_status:
         return "radiographic"
     if "clinic" in disease_status:
@@ -256,14 +267,14 @@ def _systemic_target_state(
     if metastatic_evidence:
         if volume_context == "high" or metastasis_site == "Visceral" or metastasis_count >= 4:
             reasons.append("Enfermedad sistémica con carga compatible con mCSPC de mayor volumen.")
-            return "mcspc_high_volume", reasons
+            return ("mcspc_high_volume_metachronous" if metachronous else "mcspc_high_volume_sync"), reasons
         if volume_context == "low" or (metastasis_count and metastasis_count <= 3):
             reasons.append("Carga metastásica baja / oligometastásica documentada.")
             if _has_local_treatment(patient):
                 return "mcspc_oligo_metachronous", reasons
             return "mcspc_low_volume_sync_oligo", reasons
         reasons.append("Enfermedad metastásica documentada sin staging longitudinal completo.")
-        return "mcspc_high_volume", reasons
+        return ("mcspc_high_volume_metachronous" if metachronous else "mcspc_high_volume_sync"), reasons
 
     if adt_context != "none" or any(token in treatment_text for token in _ARPI_TOKENS):
         reasons.append("ADT/ARPI documentados sin staging longitudinal suficiente para subtipo avanzado definitivo.")

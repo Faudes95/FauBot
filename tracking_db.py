@@ -564,6 +564,892 @@ def _hydrate_verified_fact_rows(rows):
         facts.append(item)
     return facts
 
+
+def _coerce_bool(value):
+    if value in (None, "", "No aplica"):
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(int(value))
+    return str(value).strip().lower() in {"1", "true", "yes", "si", "sí", "on", "positive", "positivo"}
+
+
+def _first_nonempty(*values):
+    for value in values:
+        if _is_present(value):
+            return value
+    return None
+
+
+def _domain_source_metadata(source_type="", source_record_id=None):
+    return {
+        "source_type": source_type or "stage_visit",
+        "source_record_id": _safe_int(source_record_id, None),
+    }
+
+
+def _make_session_key(prefix, patient_id, event_date, *parts):
+    normalized_parts = [
+        re.sub(r"[^a-z0-9]+", "_", str(part or "").strip().lower()).strip("_")
+        for part in parts
+        if _is_present(part)
+    ]
+    date_part = str(event_date or "undated")[:10]
+    tail = "_".join(part for part in normalized_parts if part)
+    return f"{prefix}_{patient_id}_{date_part}" + (f"_{tail}" if tail else "")
+
+
+def _hydrate_survival_status_rows(rows):
+    items = []
+    for row in rows:
+        item = dict(row)
+        items.append(item)
+    return items
+
+
+def _hydrate_survival_anchor_rows(rows):
+    items = []
+    for row in rows:
+        item = dict(row)
+        item["payload"] = _parse_json_blob(item.pop("payload_json", None), {})
+        item["active"] = bool(item.get("active", 1))
+        items.append(item)
+    return items
+
+
+def _hydrate_biopsy_session_rows(rows):
+    items = []
+    for row in rows:
+        item = dict(row)
+        item["complications"] = _parse_json_blob(item.pop("complications_json", None), [])
+        items.append(item)
+    return items
+
+
+def _hydrate_biopsy_core_rows(rows):
+    items = []
+    for row in rows:
+        item = dict(row)
+        item["positive"] = bool(item.get("positive", 0))
+        if item.get("mri_target_concordance") is not None:
+            item["mri_target_concordance"] = bool(item.get("mri_target_concordance"))
+        item["cribriform_pattern"] = bool(item.get("cribriform_pattern", 0))
+        item["intraductal_carcinoma"] = bool(item.get("intraductal_carcinoma", 0))
+        items.append(item)
+    return items
+
+
+def _hydrate_biopsy_target_rows(rows):
+    return [dict(row) for row in rows]
+
+
+def _hydrate_biopsy_link_rows(rows):
+    return [dict(row) for row in rows]
+
+
+def _hydrate_as_enrollment_rows(rows):
+    items = []
+    for row in rows:
+        item = dict(row)
+        item["criteria_met"] = _parse_json_blob(item.pop("criteria_met_json", None), {})
+        items.append(item)
+    return items
+
+
+def _hydrate_as_schedule_rows(rows):
+    items = []
+    for row in rows:
+        item = dict(row)
+        item["evidence_basis"] = _parse_json_blob(item.pop("evidence_basis_json", None), [])
+        items.append(item)
+    return items
+
+
+def _hydrate_as_trigger_rows(rows):
+    items = []
+    for row in rows:
+        item = dict(row)
+        item["evidence_basis"] = _parse_json_blob(item.pop("evidence_basis_json", None), [])
+        items.append(item)
+    return items
+
+
+def _hydrate_sre_rows(rows):
+    items = []
+    for row in rows:
+        item = dict(row)
+        item["surgical_intervention"] = bool(item.get("surgical_intervention", 0))
+        item["resolved"] = bool(item.get("resolved", 0))
+        item["evidence_tags"] = _parse_json_blob(item.pop("evidence_tags_json", None), [])
+        items.append(item)
+    return items
+
+
+def _hydrate_bma_rows(rows):
+    items = []
+    for row in rows:
+        item = dict(row)
+        for key in (
+            "dental_clearance_done",
+            "onj_monitoring",
+            "onj_detected",
+            "calcium_vitamin_d_supplementation",
+        ):
+            item[key] = bool(item.get(key, 0))
+        if item.get("renal_function_adequate") is not None:
+            item["renal_function_adequate"] = bool(item.get("renal_function_adequate"))
+        items.append(item)
+    return items
+
+
+def _hydrate_bone_health_rows(rows):
+    items = []
+    for row in rows:
+        item = dict(row)
+        item["payload"] = _parse_json_blob(item.pop("payload_json", None), {})
+        item["dxa_performed"] = bool(item.get("dxa_performed", 0))
+        item["dental_clearance_done"] = bool(item.get("dental_clearance_done", 0))
+        item["onj_monitoring"] = bool(item.get("onj_monitoring", 0))
+        items.append(item)
+    return items
+
+
+def _hydrate_rt_course_rows(rows):
+    items = []
+    for row in rows:
+        item = dict(row)
+        item["concurrent_adt"] = bool(item.get("concurrent_adt", 0))
+        item["adt_concurrent"] = bool(item.get("adt_concurrent", 0))
+        if item.get("salvage_nodal_coverage") is not None:
+            item["salvage_nodal_coverage"] = bool(item.get("salvage_nodal_coverage"))
+        item["evidence_tags"] = _parse_json_blob(item.pop("evidence_tags_json", None), [])
+        items.append(item)
+    return items
+
+
+def _hydrate_rt_site_rows(rows):
+    return [dict(row) for row in rows]
+
+
+def _hydrate_rt_toxicity_rows(rows):
+    items = []
+    for row in rows:
+        item = dict(row)
+        item["evidence_tags"] = _parse_json_blob(item.pop("evidence_tags_json", None), [])
+        items.append(item)
+    return items
+
+
+def _build_biopsy_session_summary(session, cores, targets, links):
+    systematic = [dict(item) for item in cores if str(item.get("core_type") or "") == "systematic"]
+    targeted = [dict(item) for item in cores if str(item.get("core_type") or "") == "targeted"]
+    summary = dict(session)
+    summary["systematic_cores"] = systematic
+    summary["targeted_cores"] = targeted
+    summary["targets"] = [dict(item) for item in targets]
+    summary["mri_pathology_links"] = [dict(item) for item in links]
+    return summary
+
+
+def _build_active_surveillance_protocol_block(enrollment, schedule_items, trigger_events, conversion_events):
+    if not enrollment:
+        return {}
+    protocol = dict(enrollment)
+    protocol["schedule"] = [dict(item) for item in schedule_items]
+    protocol["reclassification_triggers"] = [dict(item) for item in trigger_events]
+    protocol["conversion_events"] = [dict(item) for item in conversion_events]
+    protocol["exit_reason"] = (
+        enrollment.get("exit_reason")
+        or (conversion_events[-1].get("exit_reason") if conversion_events else None)
+    )
+    protocol["exit_date"] = (
+        enrollment.get("exit_date")
+        or (conversion_events[-1].get("conversion_date") if conversion_events else None)
+    )
+    protocol["exit_treatment"] = (
+        enrollment.get("exit_treatment")
+        or (conversion_events[-1].get("exit_treatment") if conversion_events else None)
+    )
+    protocol["confirmatory_biopsy_done"] = any(
+        str(item.get("item_type") or "") == "rebiopsy"
+        and "confirm" in str(item.get("title") or "").lower()
+        and str(item.get("status") or "") == "completed"
+        for item in schedule_items
+    )
+    protocol["confirmatory_biopsy_date"] = next(
+        (
+            item.get("completed_date")
+            for item in schedule_items
+            if str(item.get("item_type") or "") == "rebiopsy"
+            and "confirm" in str(item.get("title") or "").lower()
+            and item.get("completed_date")
+        ),
+        None,
+    )
+    protocol["confirmatory_biopsy_due"] = next(
+        (
+            item.get("due_date")
+            for item in schedule_items
+            if str(item.get("item_type") or "") == "rebiopsy"
+            and "confirm" in str(item.get("title") or "").lower()
+        ),
+        None,
+    )
+    return protocol
+
+
+def _build_skeletal_event_profile_block(sre_events, bma_courses, bone_health_snapshots):
+    latest_bma = bma_courses[-1] if bma_courses else {}
+    latest_bone = bone_health_snapshots[-1] if bone_health_snapshots else {}
+    return {
+        "sre_events": [dict(item) for item in sre_events],
+        "bone_modifying_agent": dict(latest_bma) if latest_bma else {},
+        "bone_health_latest": dict(latest_bone) if latest_bone else {},
+        "bone_health_snapshots": [dict(item) for item in bone_health_snapshots],
+    }
+
+
+def _nest_radiotherapy_courses(courses, sites, toxicities):
+    site_map = {}
+    for site in sites:
+        site_map.setdefault(site.get("course_id"), []).append(dict(site))
+    toxicity_map = {}
+    for toxicity in toxicities:
+        toxicity_map.setdefault(toxicity.get("course_id"), []).append(dict(toxicity))
+    nested = []
+    for course in courses:
+        item = dict(course)
+        item["mdt_site_details"] = site_map.get(item.get("id"), [])
+        item["toxicity"] = toxicity_map.get(item.get("id"), [])
+        nested.append(item)
+    return nested
+
+
+def _upsert_patient_identity_survival_fields(cursor, patient_id, status):
+    if not status:
+        return
+    cursor.execute(
+        """
+        UPDATE patient_identity
+        SET vital_status = COALESCE(?, vital_status),
+            date_of_death = COALESCE(?, date_of_death),
+            cause_of_death = COALESCE(?, cause_of_death),
+            last_contact_date = COALESCE(?, last_contact_date),
+            last_contact_status = COALESCE(?, last_contact_status),
+            death_source = COALESCE(?, death_source)
+        WHERE id = ?
+        """,
+        (
+            status.get("vital_status"),
+            status.get("date_of_death"),
+            status.get("cause_of_death"),
+            status.get("last_contact_date"),
+            status.get("last_contact_status"),
+            status.get("death_source"),
+            patient_id,
+        ),
+    )
+
+
+def _save_survival_status_update(cursor, patient_id, data, *, source_type="stage_visit", source_record_id=None):
+    if not isinstance(data, dict) or not any(
+        _is_present(data.get(field))
+        for field in ("vital_status", "date_of_death", "cause_of_death", "last_contact_date", "last_contact_status", "death_source")
+    ):
+        return None
+    cursor.execute(
+        """
+        INSERT INTO survival_status_records (
+            patient_id, vital_status, date_of_death, cause_of_death, last_contact_date,
+            last_contact_status, death_source, source_type, source_record_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            patient_id,
+            data.get("vital_status") or "alive",
+            data.get("date_of_death"),
+            data.get("cause_of_death"),
+            data.get("last_contact_date"),
+            data.get("last_contact_status"),
+            data.get("death_source"),
+            source_type,
+            _safe_int(source_record_id, None),
+        ),
+    )
+    _upsert_patient_identity_survival_fields(cursor, patient_id, data)
+    return cursor.lastrowid
+
+
+def _save_survival_anchor_events(cursor, patient_id, data, *, source_type="stage_visit", source_record_id=None):
+    if not isinstance(data, list):
+        return []
+    saved_ids = []
+    for event in data:
+        if not isinstance(event, dict):
+            continue
+        anchor_type = str(event.get("anchor_type") or "").strip()
+        anchor_date = str(event.get("anchor_date") or "")[:10]
+        if not anchor_type or not anchor_date:
+            continue
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO survival_anchor_events (
+                patient_id, anchor_type, anchor_date, anchor_source, source_type, source_record_id, payload_json, active
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                patient_id,
+                anchor_type,
+                anchor_date,
+                event.get("anchor_source") or "",
+                source_type,
+                _safe_int(source_record_id, None),
+                _json_blob(event.get("payload") or {}),
+                1 if _coerce_bool(event.get("active", True)) is not False else 0,
+            ),
+        )
+        saved_ids.append(cursor.lastrowid)
+    return saved_ids
+
+
+def _save_structured_biopsy_session(cursor, patient_id, data, *, source_type="stage_visit", source_record_id=None, legacy_biopsy_id=None):
+    if not isinstance(data, dict):
+        return None
+    biopsy_date = str(data.get("biopsy_date") or datetime.now().strftime("%Y-%m-%d"))[:10]
+    biopsy_type = data.get("biopsy_type") or "systematic"
+    biopsy_context = data.get("biopsy_context") or "diagnostic"
+    session_key = data.get("session_key") or _make_session_key("bx", patient_id, biopsy_date, biopsy_type, biopsy_context)
+    systematic_cores = list(data.get("systematic_cores") or [])
+    targeted_cores = list(data.get("targeted_cores") or [])
+    if not systematic_cores and not targeted_cores and (
+        _is_present(data.get("total_cores")) or _is_present(data.get("positive_cores"))
+    ):
+        total_cores = _safe_int(data.get("total_cores"), 0)
+        positive_cores = _safe_int(data.get("positive_cores"), 0)
+        for index in range(total_cores):
+            systematic_cores.append(
+                {
+                    "core_id": f"S{index + 1}",
+                    "location_sextant": "",
+                    "core_type": "systematic",
+                    "positive": index < positive_cores,
+                    "involvement_pct": data.get("max_core_involvement_pct") if index == 0 and positive_cores > 0 else None,
+                    "gleason_primary": data.get("gleason_primary"),
+                    "gleason_secondary": data.get("gleason_secondary"),
+                    "isup_grade": data.get("isup_grade"),
+                    "cribriform_pattern": bool(data.get("patron_cribiforme", 0)),
+                    "intraductal_carcinoma": bool(data.get("carcinoma_intraductal", 0)),
+                }
+            )
+    all_cores = [item for item in systematic_cores + targeted_cores if isinstance(item, dict)]
+    total_positive = sum(1 for item in all_cores if _coerce_bool(item.get("positive")))
+    max_involvement = max(
+        (_safe_float(item.get("involvement_pct"), None) for item in all_cores if _safe_float(item.get("involvement_pct"), None) is not None),
+        default=None,
+    )
+    highest_isup = max(
+        (_safe_int(item.get("isup_grade"), None) for item in all_cores if _safe_int(item.get("isup_grade"), None) is not None),
+        default=None,
+    )
+    concordant = [
+        item for item in targeted_cores
+        if isinstance(item, dict) and item.get("mri_target_concordance") is not None
+    ]
+    targeted_concordance_rate = None
+    if concordant:
+        targeted_concordance_rate = round(
+            sum(1 for item in concordant if _coerce_bool(item.get("mri_target_concordance"))) / len(concordant) * 100,
+            1,
+        )
+    cursor.execute(
+        """
+        INSERT OR REPLACE INTO biopsy_sessions (
+            patient_id, session_key, biopsy_date, biopsy_type, biopsy_route, biopsy_context,
+            mri_pirads_at_biopsy, complications_json, total_cores, total_positive,
+            highest_isup, max_involvement_pct, targeted_concordance_rate,
+            source_type, source_record_id, legacy_biopsy_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            patient_id,
+            session_key,
+            biopsy_date,
+            biopsy_type,
+            data.get("biopsy_route") or "",
+            biopsy_context,
+            _safe_int(data.get("mri_pirads_at_biopsy"), None),
+            _json_blob(data.get("complications") or []),
+            len(all_cores),
+            total_positive,
+            highest_isup,
+            max_involvement,
+            targeted_concordance_rate,
+            source_type,
+            _safe_int(source_record_id, None),
+            legacy_biopsy_id,
+        ),
+    )
+    cursor.execute("SELECT id FROM biopsy_sessions WHERE session_key = ?", (session_key,))
+    session_row = cursor.fetchone()
+    if not session_row:
+        return None
+    session_id = session_row[0]
+    cursor.execute("DELETE FROM biopsy_cores WHERE session_id = ?", (session_id,))
+    cursor.execute("DELETE FROM biopsy_targets WHERE session_id = ?", (session_id,))
+    cursor.execute("DELETE FROM biopsy_mri_pathology_links WHERE session_id = ?", (session_id,))
+    for collection_name, collection in (("systematic", systematic_cores), ("targeted", targeted_cores)):
+        for index, core in enumerate(collection or []):
+            if not isinstance(core, dict):
+                continue
+            cursor.execute(
+                """
+                INSERT INTO biopsy_cores (
+                    session_id, core_id, location_sextant, core_type, core_length_mm, tumor_length_mm,
+                    involvement_pct, gleason_primary, gleason_secondary, isup_grade,
+                    positive, mri_target_concordance, cribriform_pattern, intraductal_carcinoma
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    core.get("core_id") or f"{collection_name[:1].upper()}{index + 1}",
+                    core.get("location_sextant") or core.get("location") or "",
+                    core.get("core_type") or collection_name,
+                    _safe_float(core.get("core_length_mm"), None),
+                    _safe_float(core.get("tumor_length_mm"), None),
+                    _safe_float(core.get("involvement_pct"), None),
+                    _safe_int(core.get("gleason_primary"), None),
+                    _safe_int(core.get("gleason_secondary"), None),
+                    _safe_int(core.get("isup_grade"), None),
+                    1 if _coerce_bool(core.get("positive")) else 0,
+                    (
+                        None
+                        if core.get("mri_target_concordance") is None
+                        else (1 if _coerce_bool(core.get("mri_target_concordance")) else 0)
+                    ),
+                    1 if _coerce_bool(core.get("cribriform_pattern")) else 0,
+                    1 if _coerce_bool(core.get("intraductal_carcinoma")) else 0,
+                ),
+            )
+    targets = data.get("targets") or []
+    if not targets and targeted_cores:
+        grouped = {}
+        for core in targeted_cores:
+            if not isinstance(core, dict):
+                continue
+            target_id = core.get("target_id") or core.get("location_sextant") or core.get("core_id") or "target_1"
+            grouped.setdefault(target_id, []).append(core)
+        targets = []
+        for target_id, target_cores in grouped.items():
+            concordant_items = [item for item in target_cores if item.get("mri_target_concordance") is not None]
+            positive_count = sum(1 for item in target_cores if _coerce_bool(item.get("positive")))
+            targets.append(
+                {
+                    "target_id": target_id,
+                    "target_label": target_id,
+                    "lesion_location": target_cores[0].get("location_sextant") or target_id,
+                    "positive_core_count": positive_count,
+                    "total_core_count": len(target_cores),
+                    "concordance_status": (
+                        "concordant"
+                        if concordant_items and any(_coerce_bool(item.get("mri_target_concordance")) for item in concordant_items)
+                        else "discordant" if concordant_items else ""
+                    ),
+                }
+            )
+    for target in targets:
+        if not isinstance(target, dict):
+            continue
+        target_id = target.get("target_id") or target.get("target_label") or target.get("lesion_location") or ""
+        if not target_id:
+            continue
+        cursor.execute(
+            """
+            INSERT INTO biopsy_targets (
+                session_id, target_id, target_label, pirads_score, lesion_location,
+                positive_core_count, total_core_count, concordance_status, notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                target_id,
+                target.get("target_label") or target_id,
+                _safe_int(target.get("pirads_score"), None),
+                target.get("lesion_location") or "",
+                _safe_int(target.get("positive_core_count"), 0),
+                _safe_int(target.get("total_core_count"), 0),
+                target.get("concordance_status") or "",
+                target.get("notes") or "",
+            ),
+        )
+    for link in data.get("mri_pathology_links") or []:
+        if not isinstance(link, dict):
+            continue
+        cursor.execute(
+            """
+            INSERT INTO biopsy_mri_pathology_links (
+                session_id, target_id, lesion_location, pathology_location, concordance_status, notes
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                link.get("target_id") or "",
+                link.get("lesion_location") or "",
+                link.get("pathology_location") or "",
+                link.get("concordance_status") or "",
+                link.get("notes") or "",
+            ),
+        )
+    return session_id
+
+
+def _save_active_surveillance_update(cursor, patient_id, data, *, source_type="stage_visit", source_record_id=None):
+    if not isinstance(data, dict):
+        return None
+    enrollment_date = str(data.get("enrollment_date") or data.get("protocol_start_date") or datetime.now().strftime("%Y-%m-%d"))[:10]
+    protocol = data.get("protocol") or data.get("enrollment_protocol") or "NCCN_very_low"
+    cursor.execute(
+        """
+        SELECT id FROM as_enrollments
+        WHERE patient_id = ? AND current_status = 'active'
+        ORDER BY enrollment_date DESC, id DESC LIMIT 1
+        """,
+        (patient_id,),
+    )
+    row = cursor.fetchone()
+    enrollment_id = row[0] if row else None
+    if enrollment_id is None:
+        cursor.execute(
+            """
+            INSERT INTO as_enrollments (
+                patient_id, enrollment_date, enrollment_protocol, baseline_biopsy_ref,
+                criteria_met_json, current_status, source_type, source_record_id,
+                exit_date, exit_reason, exit_treatment
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                patient_id,
+                enrollment_date,
+                protocol,
+                _safe_int(data.get("baseline_biopsy_ref"), None),
+                _json_blob(data.get("criteria_met") or {}),
+                data.get("current_status") or data.get("status") or "active",
+                source_type,
+                _safe_int(source_record_id, None),
+                data.get("exit_date"),
+                data.get("exit_reason"),
+                data.get("exit_treatment"),
+            ),
+        )
+        enrollment_id = cursor.lastrowid
+    else:
+        cursor.execute(
+            """
+            UPDATE as_enrollments
+            SET enrollment_protocol = COALESCE(?, enrollment_protocol),
+                baseline_biopsy_ref = COALESCE(?, baseline_biopsy_ref),
+                criteria_met_json = COALESCE(?, criteria_met_json),
+                current_status = COALESCE(?, current_status),
+                exit_date = COALESCE(?, exit_date),
+                exit_reason = COALESCE(?, exit_reason),
+                exit_treatment = COALESCE(?, exit_treatment),
+                source_type = COALESCE(?, source_type),
+                source_record_id = COALESCE(?, source_record_id)
+            WHERE id = ?
+            """,
+            (
+                data.get("protocol") or data.get("enrollment_protocol"),
+                _safe_int(data.get("baseline_biopsy_ref"), None),
+                _json_blob(data.get("criteria_met") or {}) if data.get("criteria_met") else None,
+                data.get("current_status") or data.get("status"),
+                data.get("exit_date"),
+                data.get("exit_reason"),
+                data.get("exit_treatment"),
+                source_type,
+                _safe_int(source_record_id, None),
+                enrollment_id,
+            ),
+        )
+    for item in data.get("schedule_items") or data.get("schedule") or []:
+        if not isinstance(item, dict):
+            continue
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO as_schedule_items (
+                patient_id, enrollment_id, item_type, title, due_date, interval_months,
+                status, completed_date, priority, evidence_basis_json, source_type, source_record_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                patient_id,
+                enrollment_id,
+                item.get("item_type") or "",
+                item.get("title") or item.get("item_type") or "AS follow-up",
+                item.get("due_date") or "",
+                _safe_int(item.get("interval_months"), 0),
+                item.get("status") or "scheduled",
+                item.get("completed_date") or "",
+                item.get("priority") or "routine",
+                _json_blob(item.get("evidence_basis") or []),
+                source_type,
+                _safe_int(source_record_id, None),
+            ),
+        )
+    for trigger in data.get("trigger_events") or data.get("reclassification_triggers") or []:
+        if not isinstance(trigger, dict):
+            continue
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO as_trigger_events (
+                patient_id, enrollment_id, trigger_type, detected_date, detail,
+                severity, recommended_action, evidence_basis_json, source_type, source_record_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                patient_id,
+                enrollment_id,
+                trigger.get("trigger_type") or "",
+                trigger.get("detected_date") or trigger.get("trigger_date") or enrollment_date,
+                trigger.get("detail") or "",
+                trigger.get("severity") or "",
+                trigger.get("recommended_action") or "",
+                _json_blob(trigger.get("evidence_basis") or trigger.get("evidence_tags") or []),
+                source_type,
+                _safe_int(source_record_id, None),
+            ),
+        )
+    conversion_events = data.get("conversion_events") or []
+    if data.get("exit_reason") or data.get("exit_treatment"):
+        conversion_events = [
+            {
+                "conversion_date": data.get("exit_date") or enrollment_date,
+                "exit_reason": data.get("exit_reason"),
+                "exit_treatment": data.get("exit_treatment"),
+            },
+            *conversion_events,
+        ]
+    for event in conversion_events:
+        if not isinstance(event, dict):
+            continue
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO as_conversion_events (
+                patient_id, enrollment_id, conversion_date, exit_reason, exit_treatment, source_type, source_record_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                patient_id,
+                enrollment_id,
+                event.get("conversion_date") or enrollment_date,
+                event.get("exit_reason") or "",
+                event.get("exit_treatment") or "",
+                source_type,
+                _safe_int(source_record_id, None),
+            ),
+        )
+    return enrollment_id
+
+
+def _save_skeletal_events_structured(cursor, patient_id, data, *, source_type="stage_visit", source_record_id=None):
+    if not isinstance(data, (list, dict)):
+        return []
+    events = data.get("events") if isinstance(data, dict) else data
+    saved_ids = []
+    for event in events or []:
+        if not isinstance(event, dict):
+            continue
+        event_type = str(event.get("event_type") or "").strip()
+        event_date = str(event.get("event_date") or "")[:10]
+        if not event_type or not event_date:
+            continue
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO skeletal_related_events (
+                patient_id, event_type, event_date, site, intervention, surgical_intervention,
+                rt_dose_gy, rt_fractions, details, severity, resolved, evidence_tags_json,
+                source_type, source_record_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                patient_id,
+                event_type,
+                event_date,
+                event.get("site") or "",
+                event.get("intervention") or "",
+                1 if _coerce_bool(event.get("surgical_intervention")) else 0,
+                _safe_float(event.get("rt_dose_gy"), None),
+                _safe_int(event.get("rt_fractions"), None),
+                event.get("details") or "",
+                event.get("severity") or "standard",
+                1 if _coerce_bool(event.get("resolved")) else 0,
+                _json_blob(event.get("evidence_tags") or []),
+                source_type,
+                _safe_int(source_record_id, None),
+            ),
+        )
+        saved_ids.append(cursor.lastrowid)
+    return saved_ids
+
+
+def _save_bone_modifying_agent_course(cursor, patient_id, data, *, source_type="stage_visit", source_record_id=None):
+    if not isinstance(data, dict) or not _is_present(data.get("agent")):
+        return None
+    cursor.execute(
+        """
+        INSERT INTO bone_modifying_agent_courses (
+            patient_id, agent, start_date, end_date, frequency, dental_clearance_done,
+            dental_clearance_date, last_dental_evaluation, onj_monitoring, onj_detected,
+            calcium_vitamin_d_supplementation, renal_function_adequate, last_renal_check_date,
+            doses_administered, notes, source_type, source_record_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            patient_id,
+            data.get("agent"),
+            data.get("start_date") or "",
+            data.get("end_date"),
+            data.get("frequency") or "",
+            1 if _coerce_bool(data.get("dental_clearance_done")) else 0,
+            data.get("dental_clearance_date"),
+            data.get("last_dental_evaluation"),
+            1 if _coerce_bool(data.get("onj_monitoring")) else 0,
+            1 if _coerce_bool(data.get("onj_detected")) else 0,
+            1 if _coerce_bool(data.get("calcium_vitamin_d_supplementation")) else 0,
+            None if data.get("renal_function_adequate") is None else (1 if _coerce_bool(data.get("renal_function_adequate")) else 0),
+            data.get("last_renal_check_date"),
+            _safe_int(data.get("doses_administered"), 0),
+            data.get("notes") or "",
+            source_type,
+            _safe_int(source_record_id, None),
+        ),
+    )
+    return cursor.lastrowid
+
+
+def _save_bone_health_snapshot(cursor, patient_id, data, *, source_type="stage_visit", source_record_id=None):
+    if not isinstance(data, dict) or not any(
+        _is_present(data.get(field))
+        for field in ("snapshot_date", "worst_t_score", "frax_major_pct", "frax_hip_pct", "vitamin_d_level", "calcium_level")
+    ):
+        return None
+    cursor.execute(
+        """
+        INSERT INTO bone_health_snapshots (
+            patient_id, snapshot_date, dxa_performed, worst_t_score, frax_major_pct, frax_hip_pct,
+            vitamin_d_level, calcium_level, creatinine, dental_clearance_done, onj_monitoring,
+            payload_json, source_type, source_record_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            patient_id,
+            data.get("snapshot_date") or datetime.now().strftime("%Y-%m-%d"),
+            1 if _coerce_bool(data.get("dxa_performed")) else 0,
+            _safe_float(data.get("worst_t_score"), None),
+            _safe_float(data.get("frax_major_pct"), None),
+            _safe_float(data.get("frax_hip_pct"), None),
+            _safe_float(data.get("vitamin_d_level"), None),
+            _safe_float(data.get("calcium_level"), None),
+            _safe_float(data.get("creatinine"), None),
+            1 if _coerce_bool(data.get("dental_clearance_done")) else 0,
+            1 if _coerce_bool(data.get("onj_monitoring")) else 0,
+            _json_blob(data),
+            source_type,
+            _safe_int(source_record_id, None),
+        ),
+    )
+    return cursor.lastrowid
+
+
+def _save_radiotherapy_course_detailed(cursor, patient_id, data, *, source_type="stage_visit", source_record_id=None, legacy_radiation_id=None):
+    if not isinstance(data, dict):
+        return None
+    start_date = str(data.get("rt_start_date") or data.get("rt_date") or datetime.now().strftime("%Y-%m-%d"))[:10]
+    course_key = data.get("course_key") or _make_session_key("rt", patient_id, start_date, data.get("rt_intent"), data.get("modality"))
+    cursor.execute(
+        """
+        INSERT OR REPLACE INTO radiotherapy_courses (
+            patient_id, course_key, rt_intent, modality, target_volume, total_dose_gy, fractions,
+            dose_per_fraction_gy, boost_dose_gy, boost_technique, rt_start_date, rt_end_date,
+            concurrent_adt, adt_neoadjuvant_months, adt_concurrent, adt_adjuvant_months, adt_total_planned_months,
+            salvage_psa_at_start, salvage_pre_imaging, salvage_nodal_coverage, mdt_sites_treated,
+            notes, evidence_tags_json, source_type, source_record_id, legacy_radiation_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            patient_id,
+            course_key,
+            data.get("rt_intent") or data.get("rt_context") or "",
+            data.get("modality") or data.get("rt_technique") or "",
+            data.get("target_volume") or data.get("target") or "",
+            _safe_float(data.get("total_dose_gy"), None),
+            _safe_int(data.get("fractions"), None),
+            _safe_float(data.get("dose_per_fraction_gy"), None),
+            _safe_float(data.get("boost_dose_gy"), None),
+            data.get("boost_technique"),
+            start_date,
+            data.get("rt_end_date") or data.get("rt_date"),
+            1 if _coerce_bool(data.get("concurrent_adt")) else 0,
+            _safe_float(data.get("adt_neoadjuvant_months"), None),
+            1 if _coerce_bool(data.get("adt_concurrent")) else 0,
+            _safe_float(data.get("adt_adjuvant_months"), None),
+            _safe_float(data.get("adt_total_planned_months"), None),
+            _safe_float(data.get("salvage_psa_at_start"), None),
+            data.get("salvage_pre_imaging"),
+            None if data.get("salvage_nodal_coverage") is None else (1 if _coerce_bool(data.get("salvage_nodal_coverage")) else 0),
+            _safe_int(data.get("mdt_sites_treated"), None),
+            data.get("notes") or "",
+            _json_blob(data.get("evidence_tags") or []),
+            source_type,
+            _safe_int(source_record_id, None),
+            legacy_radiation_id,
+        ),
+    )
+    cursor.execute("SELECT id FROM radiotherapy_courses WHERE course_key = ?", (course_key,))
+    row = cursor.fetchone()
+    if not row:
+        return None
+    course_id = row[0]
+    cursor.execute("DELETE FROM radiotherapy_mdt_sites WHERE course_id = ?", (course_id,))
+    cursor.execute("DELETE FROM radiotherapy_toxicities WHERE course_id = ?", (course_id,))
+    for site in data.get("mdt_site_details") or []:
+        if not isinstance(site, dict):
+            continue
+        cursor.execute(
+            """
+            INSERT INTO radiotherapy_mdt_sites (
+                course_id, site_location, modality, dose_gy, fractions, dose_per_fraction_gy
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                course_id,
+                site.get("site_location") or "",
+                site.get("modality") or "",
+                _safe_float(site.get("dose_gy"), 0.0),
+                _safe_int(site.get("fractions"), 0),
+                _safe_float(site.get("dose_per_fraction_gy"), 0.0),
+            ),
+        )
+    for toxicity in data.get("toxicity") or []:
+        if not isinstance(toxicity, dict):
+            continue
+        cursor.execute(
+            """
+            INSERT INTO radiotherapy_toxicities (
+                course_id, domain, phase, grade, details, onset_date, evidence_tags_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                course_id,
+                toxicity.get("domain") or "",
+                toxicity.get("phase") or "",
+                _safe_int(toxicity.get("grade"), 0),
+                toxicity.get("details") or "",
+                toxicity.get("onset_date") or "",
+                _json_blob(toxicity.get("evidence_tags") or []),
+            ),
+        )
+    return course_id
+
 def init_tracking_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -579,6 +1465,18 @@ def init_tracking_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    for ddl in (
+        "ALTER TABLE patient_identity ADD COLUMN vital_status TEXT",
+        "ALTER TABLE patient_identity ADD COLUMN date_of_death DATE",
+        "ALTER TABLE patient_identity ADD COLUMN cause_of_death TEXT",
+        "ALTER TABLE patient_identity ADD COLUMN last_contact_date DATE",
+        "ALTER TABLE patient_identity ADD COLUMN last_contact_status TEXT",
+        "ALTER TABLE patient_identity ADD COLUMN death_source TEXT",
+    ):
+        try:
+            c.execute(ddl)
+        except sqlite3.OperationalError:
+            pass
 
     # ── 2. PERFIL CLÍNICO BASAL (Investigación) ──────────────────────────
     c.execute('''
@@ -602,6 +1500,10 @@ def init_tracking_db():
             nodal_status TEXT,
             clinical_stage_group TEXT,
             clinical_risk_group TEXT,
+            life_expectancy_years REAL,
+            dre_suspicious BOOLEAN DEFAULT 0,
+            prior_biopsy_count INTEGER DEFAULT 0,
+            local_treatment_consideration TEXT,
             metastasis_site TEXT, -- 'Hueso', 'Visceral', 'Ganglio', 'M0'
             metastasis_count INTEGER,
             m_substage_resolved TEXT,
@@ -610,6 +1512,7 @@ def init_tracking_db():
             metastasis_document_source TEXT,
             volume_disease TEXT,  -- 'High' (CHAARTED) vs 'Low'
             ecog_score INTEGER,
+            peripheral_neuropathy_grade INTEGER,
             
             -- [NUEVO] Medicina de Precisión & Función Orgánica (Fase 3.1)
             genomic_test_done BOOLEAN DEFAULT 0,
@@ -622,6 +1525,17 @@ def init_tracking_db():
             FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
         )
     ''')
+    for ddl in (
+        "ALTER TABLE clinical_baseline ADD COLUMN life_expectancy_years REAL",
+        "ALTER TABLE clinical_baseline ADD COLUMN dre_suspicious BOOLEAN DEFAULT 0",
+        "ALTER TABLE clinical_baseline ADD COLUMN prior_biopsy_count INTEGER DEFAULT 0",
+        "ALTER TABLE clinical_baseline ADD COLUMN local_treatment_consideration TEXT",
+        "ALTER TABLE clinical_baseline ADD COLUMN peripheral_neuropathy_grade INTEGER",
+    ):
+        try:
+            c.execute(ddl)
+        except sqlite3.OperationalError:
+            pass
 
     c.execute('''
         CREATE TABLE IF NOT EXISTS follow_up_visits (
@@ -645,6 +1559,7 @@ def init_tracking_db():
             toxicity_events TEXT,   -- JSON
             metabolic_panel TEXT,   -- JSON
             skeletal_events TEXT,   -- JSON: {'fracture': 0, 'radiation': 0} (Nuevo Fase 5)
+            peripheral_neuropathy_grade INTEGER,
             
             -- Tratamiento Actual
             current_treatment TEXT,
@@ -691,6 +1606,7 @@ def init_tracking_db():
         "ALTER TABLE follow_up_visits ADD COLUMN protein_supplements INTEGER",
         "ALTER TABLE follow_up_visits ADD COLUMN seizure_history INTEGER",
         "ALTER TABLE follow_up_visits ADD COLUMN dermatitis_history INTEGER",
+        "ALTER TABLE follow_up_visits ADD COLUMN peripheral_neuropathy_grade INTEGER",
         "ALTER TABLE follow_up_visits ADD COLUMN cv_risk_status TEXT",
         "ALTER TABLE follow_up_visits ADD COLUMN ddi_reviewed INTEGER",
         "ALTER TABLE follow_up_visits ADD COLUMN hepatic_risk_status TEXT",
@@ -1153,6 +2069,338 @@ def init_tracking_db():
             c.execute(ddl)
         except sqlite3.OperationalError:
             pass
+
+    # ── 13B. DOMINIOS CANÓNICOS NORMALIZADOS ───────────────────────────────
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS survival_status_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            vital_status TEXT,
+            date_of_death DATE,
+            cause_of_death TEXT,
+            last_contact_date DATE,
+            last_contact_status TEXT,
+            death_source TEXT,
+            source_type TEXT,
+            source_record_id INTEGER,
+            recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS survival_anchor_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            anchor_type TEXT NOT NULL,
+            anchor_date DATE NOT NULL,
+            anchor_source TEXT,
+            source_type TEXT,
+            source_record_id INTEGER,
+            payload_json TEXT,
+            active INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(patient_id, anchor_type, anchor_date, anchor_source)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS biopsy_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            session_key TEXT UNIQUE NOT NULL,
+            biopsy_date DATE,
+            biopsy_type TEXT,
+            biopsy_route TEXT,
+            biopsy_context TEXT,
+            mri_pirads_at_biopsy INTEGER,
+            complications_json TEXT,
+            total_cores INTEGER DEFAULT 0,
+            total_positive INTEGER DEFAULT 0,
+            highest_isup INTEGER,
+            max_involvement_pct REAL,
+            targeted_concordance_rate REAL,
+            source_type TEXT,
+            source_record_id INTEGER,
+            legacy_biopsy_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS biopsy_cores (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            core_id TEXT NOT NULL,
+            location_sextant TEXT,
+            core_type TEXT,
+            core_length_mm REAL,
+            tumor_length_mm REAL,
+            involvement_pct REAL,
+            gleason_primary INTEGER,
+            gleason_secondary INTEGER,
+            isup_grade INTEGER,
+            positive INTEGER DEFAULT 0,
+            mri_target_concordance INTEGER,
+            cribriform_pattern INTEGER DEFAULT 0,
+            intraductal_carcinoma INTEGER DEFAULT 0,
+            UNIQUE(session_id, core_id),
+            FOREIGN KEY(session_id) REFERENCES biopsy_sessions(id)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS biopsy_targets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            target_id TEXT NOT NULL,
+            target_label TEXT,
+            pirads_score INTEGER,
+            lesion_location TEXT,
+            positive_core_count INTEGER DEFAULT 0,
+            total_core_count INTEGER DEFAULT 0,
+            concordance_status TEXT,
+            notes TEXT,
+            UNIQUE(session_id, target_id),
+            FOREIGN KEY(session_id) REFERENCES biopsy_sessions(id)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS biopsy_mri_pathology_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            target_id TEXT,
+            lesion_location TEXT,
+            pathology_location TEXT,
+            concordance_status TEXT,
+            notes TEXT,
+            FOREIGN KEY(session_id) REFERENCES biopsy_sessions(id)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS as_enrollments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            enrollment_date DATE,
+            enrollment_protocol TEXT,
+            baseline_biopsy_ref INTEGER,
+            criteria_met_json TEXT,
+            current_status TEXT DEFAULT 'active',
+            exit_date DATE,
+            exit_reason TEXT,
+            exit_treatment TEXT,
+            source_type TEXT,
+            source_record_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS as_schedule_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            enrollment_id INTEGER NOT NULL,
+            item_type TEXT NOT NULL,
+            title TEXT,
+            due_date DATE,
+            interval_months INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'scheduled',
+            completed_date DATE,
+            priority TEXT DEFAULT 'routine',
+            evidence_basis_json TEXT,
+            source_type TEXT,
+            source_record_id INTEGER,
+            UNIQUE(enrollment_id, item_type, title, due_date),
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id),
+            FOREIGN KEY(enrollment_id) REFERENCES as_enrollments(id)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS as_trigger_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            enrollment_id INTEGER NOT NULL,
+            trigger_type TEXT NOT NULL,
+            detected_date DATE,
+            detail TEXT,
+            severity TEXT,
+            recommended_action TEXT,
+            evidence_basis_json TEXT,
+            source_type TEXT,
+            source_record_id INTEGER,
+            UNIQUE(enrollment_id, trigger_type, detected_date, detail),
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id),
+            FOREIGN KEY(enrollment_id) REFERENCES as_enrollments(id)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS as_conversion_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            enrollment_id INTEGER NOT NULL,
+            conversion_date DATE,
+            exit_reason TEXT,
+            exit_treatment TEXT,
+            source_type TEXT,
+            source_record_id INTEGER,
+            UNIQUE(enrollment_id, conversion_date, exit_reason, exit_treatment),
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id),
+            FOREIGN KEY(enrollment_id) REFERENCES as_enrollments(id)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS skeletal_related_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            event_date DATE NOT NULL,
+            site TEXT,
+            intervention TEXT,
+            surgical_intervention INTEGER DEFAULT 0,
+            rt_dose_gy REAL,
+            rt_fractions INTEGER,
+            details TEXT,
+            severity TEXT DEFAULT 'standard',
+            resolved INTEGER DEFAULT 0,
+            evidence_tags_json TEXT,
+            source_type TEXT,
+            source_record_id INTEGER,
+            UNIQUE(patient_id, event_type, event_date, site, intervention),
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS bone_modifying_agent_courses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            agent TEXT NOT NULL,
+            start_date DATE,
+            end_date DATE,
+            frequency TEXT,
+            dental_clearance_done INTEGER DEFAULT 0,
+            dental_clearance_date DATE,
+            last_dental_evaluation DATE,
+            onj_monitoring INTEGER DEFAULT 0,
+            onj_detected INTEGER DEFAULT 0,
+            calcium_vitamin_d_supplementation INTEGER DEFAULT 0,
+            renal_function_adequate INTEGER,
+            last_renal_check_date DATE,
+            doses_administered INTEGER DEFAULT 0,
+            notes TEXT,
+            source_type TEXT,
+            source_record_id INTEGER,
+            UNIQUE(patient_id, agent, start_date, frequency),
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS bone_health_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            snapshot_date DATE NOT NULL,
+            dxa_performed INTEGER DEFAULT 0,
+            worst_t_score REAL,
+            frax_major_pct REAL,
+            frax_hip_pct REAL,
+            vitamin_d_level REAL,
+            calcium_level REAL,
+            creatinine REAL,
+            dental_clearance_done INTEGER DEFAULT 0,
+            onj_monitoring INTEGER DEFAULT 0,
+            payload_json TEXT,
+            source_type TEXT,
+            source_record_id INTEGER,
+            UNIQUE(patient_id, snapshot_date, worst_t_score, frax_major_pct, frax_hip_pct),
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS radiotherapy_courses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            course_key TEXT UNIQUE NOT NULL,
+            rt_intent TEXT,
+            modality TEXT,
+            target_volume TEXT,
+            total_dose_gy REAL,
+            fractions INTEGER,
+            dose_per_fraction_gy REAL,
+            boost_dose_gy REAL,
+            boost_technique TEXT,
+            rt_start_date DATE,
+            rt_end_date DATE,
+            concurrent_adt INTEGER DEFAULT 0,
+            adt_neoadjuvant_months REAL,
+            adt_concurrent INTEGER DEFAULT 0,
+            adt_adjuvant_months REAL,
+            adt_total_planned_months REAL,
+            salvage_psa_at_start REAL,
+            salvage_pre_imaging TEXT,
+            salvage_nodal_coverage INTEGER,
+            mdt_sites_treated INTEGER,
+            notes TEXT,
+            evidence_tags_json TEXT,
+            source_type TEXT,
+            source_record_id INTEGER,
+            legacy_radiation_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS radiotherapy_mdt_sites (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            course_id INTEGER NOT NULL,
+            site_location TEXT,
+            modality TEXT,
+            dose_gy REAL,
+            fractions INTEGER,
+            dose_per_fraction_gy REAL,
+            FOREIGN KEY(course_id) REFERENCES radiotherapy_courses(id)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS radiotherapy_toxicities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            course_id INTEGER NOT NULL,
+            domain TEXT,
+            phase TEXT,
+            grade INTEGER DEFAULT 0,
+            details TEXT,
+            onset_date DATE,
+            evidence_tags_json TEXT,
+            FOREIGN KEY(course_id) REFERENCES radiotherapy_courses(id)
+        )
+        '''
+    )
 
     # ── 14. PROs (Patient-Reported Outcomes) ────────────────────────────────
     c.execute('''
@@ -1895,7 +3143,170 @@ def init_tracking_db():
 
     conn.commit()
     conn.close()
+    try:
+        _backfill_normalized_tracking_domains()
+    except Exception as exc:
+        logger.warning("Normalized domain backfill skipped: %s", exc)
     logger.info("Tracking DB initialized (v4 — Copiloto Clínico + Scheduling + RECIST/PCWG3).")
+
+
+def _backfill_normalized_tracking_domains():
+    conn = _connect()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, diagnosis_date, vital_status, date_of_death, cause_of_death, last_contact_date, last_contact_status, death_source FROM patient_identity ORDER BY id ASC")
+    identities = [dict(row) for row in cursor.fetchall()]
+    for identity in identities:
+        patient_id = int(identity["id"])
+        cursor.execute("SELECT 1 FROM survival_status_records WHERE patient_id = ? LIMIT 1", (patient_id,))
+        if cursor.fetchone() is None and any(_is_present(identity.get(field)) for field in ("vital_status", "date_of_death", "cause_of_death", "last_contact_date", "last_contact_status", "death_source")):
+            if not identity.get("last_contact_date"):
+                cursor.execute("SELECT visit_date FROM follow_up_visits WHERE patient_id = ? ORDER BY visit_date DESC, id DESC LIMIT 1", (patient_id,))
+                followup_row = cursor.fetchone()
+                if followup_row:
+                    identity["last_contact_date"] = followup_row["visit_date"]
+                    identity["last_contact_status"] = identity.get("last_contact_status") or "clinic_visit"
+            _save_survival_status_update(cursor, patient_id, identity, source_type="legacy_summary_backfill")
+
+        cursor.execute("SELECT 1 FROM survival_anchor_events WHERE patient_id = ? LIMIT 1", (patient_id,))
+        if cursor.fetchone() is None:
+            anchor_events = []
+            if identity.get("diagnosis_date"):
+                anchor_events.append({"anchor_type": "diagnosis", "anchor_date": identity.get("diagnosis_date"), "anchor_source": "patient_identity"})
+            cursor.execute("SELECT start_date FROM treatment_history WHERE patient_id = ? AND start_date IS NOT NULL ORDER BY start_date ASC, id ASC LIMIT 1", (patient_id,))
+            treatment_row = cursor.fetchone()
+            if treatment_row:
+                anchor_events.append({"anchor_type": "treatment_start", "anchor_date": treatment_row["start_date"], "anchor_source": "treatment_history"})
+            cursor.execute("SELECT bcr_date FROM biochemical_recurrence WHERE patient_id = ? AND bcr_date IS NOT NULL ORDER BY bcr_date ASC, id ASC LIMIT 1", (patient_id,))
+            bcr_row = cursor.fetchone()
+            if bcr_row:
+                anchor_events.append({"anchor_type": "psa_progression", "anchor_date": bcr_row["bcr_date"], "anchor_source": "biochemical_recurrence"})
+            cursor.execute("SELECT surgery_date FROM surgical_details WHERE patient_id = ? AND surgery_date IS NOT NULL ORDER BY surgery_date ASC, id ASC LIMIT 1", (patient_id,))
+            surgery_row = cursor.fetchone()
+            if surgery_row:
+                anchor_events.append({"anchor_type": "surgery", "anchor_date": surgery_row["surgery_date"], "anchor_source": "surgical_details"})
+            cursor.execute("SELECT rt_date FROM radiation_details WHERE patient_id = ? AND rt_date IS NOT NULL ORDER BY rt_date ASC, id ASC LIMIT 1", (patient_id,))
+            rt_row = cursor.fetchone()
+            if rt_row:
+                anchor_events.append({"anchor_type": "radiotherapy", "anchor_date": rt_row["rt_date"], "anchor_source": "radiation_details"})
+            if identity.get("date_of_death"):
+                anchor_events.append({"anchor_type": "death", "anchor_date": identity.get("date_of_death"), "anchor_source": identity.get("death_source") or "patient_identity"})
+            _save_survival_anchor_events(cursor, patient_id, anchor_events, source_type="legacy_summary_backfill")
+
+        cursor.execute("SELECT 1 FROM biopsy_sessions WHERE patient_id = ? LIMIT 1", (patient_id,))
+        if cursor.fetchone() is None:
+            cursor.execute("SELECT * FROM biopsy_details WHERE patient_id = ? ORDER BY biopsy_date ASC, id ASC", (patient_id,))
+            for biopsy in [dict(row) for row in cursor.fetchall()]:
+                total_cores = _safe_int(biopsy.get("total_cores"), 0)
+                positive_cores = _safe_int(biopsy.get("positive_cores"), 0)
+                systematic_cores = []
+                for index in range(total_cores):
+                    systematic_cores.append(
+                        {
+                            "core_id": f"S{index + 1}",
+                            "location_sextant": "",
+                            "core_type": "systematic",
+                            "positive": index < positive_cores,
+                            "involvement_pct": biopsy.get("max_core_involvement_pct") if index == 0 and positive_cores > 0 else None,
+                            "gleason_primary": biopsy.get("gleason_primary"),
+                            "gleason_secondary": biopsy.get("gleason_secondary"),
+                            "isup_grade": biopsy.get("isup_grade"),
+                            "cribriform_pattern": bool(biopsy.get("patron_cribiforme", 0)),
+                            "intraductal_carcinoma": bool(biopsy.get("carcinoma_intraductal", 0)),
+                        }
+                    )
+                _save_structured_biopsy_session(
+                    cursor,
+                    patient_id,
+                    {
+                        "session_key": f"legacy_biopsy_{biopsy.get('id')}",
+                        "biopsy_date": biopsy.get("biopsy_date"),
+                        "biopsy_type": biopsy.get("biopsy_type"),
+                        "biopsy_context": biopsy.get("biopsy_context"),
+                        "systematic_cores": systematic_cores,
+                        "complications": [],
+                    },
+                    source_type="legacy_summary_backfill",
+                    source_record_id=biopsy.get("id"),
+                    legacy_biopsy_id=biopsy.get("id"),
+                )
+
+        cursor.execute("SELECT 1 FROM as_enrollments WHERE patient_id = ? LIMIT 1", (patient_id,))
+        if cursor.fetchone() is None:
+            cursor.execute("SELECT * FROM active_surveillance WHERE patient_id = ? ORDER BY enrollment_date DESC, id DESC LIMIT 1", (patient_id,))
+            as_row = cursor.fetchone()
+            if as_row:
+                as_data = dict(as_row)
+                _save_active_surveillance_update(
+                    cursor,
+                    patient_id,
+                    {
+                        "enrollment_date": as_data.get("enrollment_date"),
+                        "protocol": as_data.get("enrollment_protocol"),
+                        "criteria_met": _parse_json_blob(as_data.get("enrollment_criteria_met"), {}),
+                        "current_status": as_data.get("current_status"),
+                        "exit_date": as_data.get("exit_date"),
+                        "exit_reason": as_data.get("exit_reason"),
+                        "exit_treatment": as_data.get("exit_treatment"),
+                    },
+                    source_type="legacy_summary_backfill",
+                    source_record_id=as_data.get("id"),
+                )
+
+        cursor.execute("SELECT 1 FROM skeletal_related_events WHERE patient_id = ? LIMIT 1", (patient_id,))
+        if cursor.fetchone() is None:
+            cursor.execute("SELECT id, visit_date, skeletal_events FROM follow_up_visits WHERE patient_id = ? ORDER BY visit_date ASC, id ASC", (patient_id,))
+            for visit in [dict(row) for row in cursor.fetchall()]:
+                skeletal = _parse_json_blob(visit.get("skeletal_events"), {})
+                if not isinstance(skeletal, dict):
+                    continue
+                events = []
+                for key, enabled in skeletal.items():
+                    if _coerce_bool(enabled):
+                        events.append(
+                            {
+                                "event_type": key,
+                                "event_date": visit.get("visit_date"),
+                                "details": "Backfill desde follow_up_visits.skeletal_events",
+                            }
+                        )
+                _save_skeletal_events_structured(
+                    cursor,
+                    patient_id,
+                    events,
+                    source_type="legacy_summary_backfill",
+                    source_record_id=visit.get("id"),
+                )
+
+        cursor.execute("SELECT 1 FROM radiotherapy_courses WHERE patient_id = ? LIMIT 1", (patient_id,))
+        if cursor.fetchone() is None:
+            cursor.execute("SELECT * FROM radiation_details WHERE patient_id = ? ORDER BY rt_date ASC, id ASC", (patient_id,))
+            for row in [dict(item) for item in cursor.fetchall()]:
+                _save_radiotherapy_course_detailed(
+                    cursor,
+                    patient_id,
+                    {
+                        "course_key": f"legacy_rt_{row.get('id')}",
+                        "rt_intent": row.get("rt_context"),
+                        "modality": row.get("rt_technique"),
+                        "target_volume": row.get("target"),
+                        "total_dose_gy": row.get("total_dose_gy"),
+                        "fractions": row.get("fractions"),
+                        "dose_per_fraction_gy": row.get("dose_per_fraction_gy"),
+                        "rt_start_date": row.get("rt_date"),
+                        "rt_end_date": row.get("rt_date"),
+                        "concurrent_adt": row.get("concurrent_adt"),
+                        "toxicity": [
+                            {"domain": "GU", "phase": "acute", "grade": _safe_int(row.get("gu_toxicity_grade"), 0)},
+                            {"domain": "GI", "phase": "acute", "grade": _safe_int(row.get("gi_toxicity_grade"), 0)},
+                        ],
+                        "notes": row.get("notes"),
+                    },
+                    source_type="legacy_summary_backfill",
+                    source_record_id=row.get("id"),
+                    legacy_radiation_id=row.get("id"),
+                )
+    conn.commit()
+    conn.close()
 
 
 def create_clinical_assessment_draft(module_id, state, input_snapshot, result_snapshot, guideline_versions):
@@ -2336,7 +3747,10 @@ def _build_genomic_payload(data):
         [
             "genomic_classifier",
             "genomic_classifier_result",
+            "decipher_score",
             "decipher_risk",
+            "prolaris_score",
+            "gps_score",
             "hrr_status",
             "hrr_gene",
             "brca2_status",
@@ -2356,6 +3770,10 @@ def _build_genomic_payload(data):
             test_type = classifier
     elif str(data.get("decipher_risk", "No realizado")) != "No realizado":
         test_type = "Decipher"
+    elif _is_present(data.get("gps_score")):
+        test_type = "OncotypeDX_GPS"
+    elif _is_present(data.get("prolaris_score")):
+        test_type = "Prolaris"
 
     actionable_findings = []
     if str(data.get("hrr_status", "")).lower() in {"positivo", "positive"}:
@@ -2374,9 +3792,10 @@ def _build_genomic_payload(data):
     return {
         "test_date": data.get("molecular_report_date") or data.get("molecular_assay_date") or datetime.now().strftime("%Y-%m-%d"),
         "test_type": test_type,
+        "decipher_score": _safe_float(data.get("decipher_score"), None),
         "decipher_risk": None if str(data.get("decipher_risk", "No realizado")) == "No realizado" else data.get("decipher_risk"),
-        "prolaris_score": data.get("genomic_classifier_result") if test_type == "Prolaris" else None,
-        "gps_score": data.get("genomic_classifier_result") if test_type == "OncotypeDX_GPS" else None,
+        "prolaris_score": _safe_float(data.get("prolaris_score"), None),
+        "gps_score": _safe_float(data.get("gps_score"), None),
         "brca2_status": data.get("brca2_status"),
         "msi_status": data.get("msi_status"),
         "hrr_overall": data.get("hrr_status", "Desconocido"),
@@ -2549,6 +3968,8 @@ def register_new_patient(data, assessment=None):
             "adt_progression_verification",
             "mcspc_oligo_metachronous",
             "mcspc_low_volume_sync_oligo",
+            "mcspc_high_volume_sync",
+            "mcspc_high_volume_metachronous",
             "mcspc_high_volume",
             "m0_crpc",
             "m1_crpc",
@@ -2584,18 +4005,29 @@ def register_new_patient(data, assessment=None):
         c.execute('''
             INSERT INTO clinical_baseline (
                 patient_id, baseline_psa, testosterone_baseline, hemoglobin, alp, ldh, albumin,
-                tnm_stage, gleason_score, metastasis_site, metastasis_count, m_substage_resolved,
+                tnm_stage, gleason_score, histology_subtype, clinical_tstage, nodal_status, clinical_stage_group, clinical_risk_group,
+                life_expectancy_years, dre_suspicious, prior_biopsy_count, local_treatment_consideration,
+                metastasis_site, metastasis_count, m_substage_resolved,
                 metastatic_profile_json, metastasis_assessment_date, metastasis_document_source, volume_disease,
-                ecog_score,
+                ecog_score, peripheral_neuropathy_grade,
                 genomic_test_done, hrr_status, msi_status, child_pugh_score, pain_symptoms,
                 comorbidities_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             patient_id,
             data.get('baseline_psa'), data.get('testosterone_baseline'),
             data.get('hemoglobin'), data.get('alp'), data.get('ldh'), data.get('albumin'),
             'TxNxMx', # Placeholder o derivado
             0, # Placeholder Gleason
+            data.get('histology_subtype'),
+            data.get('clinical_tstage'),
+            data.get('nodal_status'),
+            data.get('clinical_stage_group'),
+            data.get('clinical_risk_group'),
+            _safe_float(data.get('life_expectancy_years'), None),
+            1 if _is_truthy(data.get('dre_suspicious')) else 0,
+            _safe_int(data.get('prior_biopsy_count'), 0),
+            data.get('local_treatment_consideration'),
             metastasis_site,
             metastatic_count,
             metastatic["m_substage_resolved"],
@@ -2603,7 +4035,8 @@ def register_new_patient(data, assessment=None):
             metastatic["metastasis_assessment_date"],
             metastatic["metastasis_document_source"],
             metastatic["volume_disease"],
-            0, # ECOG placeholder
+            _safe_int(data.get('ecog_score'), None),
+            _safe_int(data.get("peripheral_neuropathy_grade"), None),
             genomic_done,
             data.get('hrr_status'),
             data.get('msi_status'),
@@ -2968,7 +4401,10 @@ def _build_genomic_payload_from_visit(data):
         "molecular_report_date",
         "genomic_classifier",
         "genomic_classifier_result",
+        "decipher_score",
         "decipher_risk",
+        "prolaris_score",
+        "gps_score",
     )
     if not any(_is_present(data.get(field)) for field in genomic_fields):
         return None
@@ -3582,7 +5018,9 @@ def sync_scheduled_events(patient_record, state=None, management_track=None, hor
     from prostanet.domains.patient_tracking.copilot_alerts import build_copilot_alerts
     from prostanet.domains.patient_tracking.disease_course_outcomes import build_disease_course_bundle
     from prostanet.domains.patient_tracking.master_followup_plan import build_master_followup_plan
+    from prostanet.domains.patient_tracking.prognostic_impact import build_prognostic_impact_bundle
     from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
+    from prostanet.domains.patient_tracking.risk_tools import build_risk_tools_panel
 
     if not patient_record or not patient_record.get("identity"):
         return {
@@ -3681,6 +5119,20 @@ def sync_scheduled_events(patient_record, state=None, management_track=None, hor
         management_track=management_track,
         latest_assessment=patient_record.get("latest_assessment"),
     )
+    risk_tools_bundle = build_risk_tools_panel(
+        patient=patient_record,
+        state=state,
+        raw_assessment=patient_record.get("latest_assessment"),
+        display_assessment={},
+    )
+    prognostic_bundle = build_prognostic_impact_bundle(
+        patient=patient_record,
+        state=state,
+        management_track=management_track,
+        raw_assessment=patient_record.get("latest_assessment"),
+        risk_tools_bundle=risk_tools_bundle,
+        current_trial_profile=outcome_bundle.get("current_trial_comparable_profile", {}),
+    )
     orchestration_signals.update(
         {
             "outcome_events_summary": outcome_bundle.get("outcome_events_summary", {}),
@@ -3690,6 +5142,12 @@ def sync_scheduled_events(patient_record, state=None, management_track=None, hor
             "last_adjudicated_event": outcome_bundle.get("last_adjudicated_event", {}),
             "trial_comparable_endpoints": outcome_bundle.get("trial_comparable_endpoints", []),
             "current_trial_comparable_profile": outcome_bundle.get("current_trial_comparable_profile", {}),
+            "prognostic_modifiers": prognostic_bundle.get("prognostic_modifiers", []),
+            "prognostic_recommended_actions": prognostic_bundle.get("recommended_actions", []),
+            "prognostic_followup_impact": prognostic_bundle.get("followup_impact", []),
+            "prognostic_capture_targets": prognostic_bundle.get("capture_targets", []),
+            "backbone_alignment": prognostic_bundle.get("backbone_alignment", {}),
+            "cadence_adjusted_by": prognostic_bundle.get("cadence_adjusted_by", []),
         }
     )
     copilot_bundle = build_copilot_alerts(
@@ -3824,6 +5282,13 @@ def sync_scheduled_events(patient_record, state=None, management_track=None, hor
         "last_adjudicated_event": outcome_bundle.get("last_adjudicated_event", {}),
         "trial_comparable_endpoints": outcome_bundle.get("trial_comparable_endpoints", []),
         "current_trial_comparable_profile": outcome_bundle.get("current_trial_comparable_profile", {}),
+        "prognostic_modifiers": prognostic_bundle.get("prognostic_modifiers", []),
+        "prognostic_recommended_actions": prognostic_bundle.get("recommended_actions", []),
+        "prognostic_followup_impact": prognostic_bundle.get("followup_impact", []),
+        "prognostic_capture_targets": prognostic_bundle.get("capture_targets", []),
+        "backbone_alignment": prognostic_bundle.get("backbone_alignment", {}),
+        "cadence_adjusted_by": prognostic_bundle.get("cadence_adjusted_by", []),
+        "prognostic_rationale": (master_followup_plan.get("prognostic_rationale") or []),
     }
 
 
@@ -3942,6 +5407,7 @@ def _record_visit_provenance(cursor, patient_id, visit_record_id, state, visit_d
         "pirads_score", "precise_score", "psma_suv_max", "bone_lesion_count", "ct_summary",
         "mini_cog_score", "fatigue_score", "weight_kg", "bmi_current", "weight_loss_6m_pct",
         "cv_risk_documented", "drug_interaction_reviewed", "exercise_status", "nutrition_status",
+        "peripheral_neuropathy_grade",
         "g8_food_intake", "g8_weight_loss", "g8_mobility", "g8_neuropsych", "g8_bmi",
         "g8_medications", "g8_self_health", "low_activity", "slow_gait", "weak_grip",
         "genomic_classifier", "genomic_classifier_result", "decipher_risk",
@@ -4407,6 +5873,8 @@ def _persist_trial_benchmark_snapshot(cursor, patient_id, bundle):
     benchmark_snapshot = {
         "benchmark_snapshots": list(bundle.get("benchmark_snapshots") or []),
         "survival_status": dict(bundle.get("survival_status") or {}),
+        "live_benchmark": dict(bundle.get("live_benchmark") or {}),
+        "benchmark_reliability": dict(bundle.get("benchmark_reliability") or {}),
     }
     cursor.execute(
         """
@@ -4515,6 +5983,10 @@ def refresh_longitudinal_intelligence(nss_or_id, event_id=None, force_recompute=
         build_recommendation_audit,
     )
     from prostanet.domains.patient_tracking.disease_course_outcomes import build_disease_course_bundle
+    from prostanet.domains.patient_tracking.live_benchmark import build_live_benchmark
+    from prostanet.domains.patient_tracking.prognostic_impact import build_prognostic_impact_bundle
+    from prostanet.domains.patient_tracking.psa_forecast import build_psa_forecast
+    from prostanet.domains.patient_tracking.risk_tools import build_risk_tools_panel
 
     if force_recompute:
         recompute_patient_care_plan(nss_or_id)
@@ -4539,6 +6011,45 @@ def refresh_longitudinal_intelligence(nss_or_id, event_id=None, force_recompute=
         management_track=bundle.get("signals", {}).get("reconciled_management_track") or bundle.get("signals", {}).get("management_track") or "",
         latest_assessment=refreshed.get("latest_assessment"),
     )
+    risk_tools_bundle = build_risk_tools_panel(
+        patient=refreshed,
+        state=bundle.get("signals", {}).get("reconciled_state") or bundle.get("signals", {}).get("state") or "",
+        raw_assessment=refreshed.get("latest_assessment"),
+        display_assessment={},
+    )
+    prognostic_bundle = build_prognostic_impact_bundle(
+        patient=refreshed,
+        state=bundle.get("signals", {}).get("reconciled_state") or bundle.get("signals", {}).get("state") or "",
+        management_track=bundle.get("signals", {}).get("reconciled_management_track") or bundle.get("signals", {}).get("management_track") or "",
+        raw_assessment=refreshed.get("latest_assessment"),
+        risk_tools_bundle=risk_tools_bundle,
+        current_trial_profile=outcome_bundle.get("current_trial_comparable_profile", {}),
+    )
+    current_state = bundle.get("signals", {}).get("reconciled_state") or bundle.get("signals", {}).get("state") or ""
+    current_track = bundle.get("signals", {}).get("reconciled_management_track") or bundle.get("signals", {}).get("management_track") or ""
+    psa_forecast_bundle = build_psa_forecast(
+        refreshed,
+        state=current_state,
+    )
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT id FROM patient_identity ORDER BY id ASC")
+    cohort_patient_ids = [int(row["id"]) for row in c.fetchall()]
+    conn.close()
+    cohort_records = []
+    for patient_id in cohort_patient_ids:
+        cohort_record = get_patient_full_record(patient_id)
+        if cohort_record:
+            cohort_records.append(cohort_record)
+    live_benchmark_bundle = build_live_benchmark(
+        refreshed,
+        cohort_records,
+        state=current_state,
+        management_track=current_track,
+    )
+    outcome_bundle["live_benchmark"] = live_benchmark_bundle
+    outcome_bundle["benchmark_reliability"] = live_benchmark_bundle.get("reliability", {})
     latest_snapshot.update(
         {
             "explicit_state": bundle.get("signals", {}).get("explicit_state"),
@@ -4554,6 +6065,16 @@ def refresh_longitudinal_intelligence(nss_or_id, event_id=None, force_recompute=
             "last_adjudicated_event": outcome_bundle.get("last_adjudicated_event", {}),
             "trial_comparable_endpoints": outcome_bundle.get("trial_comparable_endpoints", []),
             "current_trial_comparable_profile": outcome_bundle.get("current_trial_comparable_profile", {}),
+            "prognostic_modifiers": prognostic_bundle.get("prognostic_modifiers", []),
+            "prognostic_recommended_actions": prognostic_bundle.get("recommended_actions", []),
+            "prognostic_followup_impact": prognostic_bundle.get("followup_impact", []),
+            "prognostic_capture_targets": prognostic_bundle.get("capture_targets", []),
+            "backbone_alignment": prognostic_bundle.get("backbone_alignment", {}),
+            "cadence_adjusted_by": prognostic_bundle.get("cadence_adjusted_by", []),
+            "psa_forecast": psa_forecast_bundle,
+            "forecast_reliability": psa_forecast_bundle.get("reliability", {}),
+            "live_benchmark": live_benchmark_bundle,
+            "benchmark_reliability": live_benchmark_bundle.get("reliability", {}),
         }
     )
     if not latest_snapshot:
@@ -4592,6 +6113,16 @@ def refresh_longitudinal_intelligence(nss_or_id, event_id=None, force_recompute=
         "last_adjudicated_event": outcome_bundle.get("last_adjudicated_event", {}),
         "trial_comparable_endpoints": outcome_bundle.get("trial_comparable_endpoints", []),
         "current_trial_comparable_profile": outcome_bundle.get("current_trial_comparable_profile", {}),
+        "prognostic_modifiers": prognostic_bundle.get("prognostic_modifiers", []),
+        "prognostic_recommended_actions": prognostic_bundle.get("recommended_actions", []),
+        "prognostic_followup_impact": prognostic_bundle.get("followup_impact", []),
+        "prognostic_capture_targets": prognostic_bundle.get("capture_targets", []),
+        "backbone_alignment": prognostic_bundle.get("backbone_alignment", {}),
+        "cadence_adjusted_by": prognostic_bundle.get("cadence_adjusted_by", []),
+        "psa_forecast": psa_forecast_bundle,
+        "forecast_reliability": psa_forecast_bundle.get("reliability", {}),
+        "live_benchmark": live_benchmark_bundle,
+        "benchmark_reliability": live_benchmark_bundle.get("reliability", {}),
     }
 
 
@@ -4713,11 +6244,17 @@ def get_patient_outcomes(nss_or_id):
         "last_adjudicated_event": bundle.get("last_adjudicated_event", {}),
         "trial_comparable_endpoints": bundle.get("trial_comparable_endpoints", []),
         "current_trial_comparable_profile": bundle.get("current_trial_comparable_profile", {}),
+        "psa_forecast": bundle.get("psa_forecast", {}),
+        "forecast_reliability": bundle.get("forecast_reliability", {}),
+        "live_benchmark": bundle.get("live_benchmark", {}),
+        "benchmark_reliability": bundle.get("benchmark_reliability", {}),
     }
 
 
 def get_cohort_benchmarks():
     from prostanet.domains.patient_tracking.disease_course_outcomes import build_cohort_benchmark_aggregate
+    from prostanet.domains.patient_tracking.live_benchmark import build_live_benchmark_summary
+    from prostanet.domains.patient_tracking.psa_forecast import build_psa_forecast_backtest
 
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -4732,7 +6269,10 @@ def get_cohort_benchmarks():
         record = get_patient_full_record(patient_id)
         if record:
             patient_records.append(record)
-    return build_cohort_benchmark_aggregate(patient_records)
+    aggregate = build_cohort_benchmark_aggregate(patient_records)
+    aggregate["live_benchmark_summary"] = build_live_benchmark_summary(patient_records)
+    aggregate["psa_forecast_summary"] = build_psa_forecast_backtest(patient_records)
+    return aggregate
 
 
 def get_patient_next_best_action(nss_or_id):
@@ -5584,11 +7124,11 @@ def save_stage_visit_bundle(patient_id, data):
                 cystatin_c_current, bilirubin_current, ast_current, alt_current, ggt_current,
                 glucose_current, opioid_use, fatigue_score, mini_cog_score, weight_kg,
                 bmi_current, weight_loss_6m_pct, exercise_status, nutrition_status,
-                protein_supplements, seizure_history, dermatitis_history, cv_risk_status,
+                protein_supplements, seizure_history, dermatitis_history, peripheral_neuropathy_grade, cv_risk_status,
                 ddi_reviewed, hepatic_risk_status, metastasis_site, metastasis_count,
                 m_substage_resolved, metastatic_profile_json, visit_bundle_json, visit_type,
                 state_at_visit, management_track, agenda_context_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''',
             (
                 patient_id,
@@ -5625,6 +7165,7 @@ def save_stage_visit_bundle(patient_id, data):
                 _safe_int(data.get("protein_supplements", 0), 0),
                 _safe_int(data.get("seizure_history", 0), 0),
                 _safe_int(data.get("dermatitis_history", 0), 0),
+                _safe_int(data.get("peripheral_neuropathy_grade"), None),
                 "documentado" if _is_truthy(data.get("cv_risk_documented")) else "",
                 _safe_int(data.get("drug_interaction_reviewed", 0), 0),
                 data.get("hepatic_risk_factors"),
@@ -5672,6 +7213,221 @@ def save_stage_visit_bundle(patient_id, data):
         _complete_scheduled_events_for_visit(c, patient_id, visit_date, data, visit_record_id=visit_record_id)
         treatment_update = _upsert_treatment_history_from_visit(c, patient_id, visit_date, data)
         _update_structural_baseline_from_visit(c, patient_id, data)
+
+        survival_status_payload = dict(data.get("survival_status_update") or {})
+        for field in ("vital_status", "date_of_death", "cause_of_death", "last_contact_date", "last_contact_status", "death_source"):
+            if field not in survival_status_payload and _is_present(data.get(field)):
+                survival_status_payload[field] = data.get(field)
+        if not survival_status_payload.get("last_contact_date"):
+            survival_status_payload["last_contact_date"] = visit_date
+        if not survival_status_payload.get("last_contact_status") and any(
+            _is_present(survival_status_payload.get(field))
+            for field in ("vital_status", "date_of_death", "cause_of_death")
+        ):
+            survival_status_payload["last_contact_status"] = data.get("visit_type", "clinic_visit")
+        _save_survival_status_update(
+            c,
+            patient_id,
+            survival_status_payload,
+            source_type="stage_visit",
+            source_record_id=visit_record_id,
+        )
+
+        survival_anchor_events = list(data.get("survival_anchor_events") or [])
+        if _is_present(data.get("radiographic_progression_date")):
+            survival_anchor_events.append(
+                {
+                    "anchor_type": "radiographic_progression",
+                    "anchor_date": data.get("radiographic_progression_date"),
+                    "anchor_source": data.get("radiographic_progression_source") or "visit_capture",
+                    "payload": {"state": state, "management_track": management_track},
+                }
+            )
+        if _is_present(data.get("metastatic_diagnosis_date")) or _is_present(data.get("first_metastasis_date")):
+            survival_anchor_events.append(
+                {
+                    "anchor_type": "metastasis",
+                    "anchor_date": data.get("metastatic_diagnosis_date") or data.get("first_metastasis_date"),
+                    "anchor_source": data.get("metastasis_document_source") or "visit_capture",
+                    "payload": {"metastasis_site": data.get("metastasis_site"), "metastasis_count": data.get("metastasis_count")},
+                }
+            )
+        if _is_present(data.get("psa_progression_date")):
+            survival_anchor_events.append(
+                {
+                    "anchor_type": "psa_progression",
+                    "anchor_date": data.get("psa_progression_date"),
+                    "anchor_source": "visit_capture",
+                    "payload": {"psa": data.get("psa"), "state": state},
+                }
+            )
+        _save_survival_anchor_events(
+            c,
+            patient_id,
+            survival_anchor_events,
+            source_type="stage_visit",
+            source_record_id=visit_record_id,
+        )
+
+        structured_biopsy_payload = data.get("structured_biopsy")
+        if not isinstance(structured_biopsy_payload, dict) and any(
+            _is_present(data.get(field))
+            for field in ("biopsy_date", "biopsy_type", "biopsy_route", "biopsy_context", "total_cores", "positive_cores")
+        ):
+            structured_biopsy_payload = {
+                "biopsy_date": data.get("biopsy_date"),
+                "biopsy_type": data.get("biopsy_type"),
+                "biopsy_route": data.get("biopsy_route"),
+                "biopsy_context": data.get("biopsy_context"),
+                "mri_pirads_at_biopsy": data.get("mri_pirads_at_biopsy"),
+                "total_cores": data.get("total_cores"),
+                "positive_cores": data.get("positive_cores"),
+            }
+        if isinstance(structured_biopsy_payload, dict):
+            _save_structured_biopsy_session(
+                c,
+                patient_id,
+                structured_biopsy_payload,
+                source_type="stage_visit",
+                source_record_id=visit_record_id,
+            )
+
+        active_surveillance_payload = data.get("active_surveillance_update")
+        if not isinstance(active_surveillance_payload, dict) and any(
+            _is_present(data.get(field))
+            for field in ("as_protocol", "confirmatory_biopsy_planned", "confirmatory_biopsy_date", "as_exit_reason", "as_exit_treatment")
+        ):
+            active_surveillance_payload = {
+                "protocol": data.get("as_protocol"),
+                "schedule_items": (
+                    [
+                        {
+                            "item_type": "rebiopsy",
+                            "title": "Biopsia confirmatoria",
+                            "due_date": data.get("confirmatory_biopsy_date"),
+                            "status": "completed" if _coerce_bool(data.get("confirmatory_biopsy_planned")) and _is_present(data.get("confirmatory_biopsy_date")) else "scheduled",
+                            "completed_date": data.get("confirmatory_biopsy_date") if _is_present(data.get("confirmatory_biopsy_date")) else "",
+                            "priority": "mandatory",
+                        }
+                    ]
+                    if _coerce_bool(data.get("confirmatory_biopsy_planned")) or _is_present(data.get("confirmatory_biopsy_date"))
+                    else []
+                ),
+                "exit_reason": data.get("as_exit_reason"),
+                "exit_treatment": data.get("as_exit_treatment"),
+                "exit_date": visit_date if _is_present(data.get("as_exit_reason")) else "",
+            }
+        if isinstance(active_surveillance_payload, dict):
+            _save_active_surveillance_update(
+                c,
+                patient_id,
+                active_surveillance_payload,
+                source_type="stage_visit",
+                source_record_id=visit_record_id,
+            )
+
+        skeletal_payload = data.get("skeletal_events")
+        if not skeletal_payload and isinstance(data.get("skeletal"), dict):
+            skeletal_map = data.get("skeletal") or {}
+            derived_events = []
+            for event_type, enabled in skeletal_map.items():
+                if _coerce_bool(enabled):
+                    derived_events.append(
+                        {
+                            "event_type": event_type,
+                            "event_date": visit_date,
+                            "details": "Capturado desde visita estructurada",
+                        }
+                    )
+            skeletal_payload = derived_events
+        _save_skeletal_events_structured(
+            c,
+            patient_id,
+            skeletal_payload or [],
+            source_type="stage_visit",
+            source_record_id=visit_record_id,
+        )
+
+        bone_modifying_agent_payload = data.get("bone_modifying_agent")
+        if not isinstance(bone_modifying_agent_payload, dict) and any(
+            _is_present(data.get(field))
+            for field in ("bma_agent", "bma_start_date", "dental_clearance_done", "onj_monitoring")
+        ):
+            bone_modifying_agent_payload = {
+                "agent": data.get("bma_agent"),
+                "start_date": data.get("bma_start_date"),
+                "dental_clearance_done": data.get("dental_clearance_done"),
+                "onj_monitoring": data.get("onj_monitoring"),
+            }
+        if isinstance(bone_modifying_agent_payload, dict):
+            _save_bone_modifying_agent_course(
+                c,
+                patient_id,
+                bone_modifying_agent_payload,
+                source_type="stage_visit",
+                source_record_id=visit_record_id,
+            )
+
+        bone_health_payload = data.get("bone_health_snapshot")
+        if not isinstance(bone_health_payload, dict):
+            inferred_bone_health = {
+                "snapshot_date": visit_date,
+                "worst_t_score": data.get("worst_t_score"),
+                "frax_major_pct": data.get("frax_major_pct"),
+                "frax_hip_pct": data.get("frax_hip_pct"),
+                "vitamin_d_level": data.get("vitamin_d_level"),
+                "calcium_level": data.get("calcium_level"),
+                "creatinine": data.get("creatinine"),
+                "dxa_performed": data.get("dxa_performed"),
+                "dental_clearance_done": data.get("dental_clearance_done"),
+                "onj_monitoring": data.get("onj_monitoring"),
+            }
+            if any(_is_present(inferred_bone_health.get(field)) for field in ("worst_t_score", "frax_major_pct", "frax_hip_pct", "vitamin_d_level", "calcium_level", "creatinine", "dxa_performed", "dental_clearance_done", "onj_monitoring")):
+                bone_health_payload = inferred_bone_health
+        if isinstance(bone_health_payload, dict):
+            _save_bone_health_snapshot(
+                c,
+                patient_id,
+                bone_health_payload,
+                source_type="stage_visit",
+                source_record_id=visit_record_id,
+            )
+
+        radiotherapy_course_payload = data.get("radiotherapy_course")
+        if not isinstance(radiotherapy_course_payload, dict):
+            inferred_rt_payload = _build_radiation_payload_from_visit(data)
+            if inferred_rt_payload:
+                radiotherapy_course_payload = {
+                    **inferred_rt_payload,
+                    "rt_intent": inferred_rt_payload.get("rt_context"),
+                    "modality": inferred_rt_payload.get("rt_technique"),
+                    "target_volume": inferred_rt_payload.get("target"),
+                    "rt_start_date": inferred_rt_payload.get("rt_date"),
+                    "rt_end_date": inferred_rt_payload.get("rt_end_date") or inferred_rt_payload.get("rt_date"),
+                }
+        if not isinstance(radiotherapy_course_payload, dict) and any(
+            _is_present(data.get(field))
+            for field in ("rt_intent", "modality", "target_volume", "total_dose_gy", "fractions", "salvage_psa_at_start")
+        ):
+            radiotherapy_course_payload = {
+                "rt_intent": data.get("rt_intent"),
+                "modality": data.get("modality"),
+                "target_volume": data.get("target_volume"),
+                "total_dose_gy": data.get("total_dose_gy"),
+                "fractions": data.get("fractions"),
+                "dose_per_fraction_gy": data.get("dose_per_fraction_gy"),
+                "salvage_psa_at_start": data.get("salvage_psa_at_start"),
+                "rt_start_date": data.get("rt_start_date") or visit_date,
+                "rt_end_date": data.get("rt_end_date") or data.get("rt_start_date") or visit_date,
+            }
+        if isinstance(radiotherapy_course_payload, dict):
+            _save_radiotherapy_course_detailed(
+                c,
+                patient_id,
+                radiotherapy_course_payload,
+                source_type="stage_visit",
+                source_record_id=visit_record_id,
+            )
 
         if data.get("agenda_ids"):
             for agenda_id in data.get("agenda_ids", []):
@@ -6124,6 +7880,43 @@ def save_biopsy(patient_id, data):
             data.get('adverse_histology_variant_type'), data.get('adverse_histology_variant_detail'),
             data.get('pathologist_notes')
         ))
+        legacy_biopsy_id = c.lastrowid
+        structured_payload = dict(data)
+        if not structured_payload.get("systematic_cores") and not structured_payload.get("targeted_cores"):
+            total_cores = _safe_int(data.get("total_cores"), 0)
+            positive_cores = _safe_int(data.get("positive_cores"), 0)
+            systematic_cores = []
+            for index in range(total_cores):
+                systematic_cores.append(
+                    {
+                        "core_id": f"S{index + 1}",
+                        "location_sextant": "",
+                        "core_type": "systematic",
+                        "positive": index < positive_cores,
+                        "involvement_pct": data.get("max_core_involvement_pct") if index == 0 and positive_cores > 0 else None,
+                        "gleason_primary": data.get("gleason_primary"),
+                        "gleason_secondary": data.get("gleason_secondary"),
+                        "isup_grade": data.get("isup_grade"),
+                        "cribriform_pattern": bool(data.get("patron_cribiforme", 0)),
+                        "intraductal_carcinoma": bool(data.get("carcinoma_intraductal", 0)),
+                    }
+                )
+            structured_payload.update(
+                {
+                    "biopsy_type": data.get("biopsy_type", "systematic"),
+                    "biopsy_context": data.get("biopsy_context", "diagnostic"),
+                    "biopsy_route": data.get("biopsy_route", ""),
+                    "systematic_cores": systematic_cores,
+                }
+            )
+        _save_structured_biopsy_session(
+            c,
+            patient_id,
+            structured_payload,
+            source_type="legacy_biopsy",
+            source_record_id=legacy_biopsy_id,
+            legacy_biopsy_id=legacy_biopsy_id,
+        )
         _persist_official_diagnosis_fields(c, patient_id, data)
         conn.commit()
         conn.close()
@@ -6148,6 +7941,21 @@ def enroll_in_as(patient_id, data):
             data.get('protocol', 'NCCN_VL'),
             json.dumps(data.get('criteria_met', {}))
         ))
+        _save_active_surveillance_update(
+            c,
+            patient_id,
+            {
+                "enrollment_date": data.get('enrollment_date', datetime.now().strftime('%Y-%m-%d')),
+                "protocol": data.get('protocol', 'NCCN_VL'),
+                "criteria_met": data.get('criteria_met', {}),
+                "current_status": data.get("current_status", "active"),
+                "schedule_items": data.get("schedule_items") or data.get("schedule") or [],
+                "trigger_events": data.get("trigger_events") or [],
+                "conversion_events": data.get("conversion_events") or [],
+            },
+            source_type="legacy_active_surveillance",
+            source_record_id=c.lastrowid,
+        )
         conn.commit()
         conn.close()
         return True
@@ -6172,6 +7980,24 @@ def exit_as(patient_id, data):
             data.get('exit_treatment'),
             patient_id
         ))
+        _save_active_surveillance_update(
+            c,
+            patient_id,
+            {
+                "current_status": data.get("status", "exited"),
+                "exit_date": data.get('exit_date', datetime.now().strftime('%Y-%m-%d')),
+                "exit_reason": data.get('exit_reason'),
+                "exit_treatment": data.get('exit_treatment'),
+                "conversion_events": [
+                    {
+                        "conversion_date": data.get('exit_date', datetime.now().strftime('%Y-%m-%d')),
+                        "exit_reason": data.get('exit_reason'),
+                        "exit_treatment": data.get('exit_treatment'),
+                    }
+                ],
+            },
+            source_type="legacy_active_surveillance_exit",
+        )
         conn.commit()
         conn.close()
         return True
@@ -6271,6 +8097,34 @@ def save_radiation_details(patient_id, data):
                 data.get('anemia_related'),
                 _json_blob(data.get('late_toxicity_json', {})),
             ),
+        )
+        legacy_radiation_id = c.lastrowid
+        detailed_payload = dict(data)
+        detailed_payload.setdefault("rt_intent", data.get("rt_context"))
+        detailed_payload.setdefault("modality", data.get("rt_technique"))
+        detailed_payload.setdefault("target_volume", data.get("target"))
+        detailed_payload.setdefault("rt_start_date", data.get("rt_date"))
+        detailed_payload.setdefault("rt_end_date", data.get("rt_end_date") or data.get("rt_date"))
+        if not detailed_payload.get("toxicity"):
+            toxicity = []
+            if _safe_int(data.get("gu_toxicity_grade"), 0) > 0:
+                toxicity.append({"domain": "GU", "phase": "acute", "grade": _safe_int(data.get("gu_toxicity_grade"), 0)})
+            if _safe_int(data.get("gi_toxicity_grade"), 0) > 0:
+                toxicity.append({"domain": "GI", "phase": "acute", "grade": _safe_int(data.get("gi_toxicity_grade"), 0)})
+            late_payload = _parse_json_blob(data.get("late_toxicity_json"), {})
+            if isinstance(late_payload, dict):
+                for domain in ("GU", "GI"):
+                    grade = _safe_int(late_payload.get(f"{domain.lower()}_grade"), None)
+                    if grade is not None:
+                        toxicity.append({"domain": domain, "phase": "late", "grade": grade, "details": late_payload.get(f"{domain.lower()}_details", "")})
+            detailed_payload["toxicity"] = toxicity
+        _save_radiotherapy_course_detailed(
+            c,
+            patient_id,
+            detailed_payload,
+            source_type="legacy_radiotherapy",
+            source_record_id=legacy_radiation_id,
+            legacy_radiation_id=legacy_radiation_id,
         )
         conn.commit()
         conn.close()
@@ -6509,6 +8363,8 @@ def get_patient_full_record(nss_or_id):
         # 6. Genomic Profile
         c.execute("SELECT * FROM genomic_profile WHERE patient_id = ? ORDER BY test_date DESC LIMIT 1", (patient_id,))
         genomics = c.fetchone()
+        c.execute("SELECT * FROM genomic_profile WHERE patient_id = ? ORDER BY test_date DESC, id DESC", (patient_id,))
+        genomic_reports = [dict(row) for row in c.fetchall()]
 
         # 7. Biopsies
         c.execute("SELECT * FROM biopsy_details WHERE patient_id = ? ORDER BY biopsy_date ASC", (patient_id,))
@@ -6540,6 +8396,140 @@ def get_patient_full_record(nss_or_id):
         # 11. Radiation Details
         c.execute("SELECT * FROM radiation_details WHERE patient_id = ? ORDER BY rt_date ASC", (patient_id,))
         radiation = [dict(row) for row in c.fetchall()]
+
+        c.execute(
+            "SELECT * FROM survival_status_records WHERE patient_id = ? ORDER BY recorded_at DESC, id DESC",
+            (patient_id,),
+        )
+        survival_status_rows = _hydrate_survival_status_rows(c.fetchall())
+        c.execute(
+            "SELECT * FROM survival_anchor_events WHERE patient_id = ? AND COALESCE(active, 1) = 1 ORDER BY anchor_date ASC, id ASC",
+            (patient_id,),
+        )
+        survival_anchor_events = _hydrate_survival_anchor_rows(c.fetchall())
+
+        c.execute(
+            "SELECT * FROM biopsy_sessions WHERE patient_id = ? ORDER BY biopsy_date ASC, id ASC",
+            (patient_id,),
+        )
+        biopsy_sessions = _hydrate_biopsy_session_rows(c.fetchall())
+        biopsy_session_ids = [item.get("id") for item in biopsy_sessions if item.get("id")]
+        structured_biopsy_sessions = []
+        if biopsy_session_ids:
+            placeholders = ",".join(["?"] * len(biopsy_session_ids))
+            c.execute(
+                f"SELECT * FROM biopsy_cores WHERE session_id IN ({placeholders}) ORDER BY id ASC",
+                biopsy_session_ids,
+            )
+            biopsy_cores = _hydrate_biopsy_core_rows(c.fetchall())
+            c.execute(
+                f"SELECT * FROM biopsy_targets WHERE session_id IN ({placeholders}) ORDER BY id ASC",
+                biopsy_session_ids,
+            )
+            biopsy_targets = _hydrate_biopsy_target_rows(c.fetchall())
+            c.execute(
+                f"SELECT * FROM biopsy_mri_pathology_links WHERE session_id IN ({placeholders}) ORDER BY id ASC",
+                biopsy_session_ids,
+            )
+            biopsy_links = _hydrate_biopsy_link_rows(c.fetchall())
+            core_map = {}
+            for item in biopsy_cores:
+                core_map.setdefault(item.get("session_id"), []).append(item)
+            target_map = {}
+            for item in biopsy_targets:
+                target_map.setdefault(item.get("session_id"), []).append(item)
+            link_map = {}
+            for item in biopsy_links:
+                link_map.setdefault(item.get("session_id"), []).append(item)
+            structured_biopsy_sessions = [
+                _build_biopsy_session_summary(
+                    session,
+                    core_map.get(session.get("id"), []),
+                    target_map.get(session.get("id"), []),
+                    link_map.get(session.get("id"), []),
+                )
+                for session in biopsy_sessions
+            ]
+
+        c.execute(
+            "SELECT * FROM as_enrollments WHERE patient_id = ? ORDER BY enrollment_date DESC, id DESC",
+            (patient_id,),
+        )
+        as_enrollments = _hydrate_as_enrollment_rows(c.fetchall())
+        current_as_enrollment = as_enrollments[0] if as_enrollments else {}
+        as_schedule_items = []
+        as_trigger_events = []
+        as_conversion_events = []
+        active_surveillance_protocol = {}
+        if current_as_enrollment:
+            enrollment_id = current_as_enrollment.get("id")
+            c.execute(
+                "SELECT * FROM as_schedule_items WHERE enrollment_id = ? ORDER BY due_date ASC, id ASC",
+                (enrollment_id,),
+            )
+            as_schedule_items = _hydrate_as_schedule_rows(c.fetchall())
+            c.execute(
+                "SELECT * FROM as_trigger_events WHERE enrollment_id = ? ORDER BY detected_date DESC, id DESC",
+                (enrollment_id,),
+            )
+            as_trigger_events = _hydrate_as_trigger_rows(c.fetchall())
+            c.execute(
+                "SELECT * FROM as_conversion_events WHERE enrollment_id = ? ORDER BY conversion_date DESC, id DESC",
+                (enrollment_id,),
+            )
+            as_conversion_events = [dict(row) for row in c.fetchall()]
+            active_surveillance_protocol = _build_active_surveillance_protocol_block(
+                current_as_enrollment,
+                as_schedule_items,
+                as_trigger_events,
+                as_conversion_events,
+            )
+
+        c.execute(
+            "SELECT * FROM skeletal_related_events WHERE patient_id = ? ORDER BY event_date ASC, id ASC",
+            (patient_id,),
+        )
+        structured_skeletal_events = _hydrate_sre_rows(c.fetchall())
+        c.execute(
+            "SELECT * FROM bone_modifying_agent_courses WHERE patient_id = ? ORDER BY start_date ASC, id ASC",
+            (patient_id,),
+        )
+        bone_modifying_agent_courses = _hydrate_bma_rows(c.fetchall())
+        c.execute(
+            "SELECT * FROM bone_health_snapshots WHERE patient_id = ? ORDER BY snapshot_date ASC, id ASC",
+            (patient_id,),
+        )
+        bone_health_snapshots = _hydrate_bone_health_rows(c.fetchall())
+        skeletal_event_profile = _build_skeletal_event_profile_block(
+            structured_skeletal_events,
+            bone_modifying_agent_courses,
+            bone_health_snapshots,
+        )
+
+        c.execute(
+            "SELECT * FROM radiotherapy_courses WHERE patient_id = ? ORDER BY rt_start_date ASC, id ASC",
+            (patient_id,),
+        )
+        radiotherapy_course_rows = _hydrate_rt_course_rows(c.fetchall())
+        radiotherapy_course_ids = [item.get("id") for item in radiotherapy_course_rows if item.get("id")]
+        radiotherapy_courses_detailed = []
+        if radiotherapy_course_ids:
+            placeholders = ",".join(["?"] * len(radiotherapy_course_ids))
+            c.execute(
+                f"SELECT * FROM radiotherapy_mdt_sites WHERE course_id IN ({placeholders}) ORDER BY id ASC",
+                radiotherapy_course_ids,
+            )
+            rt_sites = _hydrate_rt_site_rows(c.fetchall())
+            c.execute(
+                f"SELECT * FROM radiotherapy_toxicities WHERE course_id IN ({placeholders}) ORDER BY id ASC",
+                radiotherapy_course_ids,
+            )
+            rt_toxicities = _hydrate_rt_toxicity_rows(c.fetchall())
+            radiotherapy_courses_detailed = _nest_radiotherapy_courses(
+                radiotherapy_course_rows,
+                rt_sites,
+                rt_toxicities,
+            )
 
         # 12. PROs
         c.execute("SELECT * FROM patient_pros WHERE patient_id = ? ORDER BY assessment_date ASC", (patient_id,))
@@ -6700,21 +8690,123 @@ def get_patient_full_record(nss_or_id):
 
         conn.close()
 
+        identity_dict = dict(identity)
+        latest_survival_status = survival_status_rows[0] if survival_status_rows else {}
+        identity_dict["vital_status"] = _first_nonempty(
+            latest_survival_status.get("vital_status"),
+            identity_dict.get("vital_status"),
+        )
+        identity_dict["date_of_death"] = _first_nonempty(
+            latest_survival_status.get("date_of_death"),
+            identity_dict.get("date_of_death"),
+        )
+        identity_dict["cause_of_death"] = _first_nonempty(
+            latest_survival_status.get("cause_of_death"),
+            identity_dict.get("cause_of_death"),
+        )
+        identity_dict["last_contact_date"] = _first_nonempty(
+            latest_survival_status.get("last_contact_date"),
+            identity_dict.get("last_contact_date"),
+        )
+        identity_dict["last_contact_status"] = _first_nonempty(
+            latest_survival_status.get("last_contact_status"),
+            identity_dict.get("last_contact_status"),
+        )
+        identity_dict["death_source"] = _first_nonempty(
+            latest_survival_status.get("death_source"),
+            identity_dict.get("death_source"),
+        )
+
+        biopsy_history = list(biopsies)
+        if structured_biopsy_sessions:
+            existing_dates = {
+                (str(item.get("biopsy_date") or "")[:10], str(item.get("biopsy_context") or ""))
+                for item in biopsy_history
+                if isinstance(item, dict)
+            }
+            for session in structured_biopsy_sessions:
+                key = (str(session.get("biopsy_date") or "")[:10], str(session.get("biopsy_context") or ""))
+                if key not in existing_dates:
+                    biopsy_history.append(
+                        {
+                            "biopsy_date": session.get("biopsy_date"),
+                            "biopsy_type": session.get("biopsy_type"),
+                            "biopsy_context": session.get("biopsy_context"),
+                            "total_cores": session.get("total_cores"),
+                            "positive_cores": session.get("total_positive"),
+                            "max_core_involvement_pct": session.get("max_involvement_pct"),
+                            "isup_grade": session.get("highest_isup"),
+                            "systematic_cores": session.get("systematic_cores", []),
+                            "targeted_cores": session.get("targeted_cores", []),
+                            "targets": session.get("targets", []),
+                            "mri_pathology_links": session.get("mri_pathology_links", []),
+                            "session_key": session.get("session_key"),
+                            "biopsy_route": session.get("biopsy_route"),
+                            "mri_pirads_at_biopsy": session.get("mri_pirads_at_biopsy"),
+                        }
+                    )
+            biopsy_history = sorted(biopsy_history, key=lambda item: str(item.get("biopsy_date") or ""))
+
+        active_surveillance_legacy = dict(as_record) if as_record else {}
+        if active_surveillance_protocol:
+            active_surveillance_legacy.update(
+                {
+                    "enrollment_date": active_surveillance_protocol.get("enrollment_date"),
+                    "enrollment_protocol": active_surveillance_protocol.get("enrollment_protocol"),
+                    "current_status": active_surveillance_protocol.get("current_status") or active_surveillance_protocol.get("status"),
+                    "exit_date": active_surveillance_protocol.get("exit_date"),
+                    "exit_reason": active_surveillance_protocol.get("exit_reason"),
+                    "exit_treatment": active_surveillance_protocol.get("exit_treatment"),
+                }
+            )
+
+        radiation_history = list(radiation)
+        if radiotherapy_courses_detailed:
+            existing_rt_dates = {
+                (str(item.get("rt_date") or item.get("rt_start_date") or "")[:10], str(item.get("rt_context") or item.get("rt_intent") or ""))
+                for item in radiation_history
+                if isinstance(item, dict)
+            }
+            for course in radiotherapy_courses_detailed:
+                key = (str(course.get("rt_start_date") or "")[:10], str(course.get("rt_intent") or ""))
+                if key not in existing_rt_dates:
+                    radiation_history.append(
+                        {
+                            "rt_date": course.get("rt_start_date"),
+                            "rt_context": course.get("rt_intent"),
+                            "rt_technique": course.get("modality"),
+                            "target": course.get("target_volume"),
+                            "total_dose_gy": course.get("total_dose_gy"),
+                            "fractions": course.get("fractions"),
+                            "dose_per_fraction_gy": course.get("dose_per_fraction_gy"),
+                            "concurrent_adt": course.get("concurrent_adt"),
+                            "toxicity": course.get("toxicity", []),
+                            "mdt_site_details": course.get("mdt_site_details", []),
+                        }
+                    )
+            radiation_history = sorted(radiation_history, key=lambda item: str(item.get("rt_date") or item.get("rt_start_date") or ""))
+
         return {
-            'identity': dict(identity),
+            'identity': identity_dict,
             'baseline': baseline_dict,
             'demographics': dict(demographics) if demographics else {},
             'family_history': family_history,
             'imaging': imaging,
             'mri_facts': mri_facts,
             'genomics': dict(genomics) if genomics else {},
-            'biopsies': biopsies,
+            'genomic_reports': genomic_reports,
+            'biopsies': biopsy_history,
+            'structured_biopsy_sessions': structured_biopsy_sessions,
             'diagnostic_plans': diagnostic_plans,
             'biopsy_triggers': biopsy_triggers,
-            'active_surveillance': dict(as_record) if as_record else {},
+            'active_surveillance': active_surveillance_legacy,
+            'active_surveillance_protocol': active_surveillance_protocol,
             'bcr': dict(bcr) if bcr else {},
             'surgery': dict(surgery) if surgery else {},
-            'radiation': radiation,
+            'radiation': radiation_history,
+            'radiotherapy_courses_detailed': radiotherapy_courses_detailed,
+            'radiotherapy_courses': radiotherapy_courses_detailed,
+            'rt_courses': radiotherapy_courses_detailed,
             'pros': pros,
             'follow_ups': follow_ups,
             'treatments': treatments,
@@ -6744,6 +8836,22 @@ def get_patient_full_record(nss_or_id):
             'document_candidates': document_candidates,
             'document_verification_tasks': document_verification_tasks,
             'verified_document_facts': verified_document_facts,
+            'survival_status_detail': latest_survival_status,
+            'survival_status_history': survival_status_rows,
+            'survival_anchor_events': survival_anchor_events,
+            'vital_status': identity_dict.get("vital_status") or latest_survival_status.get("vital_status"),
+            'date_of_death': identity_dict.get("date_of_death") or latest_survival_status.get("date_of_death"),
+            'cause_of_death': identity_dict.get("cause_of_death") or latest_survival_status.get("cause_of_death"),
+            'last_contact_date': identity_dict.get("last_contact_date") or latest_survival_status.get("last_contact_date"),
+            'last_contact_status': identity_dict.get("last_contact_status") or latest_survival_status.get("last_contact_status"),
+            'skeletal_event_profile': skeletal_event_profile,
+            'skeletal_events': structured_skeletal_events,
+            'sre_events': structured_skeletal_events,
+            'bone_modifying_agent_courses': bone_modifying_agent_courses,
+            'bone_modifying_agent': bone_modifying_agent_courses[-1] if bone_modifying_agent_courses else {},
+            'bone_health_snapshots': bone_health_snapshots,
+            'bone_health': bone_health_snapshots[-1] if bone_health_snapshots else {},
+            'radiation_details': radiotherapy_courses_detailed,
         }
     except Exception as e:
         logger.error(f"Error fetching full patient record: {e}")

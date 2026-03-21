@@ -27,6 +27,12 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 from datetime import datetime
+from prostanet.domains.patient_tracking.mhspc_evidence import (
+    build_triplet_decision,
+    is_mhspc_state,
+    resolve_mhspc_state,
+    visible_trials_for_mhspc_state,
+)
 
 # ---------------------------------------------------------------------------
 # Logger
@@ -1089,6 +1095,9 @@ def match_patient_to_studies(patient_data: dict[str, Any]) -> list[dict[str, Any
     visceral_mets = patient_data.get("visceral_metastases")
     symptomatic_bone = patient_data.get("symptomatic_bone")
     fit_chemo = patient_data.get("fit_for_chemotherapy")
+    exact_state = resolve_mhspc_state(str(patient_data.get("state", "") or ""), patient_data)
+    mhspc_triplet = build_triplet_decision(exact_state, patient_data) if is_mhspc_state(exact_state) else {}
+    mhspc_visible_trials, mhspc_hidden_trials = visible_trials_for_mhspc_state(exact_state, patient_data) if is_mhspc_state(exact_state) else (set(), set())
 
     # Convertir tipos de forma segura
     if age is not None:
@@ -1254,6 +1263,21 @@ def match_patient_to_studies(patient_data: dict[str, Any]) -> list[dict[str, Any
             fit_chemo, criteria, "fit_for_chemotherapy", "Candidato a quimioterapia"
         )
         (met if ok else failed).append(detail)
+
+        study_name = str(study.get("name") or "")
+        if is_mhspc_state(exact_state) and study.get("scenario") == "mHSPC":
+            if study_name in mhspc_hidden_trials:
+                failed.append(f"Subescenario mHSPC actual: {exact_state} (estudio oculto por no concordar con volumen/temporalidad)")
+            elif mhspc_visible_trials and study_name not in mhspc_visible_trials:
+                failed.append(f"Subescenario mHSPC actual: {exact_state} (estudio fuera de la superficie clínica priorizada)")
+
+            if study_name == "ARASENS" and not bool(mhspc_triplet.get("is_triplet_candidate")):
+                failed.append("Triplete con docetaxel no indicado o no seguro en este caso")
+            if study_name == "PEACE-1":
+                if exact_state != "mcspc_high_volume_sync":
+                    failed.append("PEACE-1 se restringe a enfermedad de novo/sincrónica de alto volumen en esta correlación clínica")
+                elif not bool(mhspc_triplet.get("is_triplet_candidate")):
+                    failed.append("PEACE-1 requiere aptitud actual para triplete con docetaxel")
 
         # -- Calcular score de elegibilidad --
         total_criteria = len(met) + len(failed)

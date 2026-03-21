@@ -351,6 +351,28 @@ def build_copilot_alerts(
             }
         )
 
+    for target in signals.get("prognostic_capture_targets", []) or []:
+        if not isinstance(target, dict):
+            continue
+        action_type = str(target.get("action_type") or "capture")
+        fields_to_capture = [str(field) for field in list(target.get("raw_fields") or []) if str(field or "").strip()]
+        category = "documentation" if action_type == "document" else "data_quality"
+        candidates.append(
+            {
+                "decision_domain": f"score_completion_{target.get('tool_key') or 'general'}",
+                "category": category,
+                "severity": "warning",
+                "title": target.get("title") or "Completar herramienta pronóstica",
+                "message": target.get("rationale") or "",
+                "why_now": "El score aplicable aún no puede cerrar su impacto clínico con datos completos.",
+                "recommended_action": target.get("action_label") or "Completar dato faltante",
+                "fields_to_capture": fields_to_capture,
+                "can_be_resolved_in_visit": action_type == "capture",
+                "expected_document_type": target.get("expected_document_type") or "",
+                "detail_items": [{"source": "prognostic_capture_target", "tool_key": target.get("tool_key")}],
+            }
+        )
+
     for safety_item in signals.get("active_safety", []) or []:
         candidates.append(
             {
@@ -440,7 +462,7 @@ def build_copilot_alerts(
                 capture_block=_capture_block_for_domain(domain, str(lead.get("category") or "data_quality")),
                 encounter_key=str(linked_encounter_keys[0] if linked_encounter_keys else ""),
                 resolves_decision_domain=domain,
-                expected_document_type=_expected_document_type(
+                expected_document_type=str(lead.get("expected_document_type") or "") or _expected_document_type(
                     domain,
                     str(lead.get("category") or "data_quality"),
                     str(lead.get("title") or ""),

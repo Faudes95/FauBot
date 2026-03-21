@@ -350,7 +350,7 @@ def patient_profile(nss):
         if not data:
             return "Paciente no encontrado", 404
         tracking_db.refresh_followup_agenda(data)
-        tracking_db.refresh_longitudinal_intelligence(nss, force_recompute=False)
+        longitudinal_bundle = tracking_db.refresh_longitudinal_intelligence(nss, force_recompute=False)
         data = tracking_db.get_patient_full_record(nss) or tracking_db.get_patient_history(nss)
             
         # Calcular edad
@@ -387,6 +387,7 @@ def patient_profile(nss):
                 latest_assessment=latest_assessment,
                 state_timeline=state_timeline,
                 care_overlays=care_overlays,
+                longitudinal_bundle=longitudinal_bundle,
             )
         else:
             # Fallback legado solo cuando todavía no existe evaluación modular persistida.
@@ -399,17 +400,27 @@ def patient_profile(nss):
                 if last_visit.get('psa_current') is not None:
                     current_context['psa_current'] = last_visit['psa_current']
 
-            current_context.setdefault('line_of_therapy', current_context.get('line_of_therapy_number'))
-            current_context.setdefault('psa', current_context.get('baseline_psa', 0))
-            current_context.setdefault('age', age)
-            current_context.setdefault('ecog', current_context.get('ecog_score', 0))
-            current_context.setdefault('gleason', current_context.get('gleason_score', 6))
+            current_context['line_of_therapy'] = current_context.get('line_of_therapy_number') or current_context.get('line_of_therapy') or 0
+            current_context['psa'] = current_context.get('baseline_psa') or current_context.get('psa') or 0
+            current_context['age'] = current_context.get('age') or age or 0
+            current_context['ecog_score'] = current_context.get('ecog_score') or current_context.get('ecog') or 0
+            current_context['ecog'] = current_context.get('ecog_score') or 0
+            current_context['gleason_score'] = current_context.get('gleason_score') or current_context.get('gleason') or 6
+            current_context['gleason'] = current_context.get('gleason_score') or 6
+            current_context['metastasis_count'] = current_context.get('metastasis_count') or 0
+            current_context['child_pugh_score'] = current_context.get('child_pugh_score') or 'A'
+            current_context['rt_primary_received'] = current_context.get('rt_primary_received') or 0
+
+            from prostanet.shared.precision_medicine_legacy import evaluate_patient_for_mhspc
+            from prostanet.domains.patient_tracking.profile_compass import build_patient_profile_view_model
 
             try:
-                from prostanet.shared.precision_medicine_legacy import evaluate_patient_for_mhspc
-                from prostanet.domains.patient_tracking.profile_compass import build_patient_profile_view_model
-
                 recs = evaluate_patient_for_mhspc(current_context)
+            except Exception as e:
+                logger.warning(f"Error generando recomendaciones: {e}")
+                recs = {"info": "Recomendaciones no disponibles para este perfil"}
+
+            try:
                 profile_view = build_patient_profile_view_model(
                     patient=data,
                     latest_assessment_raw={},
@@ -417,10 +428,10 @@ def patient_profile(nss):
                     state_timeline=[],
                     care_overlays=[],
                     recommendations=recs,
+                    longitudinal_bundle=longitudinal_bundle,
                 )
             except Exception as e:
-                logger.warning(f"Error generando recomendaciones: {e}")
-                recs = {"info": "Recomendaciones no disponibles para este perfil"}
+                logger.warning(f"Error construyendo el perfil estructurado: {e}")
                 profile_view = {
                     "diagnostic_state": False,
                     "management_track": "",
@@ -440,7 +451,12 @@ def patient_profile(nss):
                     "protocol_comparators": [],
                     "protocol_trace": {},
                     "data_provenance": [],
-                    "clinical_signals": {},
+                    "missing_input_actions": [],
+                    "clinical_signals": {
+                        "critical_missing": [],
+                        "awaiting_review": [],
+                        "active_safety": [],
+                    },
                     "next_best_action": {},
                     "transition_proposals": [],
                     "recommendation_audit": [],
@@ -863,6 +879,7 @@ def api_patient_signals(patient_id):
             latest_assessment=latest_assessment,
             state_timeline=state_timeline,
             care_overlays=care_overlays,
+            longitudinal_bundle=bundle,
         )
         return jsonify(
             {
@@ -895,6 +912,16 @@ def api_patient_signals(patient_id):
                 "last_adjudicated_event": bundle.get("last_adjudicated_event", profile_view.get("last_adjudicated_event", {})),
                 "trial_comparable_endpoints": bundle.get("trial_comparable_endpoints", profile_view.get("trial_comparable_endpoints", [])),
                 "current_trial_comparable_profile": bundle.get("current_trial_comparable_profile", profile_view.get("current_trial_comparable_profile", {})),
+                "prognostic_modifiers": bundle.get("prognostic_modifiers", profile_view.get("prognostic_modifiers", [])),
+                "prognostic_recommended_actions": bundle.get("prognostic_recommended_actions", profile_view.get("prognostic_recommended_actions", [])),
+                "prognostic_followup_impact": bundle.get("prognostic_followup_impact", profile_view.get("prognostic_followup_impact", [])),
+                "prognostic_capture_targets": bundle.get("prognostic_capture_targets", profile_view.get("prognostic_capture_targets", [])),
+                "backbone_alignment": bundle.get("backbone_alignment", profile_view.get("backbone_alignment", {})),
+                "cadence_adjusted_by": bundle.get("cadence_adjusted_by", profile_view.get("cadence_adjusted_by", [])),
+                "psa_forecast": bundle.get("psa_forecast", profile_view.get("psa_forecast", {})),
+                "forecast_reliability": bundle.get("forecast_reliability", profile_view.get("forecast_reliability", {})),
+                "live_benchmark": bundle.get("live_benchmark", profile_view.get("live_benchmark", {})),
+                "benchmark_reliability": bundle.get("benchmark_reliability", profile_view.get("benchmark_reliability", {})),
                 **_reconciled_patient_snapshot(patient),
             }
         )
@@ -1327,7 +1354,10 @@ def api_pivotal_match(nss):
     """Evalúa elegibilidad del paciente contra estudios pivotales."""
     try:
         from tracking_db import get_patient_full_record
+        from clinical_scores import docetaxel_fitness
         from pivotal_studies import match_patient_to_studies, generate_pivotal_report
+        from prostanet.domains.patient_tracking.mhspc_evidence import is_mhspc_state, visible_trials_for_mhspc_state
+        from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
 
         record = get_patient_full_record(nss)
         if not record:
@@ -1338,6 +1368,9 @@ def api_pivotal_match(nss):
         identity = record.get('identity', {})
         genomics = record.get('genomics', {})
         surgery = record.get('surgery', {})
+        latest_assessment = record.get("latest_assessment") or {}
+        reconciliation = build_reconciled_state(record, latest_assessment)
+        current_state = reconciliation.get("reconciled_state") or ""
 
         # Calcular edad
         from datetime import datetime
@@ -1361,16 +1394,25 @@ def api_pivotal_match(nss):
         prior_hist = record.get('prior_history') or {}
         prior_docetaxel_cycles = prior_hist.get('prior_docetaxel_cycles', 0) or 0
         prior_arpi_agent = prior_hist.get('prior_arpi_agent')
+        docetaxel_payload = {}
+        docetaxel_payload.update(baseline or {})
+        docetaxel_payload.update(prior_hist or {})
+        docetaxel_payload.update((latest_assessment.get("input_snapshot") or {}))
+        docetaxel_bundle = docetaxel_fitness(docetaxel_payload)
 
         patient_for_match = {
+            'state': current_state,
             'age': age,
             'psa': psa_current or 0,
             'psa_basal': baseline.get('baseline_psa', 0) or 0,
             'gleason_score': baseline.get('gleason_score', 6) or 6,
+            'gleason_primary': baseline.get('gleason_primary'),
+            'gleason_secondary': baseline.get('gleason_secondary'),
             'ecog_score': baseline.get('ecog_score', 0) or 0,
             'clinical_tstage': baseline.get('tnm_stage', 'T2a') or 'T2a',
             'metastasis_status': metastasis_status,
             'metastasis_site': metastasis_site,
+            'metastasis_count': baseline.get('metastasis_count', 0) or 0,
             'volume_chaarted': baseline.get('volume_disease', 'Low') or 'Low',
             'hrr_status': genomics.get('hrr_overall') or baseline.get('hrr_status', 'Desconocido') or 'Desconocido',
             'msi_status': genomics.get('msi_status') or baseline.get('msi_status', 'Estable') or 'Estable',
@@ -1378,7 +1420,15 @@ def api_pivotal_match(nss):
             'prior_prostatectomy': bool(surgery),
             'bone_metastases': metastasis_site in ('Hueso', 'Oseas', 'Bone'),
             'visceral_metastases': metastasis_site in ('Visceral', 'Higado', 'Pulmon'),
-            'fit_for_chemotherapy': (baseline.get('ecog_score', 0) or 0) <= 1,
+            'fit_for_chemotherapy': bool(docetaxel_bundle.get('fit_for_docetaxel')),
+            'fit_for_docetaxel': bool(docetaxel_bundle.get('fit_for_docetaxel')),
+            'disease_temporality': 'metachronous' if current_state in {'mcspc_oligo_metachronous', 'mcspc_high_volume_metachronous'} else 'sync',
+            'de_novo': current_state in {'mcspc_low_volume_sync_oligo', 'mcspc_high_volume_sync'},
+            'peripheral_neuropathy_grade': docetaxel_payload.get('peripheral_neuropathy_grade'),
+            'frailty_status': docetaxel_payload.get('frailty_status'),
+            'child_pugh_score': docetaxel_payload.get('child_pugh_score'),
+            'cv_risk_documented': docetaxel_payload.get('cv_risk_documented'),
+            'drug_interaction_reviewed': docetaxel_payload.get('drug_interaction_reviewed'),
         }
 
         # Construir lista de terapias previas
@@ -1423,16 +1473,26 @@ def api_pivotal_match(nss):
             except Exception:
                 pass
 
-        eligible_matches = [m for m in matches_clean if m.get("eligible")]
-        partial_matches = [m for m in matches_clean if not m.get("eligible") and float(m.get("match_score", 0) or 0) >= 0.7]
-        ineligible_matches = [m for m in matches_clean if m not in eligible_matches and m not in partial_matches]
+        hidden_cross_scenario = set()
+        if is_mhspc_state(current_state):
+            _, hidden_cross_scenario = visible_trials_for_mhspc_state(current_state, patient_for_match)
+
+        visible_matches_clean = [
+            item for item in matches_clean
+            if item.get("study_name") not in hidden_cross_scenario
+        ]
+        eligible_matches = [m for m in visible_matches_clean if m.get("eligible")]
+        partial_matches = [m for m in visible_matches_clean if not m.get("eligible") and float(m.get("match_score", 0) or 0) >= 0.7]
+        ineligible_matches = [m for m in visible_matches_clean if m not in eligible_matches and m not in partial_matches]
 
         return jsonify({
             "success": True,
             "matches": matches_clean,
+            "visible_matches": visible_matches_clean,
             "eligible_matches": eligible_matches,
             "partial_matches": partial_matches,
             "ineligible_matches": ineligible_matches,
+            "hidden_cross_scenario_count": len(hidden_cross_scenario),
             "report": report,
             "total_studies_evaluated": len(matches_clean),
             "eligible_count": len(eligible_matches),
@@ -1554,6 +1614,8 @@ def api_dashboard_stats():
         advanced_states = {
             "mcspc_oligo_metachronous",
             "mcspc_low_volume_sync_oligo",
+            "mcspc_high_volume_sync",
+            "mcspc_high_volume_metachronous",
             "mcspc_high_volume",
             "m0_crpc",
             "m1_crpc",
@@ -1561,6 +1623,8 @@ def api_dashboard_stats():
         mhspc_states = {
             "mcspc_oligo_metachronous",
             "mcspc_low_volume_sync_oligo",
+            "mcspc_high_volume_sync",
+            "mcspc_high_volume_metachronous",
             "mcspc_high_volume",
         }
 
@@ -1655,12 +1719,32 @@ def api_dashboard_stats():
             "publishable_ready_count": summary["publishable_ready_count"],
             "mexico_core_complete_count": summary["mexico_core_complete_count"],
             "document_verification_coverage_count": summary["document_verification_coverage_count"],
+            "survival_status_complete_count": summary.get("survival_status_complete_count", 0),
+            "structured_biopsy_session_count": summary.get("structured_biopsy_session_count", 0),
+            "active_surveillance_operational_count": summary.get("active_surveillance_operational_count", 0),
+            "skeletal_bone_health_count": summary.get("skeletal_bone_health_count", 0),
+            "radiotherapy_detail_count": summary.get("radiotherapy_detail_count", 0),
         }
         stats["research_readiness"] = {
             "average_pct": summary["cohort_average_research_readiness_pct"],
             "research_ready_count": summary["research_ready_count"],
         }
         stats["endpoint_readiness"] = summary["endpoint_ready_distribution"]
+        stats["risk_tool_stats"] = summary.get("risk_tool_stats", {})
+        stats["capra_distribution"] = summary.get("capra_distribution", {})
+        stats["damico_distribution"] = summary.get("damico_distribution", {})
+        stats["capra_s_distribution"] = summary.get("capra_s_distribution", {})
+        stats["mskcc_bcr_post_rp_stats"] = summary.get("mskcc_bcr_post_rp_stats", {})
+        stats["upgrade_stats"] = {
+            "pathologic_upgrade_count": summary.get("pathologic_upgrade_count", 0),
+            "genomic_upclassification_count": summary.get("genomic_upclassification_count", 0),
+            "unfavorable_intermediate_behaving_like_high_risk_count": summary.get("unfavorable_intermediate_behaving_like_high_risk_count", 0),
+        }
+        stats["prognostic_modifier_stats"] = summary.get("prognostic_modifier_counts", {})
+        stats["backbone_alignment_stats"] = summary.get("backbone_alignment_stats", {})
+        stats["prognostic_followup_impact_count"] = summary.get("followup_impact_count", 0)
+        stats["incomplete_prognostic_scores_count"] = summary.get("incomplete_score_targets_count", 0)
+        stats["high_risk_impact_count"] = summary.get("high_risk_impact_count", 0)
         stats["analysis_dataset_size"] = len(analysis_payload["analysis_rows"])
         stats["analysis_dataset_preview"] = analysis_payload["analysis_rows"][:5]
         return jsonify({"success": True, **stats})

@@ -7,6 +7,10 @@ from prostanet.domains.guideline_comparison.service import GuidelineComparisonSe
 from prostanet.domains.mcspc_oligo_metachronous.rules_eau import evaluate_mcspc_oligo_metachronous_eau
 from prostanet.domains.mcspc_oligo_metachronous.rules_nccn import evaluate_mcspc_oligo_metachronous
 from prostanet.domains.mcspc_oligo_metachronous.schemas import MCSPC_OLIGO_METACHRONOUS_SCHEMA
+from prostanet.domains.patient_tracking.mhspc_evidence import (
+    build_triplet_decision,
+    build_visible_mhspc_trial_matches,
+)
 from prostanet.shared.contracts import evaluation_result
 from prostanet.shared.recommendation_enrichment import enrich_evaluation_result
 
@@ -31,11 +35,19 @@ class McspcOligoMetachronousService:
             "cardio": str(payload.get("comorbidity_cardio", "0")) == "1",
         }
         legacy = evaluate_patient_for_mhspc(normalized)
+        triplet_decision = build_triplet_decision(self.module_id, payload)
+        visible_trial_matches, hidden_trial_count = build_visible_mhspc_trial_matches(
+            self.module_id,
+            payload,
+            triplet_decision=triplet_decision,
+        )
         treatments = []
         if nccn["mdt_candidate"]:
             treatments.append({"name": "Metastasis-directed therapy", "priority": "selected_candidate", "notes": "Limited metachronous burden supports MDT discussion in tumor board."})
         if nccn["prefer_akeega"]:
             treatments.append({"name": "ADT + Niraparib + Abiraterone", "priority": "preferred", "notes": "Ruta de precisión para BRCA2 trazable en enfermedad sensible a la castración."})
+        daro_priority = "preferred" if nccn["prefer_darolutamide"] else "eligible"
+        treatments.append({"name": "ADT + Darolutamida", "priority": daro_priority, "notes": "Backbone tipo ARANOTE visible cuando se evita sobreextrapolar tripletes o se privilegia seguridad relativa."})
         if nccn["prefer_enzalutamide"]:
             treatments.append({"name": "ADT + Enzalutamida", "priority": "preferred", "notes": self._note_for(legacy, "Enzalutamida")})
         if nccn["prefer_abiraterone"]:
@@ -71,15 +83,17 @@ class McspcOligoMetachronousService:
             contraindications=legacy.get("contraindications", []),
             durations_and_conditions=["Continue ADT backbone with the selected ARPI until progression or intolerance.", "Use MDT only after multidisciplinary review."],
             evidence_trace=[self.registry.get_module_evidence(self.module_id)],
-            trial_matches=[
-                {"trial": "STAMPEDE", "match": True},
-                {"trial": "PEACE-1", "match": nccn["fit_for_intensification"]},
-                {"trial": "CHART", "match": nccn["rezvilutamide_candidate"]},
-                {"trial": "AKEEGA BRCA2 mCSPC", "match": nccn["prefer_akeega"]},
-            ],
+            trial_matches=visible_trial_matches,
             applicability_badge="selected_candidate" if nccn["mdt_candidate"] else "guideline-consistent",
-            report_sections={"summary": "Metachronous oligometastatic hormone-sensitive pathway."},
+            report_sections={
+                "summary": "Metachronous oligometastatic hormone-sensitive pathway.",
+                "triplet_decision": triplet_decision,
+            },
         )
+        result["triplet_decision"] = triplet_decision
+        result["triplet_decision_card"] = triplet_decision
+        result["visible_trial_matches"] = visible_trial_matches
+        result["hidden_cross_scenario_trial_count"] = hidden_trial_count
         return enrich_evaluation_result(
             result,
             clinical_title="Ruta priorizada de enfermedad oligometastásica metacrónica",
@@ -89,6 +103,7 @@ class McspcOligoMetachronousService:
                 f"Candidato a terapia dirigida a metástasis: {'sí' if nccn['mdt_candidate'] else 'no'}.",
                 f"Aptitud para intensificación sistémica: {'sí' if nccn['fit_for_intensification'] else 'no'}.",
                 "La carga limitada de enfermedad no debe reclasificarse como recurrencia localizada simple, porque sigue siendo enfermedad metastásica sensible a la castración.",
+                "ADT + darolutamida debe quedar visible como doblete de referencia cuando se busca intensificación con mejor tolerabilidad relativa.",
                 "La discusión de terapia dirigida a metástasis solo debe sostenerse si existe contexto de ensayo, cohorte prospectiva o comité multidisciplinario.",
             ],
             alternatives=[

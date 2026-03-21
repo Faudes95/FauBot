@@ -7,6 +7,10 @@ from prostanet.domains.guideline_comparison.service import GuidelineComparisonSe
 from prostanet.domains.mcspc_low_volume_sync_oligo.rules_eau import evaluate_mcspc_low_volume_eau
 from prostanet.domains.mcspc_low_volume_sync_oligo.rules_nccn import evaluate_mcspc_low_volume
 from prostanet.domains.mcspc_low_volume_sync_oligo.schemas import MCSPC_LOW_VOLUME_SCHEMA
+from prostanet.domains.patient_tracking.mhspc_evidence import (
+    build_triplet_decision,
+    build_visible_mhspc_trial_matches,
+)
 from prostanet.shared.contracts import evaluation_result
 from prostanet.shared.recommendation_enrichment import enrich_evaluation_result
 
@@ -31,11 +35,19 @@ class McspcLowVolumeSyncOligoService:
             "cardio": str(payload.get("comorbidity_cardio", "0")) == "1",
         }
         legacy = evaluate_patient_for_mhspc(normalized)
+        triplet_decision = build_triplet_decision(self.module_id, payload)
+        visible_trial_matches, hidden_trial_count = build_visible_mhspc_trial_matches(
+            self.module_id,
+            payload,
+            triplet_decision=triplet_decision,
+        )
         treatments = []
         if nccn["rt_primary_candidate"]:
             treatments.append({"name": "RT al primario", "priority": "preferred", "notes": self._note_for(legacy, "Radioterapia al Primario")})
         if nccn["prefer_akeega"]:
             treatments.append({"name": "ADT + Niraparib + Abiraterone", "priority": "preferred", "notes": "Ruta de precisión para BRCA2 trazable en mCSPC."})
+        daro_priority = "preferred" if nccn["prefer_darolutamide"] else "eligible"
+        treatments.append({"name": "ADT + Darolutamida", "priority": daro_priority, "notes": "Backbone tipo ARANOTE visible cuando se requiere intensificación hormonal con mejor perfil neurológico/cardiovascular relativo."})
         if nccn["prefer_enzalutamide"]:
             treatments.append({"name": "ADT + Enzalutamida", "priority": "preferred", "notes": self._note_for(legacy, "Enzalutamida")})
         treatments.append({"name": "ADT + Apalutamida", "priority": "eligible", "notes": self._note_for(legacy, "Apalutamida")})
@@ -67,15 +79,17 @@ class McspcLowVolumeSyncOligoService:
             contraindications=legacy.get("contraindications", []),
             durations_and_conditions=["Keep ADT backbone continuous with the selected ARPI.", "If RT to the primary is selected, integrate it with systemic therapy timing."],
             evidence_trace=[self.registry.get_module_evidence(self.module_id)],
-            trial_matches=[
-                {"trial": "STAMPEDE H", "match": True},
-                {"trial": "ARCHES", "match": True},
-                {"trial": "CHART", "match": nccn["rezvilutamide_candidate"]},
-                {"trial": "AKEEGA BRCA2 mCSPC", "match": nccn["prefer_akeega"]},
-            ],
+            trial_matches=visible_trial_matches,
             applicability_badge="guideline-consistent",
-            report_sections={"summary": "Low-volume metastatic hormone-sensitive pathway."},
+            report_sections={
+                "summary": "Low-volume metastatic hormone-sensitive pathway.",
+                "triplet_decision": triplet_decision,
+            },
         )
+        result["triplet_decision"] = triplet_decision
+        result["triplet_decision_card"] = triplet_decision
+        result["visible_trial_matches"] = visible_trial_matches
+        result["hidden_cross_scenario_trial_count"] = hidden_trial_count
         return enrich_evaluation_result(
             result,
             clinical_title="Ruta priorizada de enfermedad metastásica sensible a la castración de bajo volumen",
@@ -85,7 +99,7 @@ class McspcLowVolumeSyncOligoService:
                 "El bajo volumen no equivale a enfermedad localizada; sigue requiriendo intensificación sistémica adecuada al contexto.",
                 f"Candidato a radioterapia al tumor primario: {'sí' if nccn['rt_primary_candidate'] else 'no'}.",
                 "La salud ósea basal debe documentarse antes de prolongar terapia sistémica en enfermedad metastásica.",
-                "La selección entre enzalutamida, apalutamida y abiraterona se ajusta por comorbilidades neurológicas y hepáticas.",
+                "La selección entre darolutamida, enzalutamida, apalutamida y abiraterona se ajusta por comorbilidades neurológicas, cardiovasculares y hepáticas.",
             ],
             alternatives=[
                 "Radioterapia al tumor primario cuando la próstata no ha recibido tratamiento local y el escenario sigue siendo de bajo volumen.",

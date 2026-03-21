@@ -82,10 +82,28 @@ class StructuredBiopsyResult:
     sextant_map: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        d = asdict(self)
-        d["systematic_cores"] = [c.to_dict() for c in self.systematic_cores]
-        d["targeted_cores"] = [c.to_dict() for c in self.targeted_cores]
-        return d
+        return {
+            "biopsy_date": self.biopsy_date,
+            "biopsy_type": self.biopsy_type,
+            "biopsy_route": self.biopsy_route,
+            "biopsy_context": self.biopsy_context,
+            "mri_pirads_at_biopsy": self.mri_pirads_at_biopsy,
+            "systematic_cores": [c.to_dict() for c in self.systematic_cores],
+            "targeted_cores": [c.to_dict() for c in self.targeted_cores],
+            "complications": list(self.complications),
+            "highest_gleason_sum": self.highest_gleason_sum,
+            "highest_isup": self.highest_isup,
+            "total_positive": self.total_positive,
+            "total_cores": self.total_cores,
+            "max_involvement_pct": self.max_involvement_pct,
+            "percent_positive_cores": self.percent_positive_cores,
+            "targeted_positive_count": self.targeted_positive_count,
+            "targeted_total_count": self.targeted_total_count,
+            "targeted_concordance_rate": self.targeted_concordance_rate,
+            "any_cribriform": self.any_cribriform,
+            "any_intraductal": self.any_intraductal,
+            "sextant_map": dict(self.sextant_map),
+        }
 
 
 # ── Funciones auxiliares ─────────────────────────────────────────────────────

@@ -8,7 +8,11 @@ from prostanet.domains.diagnostic_workup.service import DiagnosticWorkupService
 from prostanet.domains.localized_initial.service import LocalizedInitialService
 from prostanet.domains.m0_crpc.service import M0CrpcService
 from prostanet.domains.m1_crpc.service import M1CrpcService
-from prostanet.domains.mcspc_high_volume.service import McspcHighVolumeService
+from prostanet.domains.mcspc_high_volume.service import (
+    McspcHighVolumeMetachronousService,
+    McspcHighVolumeService,
+    McspcHighVolumeSyncService,
+)
 from prostanet.domains.mcspc_low_volume_sync_oligo.service import McspcLowVolumeSyncOligoService
 from prostanet.domains.mcspc_oligo_metachronous.service import McspcOligoMetachronousService
 from prostanet.domains.post_negative_biopsy_followup.service import PostNegativeBiopsyFollowupService
@@ -34,13 +38,15 @@ class ModuleRegistry:
             "adt_progression_verification": AdtProgressionVerificationService(),
             "mcspc_oligo_metachronous": McspcOligoMetachronousService(),
             "mcspc_low_volume_sync_oligo": McspcLowVolumeSyncOligoService(),
+            "mcspc_high_volume_sync": McspcHighVolumeSyncService(),
+            "mcspc_high_volume_metachronous": McspcHighVolumeMetachronousService(),
             "mcspc_high_volume": McspcHighVolumeService(),
             "m0_crpc": M0CrpcService(),
             "m1_crpc": M1CrpcService(),
         }
 
     def list_modules(self) -> list[dict]:
-        return self.evidence_registry.list_modules()
+        return [module for module in self.evidence_registry.list_modules() if module.get("module") != "mcspc_high_volume"]
 
     def get_module_schema(self, module_id: str) -> dict:
         return deepcopy(self.services[module_id].schema())

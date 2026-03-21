@@ -216,6 +216,16 @@
     {% set clinical_compass = profile.clinical_compass if profile else {} %}
     {% set stage_specific_panels = profile.stage_specific_panels if profile else [] %}
     {% set algorithm_panels = profile.algorithm_panels if profile else [] %}
+    {% set risk_tools_panel = profile.risk_tools_panel if profile else [] %}
+    {% set upgrade_panel = profile.upgrade_panel if profile else {} %}
+    {% set risk_tool_missing_inputs = profile.risk_tool_missing_inputs if profile else [] %}
+    {% set risk_tool_fidelity_summary = profile.risk_tool_fidelity_summary if profile else {} %}
+    {% set prognostic_modifiers = profile.prognostic_modifiers if profile else [] %}
+    {% set prognostic_recommended_actions = profile.prognostic_recommended_actions if profile else [] %}
+    {% set prognostic_followup_impact = profile.prognostic_followup_impact if profile else [] %}
+    {% set prognostic_capture_targets = profile.prognostic_capture_targets if profile else [] %}
+    {% set backbone_alignment = profile.backbone_alignment if profile else {} %}
+    {% set cadence_adjusted_by = profile.cadence_adjusted_by if profile else [] %}
     {% set pivotal_panel = profile.pivotal_panel if profile else {} %}
     {% set supportive_evidence_context = profile.supportive_evidence_context if profile else [] %}
     {% set profile_sources = profile.source_citations if profile else [] %}
@@ -250,6 +260,7 @@
     {% set current_response_state = profile.current_response_state if profile else {} %}
     {% set trial_comparable_endpoints = profile.trial_comparable_endpoints if profile else [] %}
     {% set current_trial_comparable_profile = profile.current_trial_comparable_profile if profile else {} %}
+    {% set triplet_decision = profile.triplet_decision if profile else {} %}
     {% set module_data_contracts = profile.module_data_contracts if profile else [] %}
     {% set cohort_completeness = profile.cohort_completeness if profile else {} %}
     {% set research_readiness = profile.research_readiness if profile else {} %}
@@ -261,6 +272,10 @@
     {% set intake_completion_block = profile.intake_completion_block if profile else {} %}
     {% set clinical_journey_events = profile.clinical_journey_events if profile else [] %}
     {% set psa_observability = profile.psa_observability if profile else {} %}
+    {% set psa_forecast = profile.psa_forecast if profile else {} %}
+    {% set forecast_reliability = profile.forecast_reliability if profile else {} %}
+    {% set live_benchmark = profile.live_benchmark if profile else {} %}
+    {% set benchmark_reliability = profile.benchmark_reliability if profile else {} %}
     {% set agenda_resolution_trace = profile.agenda_resolution_trace if profile else [] %}
     {% set supporting_trials = evidence_applicability.supporting_trials if evidence_applicability and evidence_applicability.supporting_trials else [] %}
     {% set focus_primary_trial = supporting_trials[0] if supporting_trials else {} %}
@@ -438,6 +453,266 @@
                     {{ current_trial_comparable_profile.eligibility_status if current_trial_comparable_profile else '' }}
                     {% if current_trial_comparable_profile and current_trial_comparable_profile.matched_trials %}
                     · {{ current_trial_comparable_profile.matched_trials | join(', ') }}
+                    {% endif %}
+                </div>
+                {% if current_trial_comparable_profile and current_trial_comparable_profile.recommended_trial_backbone_label %}
+                <div class="mt-3 text-xs uppercase tracking-wider text-slate-500">Backbone del estudio aplicable</div>
+                <div class="mt-1 text-sm text-cyan-200">{{ current_trial_comparable_profile.recommended_trial_backbone_label }}</div>
+                <div class="mt-2 text-xs text-slate-400">{{ current_trial_comparable_profile.recommended_trial_backbone_note }}</div>
+                {% endif %}
+                {% if backbone_alignment and backbone_alignment.alignment_status %}
+                <div class="mt-3 flex flex-wrap items-center gap-2">
+                    <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border {{ 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200' if backbone_alignment.alignment_status == 'aligned' else 'border-cyan-500/20 bg-cyan-500/10 text-cyan-200' if backbone_alignment.alignment_status == 'adjacent' else 'border-amber-500/20 bg-amber-500/10 text-amber-200' if backbone_alignment.alignment_status == 'divergent' else 'border-slate-700 bg-slate-950/60 text-slate-300' }}">
+                        {{ backbone_alignment.alignment_status }}
+                    </span>
+                    {% if backbone_alignment.current_regimen_label %}
+                    <span class="text-xs text-slate-400">Esquema actual: {{ backbone_alignment.current_regimen_label }}</span>
+                    {% endif %}
+                </div>
+                {% if backbone_alignment.clinical_note %}
+                <div class="mt-2 text-xs text-slate-400">{{ backbone_alignment.clinical_note }}</div>
+                {% endif %}
+                {% endif %}
+            </div>
+        </section>
+        {% endif %}
+
+        {% if triplet_decision and triplet_decision.show %}
+        <section id="profile-triplet-decision" class="pn-surface">
+            <div class="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                <div>
+                    <div class="text-xs uppercase tracking-[0.2em] text-cyan-300">Triplete en mHSPC</div>
+                    <h2 class="mt-2 text-lg font-bold text-white">Por qué sí o por qué no triplete</h2>
+                    <p class="mt-2 text-sm text-slate-400">{{ triplet_decision.state_label }}</p>
+                </div>
+                <span class="px-3 py-2 rounded-full text-[11px] uppercase tracking-[0.18em] border {{ 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200' if triplet_decision.tone == 'emerald' else 'border-cyan-500/20 bg-cyan-500/10 text-cyan-200' if triplet_decision.tone == 'cyan' else 'border-amber-500/20 bg-amber-500/10 text-amber-200' if triplet_decision.tone == 'amber' else 'border-rose-500/20 bg-rose-500/10 text-rose-200' if triplet_decision.tone == 'rose' else 'border-slate-700 bg-slate-950/60 text-slate-300' }}">
+                    {{ triplet_decision.status_label }}
+                </span>
+            </div>
+            <div class="mt-5 grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Decisión clínica</div>
+                    <div class="mt-3 text-sm font-semibold text-white">{{ triplet_decision.primary_reason }}</div>
+                    {% if triplet_decision.docetaxel_fitness_summary %}
+                    <div class="mt-3 text-xs text-slate-400">{{ triplet_decision.docetaxel_fitness_summary }}</div>
+                    {% endif %}
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Por qué sí</div>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in triplet_decision.why_yes or [] %}
+                        <li>{{ item }}</li>
+                        {% else %}
+                        <li>Hoy no existe un argumento suficiente para priorizar triplete.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Por qué no / qué lo limita</div>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in triplet_decision.why_no or [] %}
+                        <li>{{ item }}</li>
+                        {% else %}
+                        <li>Sin limitaciones clínicas adicionales documentadas para triplete.</li>
+                        {% endfor %}
+                    </ul>
+                    {% if triplet_decision.missing_inputs %}
+                    <div class="mt-3 text-xs text-amber-200">Faltan datos: {{ triplet_decision.missing_inputs | join(', ') }}</div>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="mt-4 grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Backbone trial-like preferido</div>
+                    <div class="mt-2 text-sm font-semibold text-cyan-200">{{ triplet_decision.preferred_triplet_backbone_label or 'No corresponde backbone de triplete en este escenario.' }}</div>
+                    {% if triplet_decision.supported_triplet_backbones %}
+                    <div class="mt-2 text-xs text-slate-400">{{ triplet_decision.supported_triplet_backbones | join(', ') }}</div>
+                    {% endif %}
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Alternativa si no va triplete</div>
+                    <div class="mt-2 text-sm font-semibold text-white">{{ triplet_decision.preferred_non_triplet_backbone_label or 'Sin alternativa estructurada visible.' }}</div>
+                </div>
+            </div>
+        </section>
+        {% endif %}
+
+        {% if live_benchmark and live_benchmark.status != 'not_applicable' %}
+        <section id="profile-live-benchmark" class="pn-surface pm-section-anchor">
+            <div class="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                <div>
+                    <div class="text-xs uppercase tracking-[0.2em] text-cyan-300">Benchmark Vivo</div>
+                    <h2 class="mt-2 text-lg font-bold text-white">Paciente vs cohorte institucional vs referencia publicada</h2>
+                    <p class="mt-2 text-sm text-slate-400">{{ live_benchmark.primary_endpoint_label or 'Comparación longitudinal' }}</p>
+                </div>
+                <div class="flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.18em]">
+                    {% for flag in live_benchmark.flags or [] %}
+                    <span class="px-2 py-1 rounded-full border {{ 'border-amber-500/20 bg-amber-500/10 text-amber-200' if flag == 'comparabilidad_limitada' else 'border-rose-500/20 bg-rose-500/10 text-rose-200' if flag == 'por_debajo_de_cohorte_similar' else 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200' if flag == 'dentro_de_rango_esperado' else 'border-slate-700 bg-slate-950/60 text-slate-300' }}">
+                        {{ flag | replace('_', ' ') }}
+                    </span>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="mt-5 grid grid-cols-1 xl:grid-cols-4 gap-4">
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Paciente</div>
+                    <div class="mt-3 text-sm font-semibold text-white">{{ live_benchmark.patient_endpoint.duration_months if live_benchmark.patient_endpoint and live_benchmark.patient_endpoint.duration_months is not none else 'N/D' }}</div>
+                    <div class="mt-1 text-xs text-slate-400">{{ live_benchmark.primary_endpoint_type }}{% if live_benchmark.patient_endpoint and live_benchmark.patient_endpoint.censored %} · censurado{% endif %}</div>
+                    {% if live_benchmark.patient_percentile is not none %}
+                    <div class="mt-3 text-xs text-cyan-200">Percentil institucional: {{ live_benchmark.patient_percentile }}</div>
+                    {% endif %}
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Cohorte similar</div>
+                    <div class="mt-3 text-sm font-semibold text-white">n = {{ benchmark_reliability.cohort_size if benchmark_reliability else live_benchmark.cohort_size or 0 }}</div>
+                    <div class="mt-1 text-xs text-slate-400">Tier: {{ benchmark_reliability.cohort_tier if benchmark_reliability else live_benchmark.cohort_tier or 'none' }}</div>
+                    {% if live_benchmark.curve and live_benchmark.curve.median_survival is not none %}
+                    <div class="mt-3 text-xs text-slate-300">Mediana observada: {{ live_benchmark.curve.median_survival }} meses</div>
+                    {% endif %}
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Referencia publicada</div>
+                    {% if live_benchmark.published_reference and live_benchmark.published_reference.available %}
+                    <div class="mt-3 text-sm font-semibold text-white">{{ live_benchmark.published_reference.label }}</div>
+                    <div class="mt-1 text-xs text-cyan-200">Mediana: {{ live_benchmark.published_reference.median_months }} meses</div>
+                    {% if live_benchmark.published_reference.regimen_label %}
+                    <div class="mt-2 text-xs text-slate-400">Esquema actual: {{ live_benchmark.published_reference.regimen_label }}</div>
+                    {% endif %}
+                    {% else %}
+                    <div class="mt-3 text-sm text-slate-300">Sin referencia publicada específica para el esquema actual.</div>
+                    {% endif %}
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Lectura clínica</div>
+                    <div class="mt-3 text-sm text-slate-300">{{ live_benchmark.narrative or 'Sin lectura clínica adicional.' }}</div>
+                    {% if benchmark_reliability and benchmark_reliability.confidence_label %}
+                    <div class="mt-3 text-xs text-slate-400">Confiabilidad: {{ benchmark_reliability.confidence_label }}</div>
+                    {% endif %}
+                </div>
+            </div>
+            {% if live_benchmark.curve and live_benchmark.curve.times %}
+            <div class="mt-5 rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
+                <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Curva institucional comparable</div>
+                <div class="mt-3 h-64 w-full relative">
+                    <canvas id="liveBenchmarkChart"></canvas>
+                </div>
+            </div>
+            {% endif %}
+        </section>
+        {% endif %}
+
+        {% if prognostic_modifiers or prognostic_followup_impact or prognostic_capture_targets or backbone_alignment %}
+        <section id="profile-prognostic-impact" class="pn-surface pm-section-anchor">
+            <div class="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                <div>
+                    <div class="text-xs uppercase tracking-[0.2em] text-cyan-300">Impacto pronóstico operativo</div>
+                    <h2 class="mt-2 text-lg font-bold text-white">Qué significa hoy y cómo cambia el seguimiento</h2>
+                    <p class="mt-2 text-sm text-slate-400">Integra scores clínicos, genómica documentada y comparabilidad trial-like para convertir riesgo en conducta clínica visible.</p>
+                </div>
+                {% if cadence_adjusted_by %}
+                <div class="flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.18em]">
+                    {% for item in cadence_adjusted_by %}
+                    <span class="px-2 py-1 rounded-full border border-cyan-500/20 bg-cyan-500/10 text-cyan-200">{{ item }}</span>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            <div class="mt-5 grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Qué significa hoy</div>
+                    {% if prognostic_modifiers %}
+                    <div class="mt-3 space-y-3">
+                        {% for item in prognostic_modifiers[:4] %}
+                        <div class="rounded-xl border {{ 'border-rose-500/20 bg-rose-950/10' if item.severity == 'critical' else 'border-amber-500/20 bg-amber-950/10' if item.severity == 'warning' else 'border-slate-700 bg-slate-950/40' }} p-3">
+                            <div class="flex items-center justify-between gap-3">
+                                <div class="text-sm font-semibold text-white">{{ item.title }}</div>
+                                <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border {{ 'border-rose-500/20 bg-rose-500/10 text-rose-200' if item.severity == 'critical' else 'border-amber-500/20 bg-amber-500/10 text-amber-200' if item.severity == 'warning' else 'border-slate-700 bg-slate-950/60 text-slate-300' }}">{{ item.severity }}</span>
+                            </div>
+                            <p class="mt-2 text-sm text-slate-300">{{ item.why_it_matters_now }}</p>
+                            {% if item.decision_domains_affected %}
+                            <div class="mt-3 flex flex-wrap gap-2">
+                                {% for decision in item.decision_domains_affected %}
+                                <span class="px-2 py-1 rounded-full border border-slate-700 bg-slate-950/60 text-[11px] uppercase tracking-[0.18em] text-slate-300">{{ decision }}</span>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <div class="mt-3 text-sm text-slate-400">Sin modificadores pronósticos activos que cambien hoy la conducta.</div>
+                    {% endif %}
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Qué cambia en el seguimiento</div>
+                    {% if prognostic_followup_impact or prognostic_recommended_actions %}
+                    <div class="mt-3 space-y-4">
+                        {% if prognostic_followup_impact %}
+                        <div>
+                            <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Cadencia ajustada</div>
+                            <ul class="mt-2 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                                {% for item in prognostic_followup_impact[:5] %}
+                                <li>{{ item }}</li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                        {% endif %}
+                        {% if prognostic_recommended_actions %}
+                        <div>
+                            <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Acciones recomendadas</div>
+                            <ul class="mt-2 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                                {% for item in prognostic_recommended_actions[:5] %}
+                                <li>{{ item }}</li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% else %}
+                    <div class="mt-3 text-sm text-slate-400">El seguimiento no requiere ajustes adicionales por scores o refinadores pronósticos en este momento.</div>
+                    {% endif %}
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Alineación terapéutica</div>
+                    {% if backbone_alignment and backbone_alignment.trial_backbone_label %}
+                    <div class="mt-3 rounded-xl border border-slate-700/80 bg-slate-950/40 p-3">
+                        <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Backbone trial-like</div>
+                        <div class="mt-2 text-sm font-semibold text-cyan-200">{{ backbone_alignment.trial_backbone_label }}</div>
+                        {% if backbone_alignment.current_regimen_label %}
+                        <div class="mt-3 text-xs uppercase tracking-[0.18em] text-slate-500">Esquema actual</div>
+                        <div class="mt-1 text-sm text-white">{{ backbone_alignment.current_regimen_label }}</div>
+                        {% endif %}
+                        <div class="mt-3 flex flex-wrap items-center gap-2">
+                            <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border {{ 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200' if backbone_alignment.alignment_status == 'aligned' else 'border-cyan-500/20 bg-cyan-500/10 text-cyan-200' if backbone_alignment.alignment_status == 'adjacent' else 'border-amber-500/20 bg-amber-500/10 text-amber-200' if backbone_alignment.alignment_status == 'divergent' else 'border-slate-700 bg-slate-950/60 text-slate-300' }}">
+                                {{ backbone_alignment.alignment_status or 'unknown' }}
+                            </span>
+                            {% if backbone_alignment.matched_trials %}
+                            <span class="text-xs text-slate-400">{{ backbone_alignment.matched_trials | join(', ') }}</span>
+                            {% endif %}
+                        </div>
+                        {% if backbone_alignment.clinical_note %}
+                        <p class="mt-3 text-sm text-slate-300">{{ backbone_alignment.clinical_note }}</p>
+                        {% endif %}
+                    </div>
+                    {% else %}
+                    <div class="mt-3 text-sm text-slate-400">No existe un backbone trial-like suficientemente priorizado para comparar el tratamiento actual.</div>
+                    {% endif %}
+
+                    {% if prognostic_capture_targets %}
+                    <div class="mt-4">
+                        <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Completitud resoluble</div>
+                        <div class="mt-3 flex flex-col gap-2">
+                            {% for target in prognostic_capture_targets[:4] %}
+                            <button
+                                type="button"
+                                class="pn-btn {{ 'pn-btn-secondary' if target.action_type == 'document' else 'pn-btn-primary' }} justify-start px-4 py-2 text-left text-xs"
+                                onclick="handleRiskToolCapture('{{ target.tool_key }}')"
+                            >
+                                {{ target.primary_button_label or target.action_label or target.title }}
+                            </button>
+                            {% endfor %}
+                        </div>
+                    </div>
                     {% endif %}
                 </div>
             </div>
@@ -983,6 +1258,104 @@
                 </div>
                 {% endfor %}
             </div>
+        </section>
+        {% endif %}
+
+        {% if risk_tools_panel or upgrade_panel.has_any_flag %}
+        <section id="profile-risk-tools" class="pn-surface pm-section-anchor">
+            <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between mb-4">
+                <div>
+                    <div class="text-xs uppercase tracking-[0.2em] text-cyan-300">Pronóstico y reclasificación</div>
+                    <h2 class="mt-2 text-lg font-bold text-white">Panel pronóstico contextual</h2>
+                    <p class="mt-2 text-sm text-slate-400">Cada herramienta se muestra solo cuando realmente aplica al momento clínico, diferenciando cálculo local, interpretación desde reporte y estimación referencial.</p>
+                </div>
+                {% if risk_tool_fidelity_summary %}
+                <div class="flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.18em]">
+                    {% for fidelity, count in risk_tool_fidelity_summary.items() %}
+                    <span class="px-2 py-1 rounded-full border border-slate-700 bg-slate-900/60 text-slate-300">{{ fidelity }} · {{ count }}</span>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            {% if risk_tools_panel %}
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                {% for tool in risk_tools_panel %}
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                            <div class="text-sm font-semibold text-white">{{ tool.title }}</div>
+                            <div class="mt-1 text-xs uppercase tracking-[0.18em] text-slate-500">{{ tool.clinical_scope }}</div>
+                        </div>
+                        <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border {{ 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200' if tool.fidelity == 'calculated' else 'border-sky-500/20 bg-sky-500/10 text-sky-200' if tool.fidelity == 'interpreted_from_report' else 'border-amber-500/20 bg-amber-500/10 text-amber-200' if tool.fidelity == 'proxy_estimate' else 'border-slate-700 bg-slate-950/60 text-slate-300' }}">
+                            {{ tool.badge or tool.fidelity }}
+                        </span>
+                    </div>
+                    <div class="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                        <div class="rounded-xl border border-slate-700/80 bg-slate-950/40 p-3">
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Resultado</div>
+                            <div class="mt-2 text-base font-semibold text-white">{{ tool.primary_result }}</div>
+                        </div>
+                        <div class="rounded-xl border border-slate-700/80 bg-slate-950/40 p-3">
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Qué significa</div>
+                            <div class="mt-2 text-sm text-slate-200">{{ tool.meaning }}</div>
+                        </div>
+                    </div>
+                    <div class="mt-3 rounded-xl border border-slate-700/80 bg-slate-950/40 p-3">
+                        <div class="text-xs uppercase tracking-wider text-slate-500">A qué se relaciona</div>
+                        <div class="mt-2 text-sm text-slate-300">{{ tool.clinical_relation }}</div>
+                    </div>
+                    <div class="mt-3 rounded-xl border {{ 'border-amber-500/20 bg-amber-950/10' if tool.missing_inputs else 'border-slate-700/80 bg-slate-950/40' }} p-3">
+                        <div class="text-xs uppercase tracking-wider text-slate-500">Datos usados / faltantes</div>
+                        {% if tool.inputs_used %}
+                        <ul class="mt-2 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                            {% for item in tool.inputs_used %}
+                            <li>{{ item }}</li>
+                            {% endfor %}
+                        </ul>
+                        {% else %}
+                        <div class="mt-2 text-sm text-slate-300">Aún no hay variables estructuradas suficientes.</div>
+                        {% endif %}
+                        {% if tool.missing_inputs %}
+                        <div class="mt-3 text-xs uppercase tracking-wider text-amber-200">Faltan</div>
+                        <div class="mt-2 text-sm text-amber-100">{{ tool.missing_inputs|join(', ') }}</div>
+                        {% endif %}
+                    </div>
+                    <div class="mt-3 text-xs text-slate-400">
+                        {% if tool.status in ['missing_inputs', 'ready_missing_inputs'] %}
+                        Completar datos faltantes.
+                        {% elif tool.fidelity == 'interpreted_from_report' %}
+                        Resultado externo pendiente de actualizar solo si cambia el reporte.
+                        {% elif tool.fidelity == 'proxy_estimate' %}
+                        Interpretar como estimación referencial.
+                        {% else %}
+                        Derivado con datos estructurados del expediente.
+                        {% endif %}
+                    </div>
+                    {% if tool.status in ['missing_inputs', 'ready_missing_inputs'] %}
+                    <div class="mt-4 flex flex-wrap gap-2">
+                        <button type="button" class="pn-btn pn-btn-primary px-4 py-2 text-xs" onclick="handleRiskToolCapture('{{ tool.tool_key }}')">
+                            Completar inputs de {{ tool.title }}
+                        </button>
+                    </div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            {% if upgrade_panel.has_any_flag %}
+            <div class="mt-5 grid grid-cols-1 xl:grid-cols-3 gap-4">
+                {% for item in [upgrade_panel.pathologic_upgrade, upgrade_panel.genomic_upclassification, upgrade_panel.unfavorable_intermediate_behaving_like_high_risk] %}
+                <div class="rounded-2xl border {{ 'border-rose-500/20 bg-rose-950/10' if item.active else 'border-slate-700 bg-slate-900/40' }} p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] {{ 'text-rose-200' if item.active else 'text-slate-500' }}">Reclasificación</div>
+                    <div class="mt-2 text-sm font-semibold text-white">{{ item.label }}</div>
+                    {% if item.detail %}
+                    <p class="mt-2 text-sm text-slate-300">{{ item.detail }}</p>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
         </section>
         {% endif %}
 
@@ -1819,6 +2192,11 @@
                                 {% if item.expected_outcome %}
                                 <div class="mt-2 text-xs text-slate-400">{{ item.expected_outcome }}</div>
                                 {% endif %}
+                                {% if item.recommended_trial_backbone_label %}
+                                <div class="mt-3 text-xs uppercase tracking-wider text-slate-500">Backbone del estudio</div>
+                                <div class="mt-1 text-sm text-cyan-200">{{ item.recommended_trial_backbone_label }}</div>
+                                <div class="mt-1 text-xs text-slate-400">{{ item.recommended_trial_backbone_note }}</div>
+                                {% endif %}
                                 {% if item.clinical_takeaway %}
                                 <div class="mt-2 text-xs text-amber-200">{{ item.clinical_takeaway }}</div>
                                 {% endif %}
@@ -1854,6 +2232,11 @@
                                     <span class="text-xs px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">Elegible</span>
                                 </div>
                                 <div class="text-xs text-slate-400">{{ match.expected_outcome }}</div>
+                                {% if match.recommended_trial_backbone_label %}
+                                <div class="mt-2 text-xs uppercase tracking-wider text-slate-500">Backbone del estudio</div>
+                                <div class="mt-1 text-sm text-cyan-200">{{ match.recommended_trial_backbone_label }}</div>
+                                <div class="mt-1 text-xs text-slate-400">{{ match.recommended_trial_backbone_note }}</div>
+                                {% endif %}
                                 {% if match.criteria_met %}
                                 <div class="mt-2 text-xs text-slate-300">Elegible porque cumple: {{ match.criteria_met[:3]|join(', ') }}</div>
                                 {% endif %}
@@ -1879,17 +2262,21 @@
                                     <span class="text-xs px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/20">Parcial</span>
                                 </div>
                                 <div class="text-xs text-slate-400">{{ match.expected_outcome }}</div>
+                                {% if match.recommended_trial_backbone_label %}
+                                <div class="mt-2 text-xs uppercase tracking-wider text-slate-500">Backbone del estudio</div>
+                                <div class="mt-1 text-sm text-cyan-200">{{ match.recommended_trial_backbone_label }}</div>
+                                {% endif %}
                             </div>
                             {% endfor %}
                         </div>
                     </details>
                     {% endif %}
-                    {% if pivotal_panel.hidden_ineligible_count %}
+                    {% if pivotal_panel.hidden_cross_scenario_count or pivotal_panel.hidden_ineligible_count %}
                     <details class="pn-accordion mt-4 rounded-xl border border-slate-700 bg-slate-950/30 p-4">
                         <summary class="flex items-center justify-between gap-3">
                             <div>
                                 <div class="text-sm font-semibold text-white">No elegibles</div>
-                                <div class="text-xs text-slate-500">{{ pivotal_panel.hidden_ineligible_count }} estudios ocultos por defecto para disminuir ruido visual.</div>
+                                <div class="text-xs text-slate-500">{{ pivotal_panel.hidden_cross_scenario_count or pivotal_panel.hidden_ineligible_count }} estudios ocultos por no corresponder al subescenario clínico actual o para disminuir ruido visual.</div>
                             </div>
                         </summary>
                         <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1967,6 +2354,97 @@
             </div>
         </section>
 
+        {% if psa_forecast and psa_forecast.status != 'not_applicable' %}
+        <section id="profile-psa-forecast" class="pn-surface pm-section-anchor">
+            <div class="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                <div>
+                    <div class="text-xs uppercase tracking-[0.2em] text-cyan-300">PSA prospectivo</div>
+                    <h2 class="mt-2 text-lg font-bold text-white">Time-Machine PSA</h2>
+                    <p class="mt-2 text-sm text-slate-400">
+                        {{ psa_forecast.current_line_label or 'Línea actual' }}
+                        {% if psa_forecast.current_regimen_label %}· {{ psa_forecast.current_regimen_label }}{% endif %}
+                    </p>
+                </div>
+                <span class="px-3 py-2 rounded-full text-[11px] uppercase tracking-[0.18em] border {{ 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200' if forecast_reliability.confidence_label == 'high' else 'border-cyan-500/20 bg-cyan-500/10 text-cyan-200' if forecast_reliability.confidence_label == 'medium' else 'border-amber-500/20 bg-amber-500/10 text-amber-200' if forecast_reliability.confidence_label == 'low' else 'border-slate-700 bg-slate-950/60 text-slate-300' }}">
+                    {{ forecast_reliability.confidence_label or psa_forecast.status }}
+                </span>
+            </div>
+            <div class="mt-5 grid grid-cols-1 xl:grid-cols-4 gap-4">
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">3 meses</div>
+                    <div class="mt-3 text-lg font-semibold text-white">{{ psa_forecast.forecast_points[0].expected_psa if psa_forecast.forecast_points|length > 0 else 'N/D' }}</div>
+                    {% if psa_forecast.forecast_points|length > 0 %}
+                    <div class="mt-1 text-xs text-slate-400">{{ psa_forecast.forecast_points[0].lower_psa }} - {{ psa_forecast.forecast_points[0].upper_psa }} ng/mL</div>
+                    {% endif %}
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">6 meses</div>
+                    <div class="mt-3 text-lg font-semibold text-white">{{ psa_forecast.forecast_points[1].expected_psa if psa_forecast.forecast_points|length > 1 else 'N/D' }}</div>
+                    {% if psa_forecast.forecast_points|length > 1 %}
+                    <div class="mt-1 text-xs text-slate-400">{{ psa_forecast.forecast_points[1].lower_psa }} - {{ psa_forecast.forecast_points[1].upper_psa }} ng/mL</div>
+                    {% endif %}
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">12 meses</div>
+                    <div class="mt-3 text-lg font-semibold text-white">{{ psa_forecast.forecast_points[2].expected_psa if psa_forecast.forecast_points|length > 2 else 'N/D' }}</div>
+                    {% if psa_forecast.forecast_points|length > 2 %}
+                    <div class="mt-1 text-xs text-slate-400">{{ psa_forecast.forecast_points[2].lower_psa }} - {{ psa_forecast.forecast_points[2].upper_psa }} ng/mL</div>
+                    {% endif %}
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">PSADT proyectado</div>
+                    <div class="mt-3 text-lg font-semibold text-white">{{ psa_forecast.projected_psadt_months if psa_forecast.projected_psadt_months is not none else 'N/D' }}</div>
+                    <div class="mt-1 text-xs text-slate-400">Si la pendiente actual persiste</div>
+                </div>
+            </div>
+            <div class="mt-4 grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Lectura clínica</div>
+                    <div class="mt-3 text-sm text-slate-300">
+                        {% if psa_forecast.status == 'insufficient_data' %}
+                        No se muestra forecast numérico porque la línea actual no tiene datos suficientes o es demasiado reciente.
+                        {% elif psa_forecast.status == 'low_confidence' %}
+                        La tendencia actual permite una orientación prospectiva, pero con incertidumbre elevada; úsela como señal de seguimiento, no como decisión terapéutica automática.
+                        {% else %}
+                        Si la tendencia actual persiste, esta proyección anticipa cinética de PSA y cruces de umbral dentro de la línea terapéutica estable actual.
+                        {% endif %}
+                    </div>
+                    {% if forecast_reliability.reasons %}
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in forecast_reliability.reasons %}
+                        <li>{{ item }}</li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Alertas predictivas</div>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in psa_forecast.predictive_alerts or [] %}
+                        <li>{{ item.message }}</li>
+                        {% else %}
+                        <li>Sin alertas predictivas críticas con la tendencia actual.</li>
+                        {% endfor %}
+                    </ul>
+                    {% if psa_forecast.threshold_events %}
+                    <div class="mt-4 text-xs uppercase tracking-[0.18em] text-slate-500">Cruces esperados</div>
+                    <div class="mt-2 space-y-2">
+                        {% for item in psa_forecast.threshold_events[:4] %}
+                        <div class="rounded-xl border border-slate-700/80 bg-slate-900/50 p-3">
+                            <div class="text-sm text-white">{{ item.label }}</div>
+                            <div class="mt-1 text-xs text-slate-400">
+                                {{ item.status | replace('_', ' ') }}
+                                {% if item.estimated_crossing_date %}· {{ item.estimated_crossing_date }}{% endif %}
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </section>
+        {% endif %}
+
         {% if benchmarking_flags %}
         <details id="profile-fitness" class="pn-accordion pn-surface pm-section-anchor">
             <summary class="flex items-center justify-between gap-3">
@@ -2000,7 +2478,7 @@
             <summary class="flex items-center justify-between gap-3">
                 <div>
                     <h2 class="text-lg font-bold text-white">📊 Torre de control del antígeno prostático específico</h2>
-                    <p class="mt-1 text-sm text-slate-400">Vista observacional integrada de PSA, kinetics y bandas de tratamiento desde el longitudinal real.</p>
+                    <p class="mt-1 text-sm text-slate-400">Vista observacional integrada de APE, forecast y secuencia terapéutica en un eje temporal compartido.</p>
                 </div>
             </summary>
             <div class="mt-4">
@@ -2041,9 +2519,24 @@
                 </div>
             </div>
 
-            <!-- PSA Chart with zones -->
+            <!-- PSA Chart + Integrated Treatment Timeline -->
             <div class="h-72 w-full relative">
                 <canvas id="psaControlChart"></canvas>
+            </div>
+            <div class="mt-5 rounded-xl border border-slate-700/70 bg-slate-950/30 p-4">
+                <div class="flex items-center justify-between gap-3">
+                    <div>
+                        <div class="text-sm font-semibold text-white">Líneas terapéuticas correlacionadas con la respuesta del APE</div>
+                        <p class="mt-1 text-xs text-slate-400">Cada barra representa una línea activa en fechas absolutas y marca hitos de respuesta o progresión sobre el mismo eje que la curva superior.</p>
+                    </div>
+                    <span class="text-[11px] uppercase tracking-[0.18em] text-cyan-300">Timeline terapéutico integrado</span>
+                </div>
+                <div id="psaTreatmentTimelineWrap" class="mt-4 h-56 w-full relative">
+                    <canvas id="psaTreatmentTimelineChart"></canvas>
+                </div>
+                <div id="psaTreatmentTimelineEmpty" class="mt-3 hidden rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-3 text-sm text-slate-400">
+                    Sin líneas terapéuticas longitudinales suficientes para construir el timeline integrado todavía.
+                </div>
             </div>
             {% if psa_observability.line_segments %}
             <div class="mt-4 grid grid-cols-1 xl:grid-cols-2 gap-3">
@@ -3409,25 +3902,9 @@
         </details>
         {% endif %}
 
-        <!-- ── 11f. Visualización de respuesta terapéutica (Spider + Swimmer) ── -->
+        <!-- ── 11f. Visualización de respuesta terapéutica (Spider) ── -->
         {% if copilot.response_visualization %}
         {% set viz = copilot.response_visualization %}
-
-        {% if viz.swimmer|length > 0 %}
-        <details class="pn-accordion pn-surface" open>
-            <summary class="flex items-center justify-between gap-3">
-                <div>
-                    <h2 class="text-lg font-bold text-white">🏊 Gráfico de nadador — Duración de tratamientos</h2>
-                    <p class="mt-1 text-sm text-slate-400">Duración de cada línea terapéutica con marcadores de respuesta y progresión.</p>
-                </div>
-            </summary>
-            <div class="mt-4">
-                <div class="h-64 w-full">
-                    <canvas id="swimmerChart"></canvas>
-                </div>
-            </div>
-        </details>
-        {% endif %}
 
         {% if viz.spider.has_data %}
         <details class="pn-accordion pn-surface">
@@ -3695,13 +4172,34 @@
 
         // ── Datos longitudinales reales ──────────────────────────────────────
         const psaObservability = {{ psa_observability|default({}, true)|tojson }};
+        const psaForecast = {{ psa_forecast|default({}, true)|tojson }};
+        const liveBenchmark = {{ live_benchmark|default({}, true)|tojson }};
+        const psaTrajectory = {{ (copilot.response_visualization.psa_trajectory if copilot.response_visualization else {}) | default({}, true) | tojson }};
         const psaPoints = (psaObservability.points || []);
+        const forecastCurve = (psaForecast.forecast_curve || []);
+        const integratedTreatmentTimeline = psaTrajectory.integrated_treatment_timeline || {};
+        const timelineAxisDates = integratedTreatmentTimeline.axis_dates || [];
         const dates = psaPoints.map((point) => point.date);
         const psaValues = psaPoints.map((point) => point.psa);
-        const testoValues = [{{ patient.baseline.testosterone_baseline or 0 }}];
+        const forecastDates = forecastCurve.map((point) => point.date);
+        const combinedPsaDates = Array.from(new Set([...dates, ...forecastDates, ...timelineAxisDates].filter(Boolean))).sort();
+        const psaPointLookup = new Map(psaPoints.map((point) => [point.date, Number(point.psa)]));
+        const forecastLookup = new Map(forecastCurve.map((point) => [point.date, point]));
+        const actualPsaSeries = combinedPsaDates.map((label) => psaPointLookup.has(label) ? psaPointLookup.get(label) : null);
+        const forecastExpectedSeries = combinedPsaDates.map((label) => forecastLookup.has(label) ? Number(forecastLookup.get(label).expected_psa) : null);
+        const forecastLowerSeries = combinedPsaDates.map((label) => forecastLookup.has(label) ? Number(forecastLookup.get(label).lower_psa) : null);
+        const forecastUpperSeries = combinedPsaDates.map((label) => forecastLookup.has(label) ? Number(forecastLookup.get(label).upper_psa) : null);
+        const testosteronePoints = [];
+        {% if patient.identity.diagnosis_date and patient.baseline.testosterone_baseline is not none %}
+        testosteronePoints.push({ date: '{{ patient.identity.diagnosis_date }}', value: {{ patient.baseline.testosterone_baseline }} });
+        {% endif %}
         {% for visit in patient.follow_ups %}
-        testoValues.push({{ visit.testosterone_current or 0 }});
+        {% if visit.visit_date and visit.testosterone_current is not none %}
+        testosteronePoints.push({ date: '{{ visit.visit_date }}', value: {{ visit.testosterone_current }} });
+        {% endif %}
         {% endfor %}
+        const testosteroneLookup = new Map(testosteronePoints.map((point) => [point.date, Number(point.value)]));
+        const testoSeries = combinedPsaDates.map((label) => testosteroneLookup.has(label) ? testosteroneLookup.get(label) : null);
 
         // ── PSA Metrics ───────────────────────────────────────────────────────
         const nadirPSAEl = document.getElementById('nadirPSA');
@@ -3733,15 +4231,6 @@
         if (psaCanvas) {
         const ctxPSA = psaCanvas.getContext('2d');
         const controlAnnotations = {};
-        (psaObservability.treatment_bands || []).forEach((band, index) => {
-            controlAnnotations['tx' + index] = {
-                type: 'box',
-                xMin: band.start_date,
-                xMax: band.end_date,
-                backgroundColor: band.color,
-                borderWidth: 0,
-            };
-        });
         controlAnnotations.bcrLine = {
             type: 'line',
             yMin: 0.2, yMax: 0.2,
@@ -3756,34 +4245,73 @@
                 font: { size: 10 }
             }
         };
+        const psaDatasets = [
+            {
+                label: humanizeClinicalText('PSA (ng/mL)'),
+                data: actualPsaSeries,
+                borderColor: '#3b82f6',
+                backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                borderWidth: 3,
+                tension: 0.3,
+                pointBackgroundColor: '#1d4ed8',
+                pointRadius: 5,
+                fill: true,
+                yAxisID: 'y'
+            },
+        ];
+        if ((psaForecast.show || psaForecast.status === 'low_confidence') && forecastCurve.length) {
+            psaDatasets.push(
+                {
+                    label: humanizeClinicalText('Límite inferior forecast'),
+                    data: forecastLowerSeries,
+                    borderColor: 'rgba(245, 158, 11, 0.12)',
+                    backgroundColor: 'rgba(245, 158, 11, 0.08)',
+                    borderWidth: 1,
+                    pointRadius: 0,
+                    tension: 0.25,
+                    fill: '+1',
+                    yAxisID: 'y'
+                },
+                {
+                    label: humanizeClinicalText('Límite superior forecast'),
+                    data: forecastUpperSeries,
+                    borderColor: 'rgba(245, 158, 11, 0.12)',
+                    backgroundColor: 'rgba(245, 158, 11, 0.08)',
+                    borderWidth: 1,
+                    pointRadius: 0,
+                    tension: 0.25,
+                    fill: false,
+                    yAxisID: 'y'
+                },
+                {
+                    label: humanizeClinicalText('PSA esperado (3/6/12m)'),
+                    data: forecastExpectedSeries,
+                    borderColor: '#f59e0b',
+                    backgroundColor: 'rgba(245, 158, 11, 0.08)',
+                    borderWidth: 2,
+                    borderDash: [6, 4],
+                    tension: 0.25,
+                    pointRadius: 0,
+                    fill: false,
+                    yAxisID: 'y'
+                }
+            );
+        }
+        psaDatasets.push({
+            label: 'Testosterona (ng/dL)',
+            data: testoSeries,
+            borderColor: '#10b981',
+            borderDash: [5, 5],
+            borderWidth: 2,
+            tension: 0.3,
+            pointRadius: 0,
+            yAxisID: 'y1'
+        });
         new Chart(ctxPSA, {
             type: 'line',
             data: {
-                labels: dates,
-                datasets: [
-                    {
-                        label: humanizeClinicalText('PSA (ng/mL)'),
-                        data: psaValues,
-                        borderColor: '#3b82f6',
-                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                        borderWidth: 3,
-                        tension: 0.3,
-                        pointBackgroundColor: '#1d4ed8',
-                        pointRadius: 5,
-                        fill: true,
-                        yAxisID: 'y'
-                    },
-                    {
-                        label: 'Testosterona (ng/dL)',
-                        data: testoValues,
-                        borderColor: '#10b981',
-                        borderDash: [5, 5],
-                        borderWidth: 2,
-                        tension: 0.3,
-                        pointRadius: 0,
-                        yAxisID: 'y1'
-                    }
-                ]
+                labels: combinedPsaDates,
+                datasets: psaDatasets
             },
             options: {
                 responsive: true,
@@ -3810,6 +4338,183 @@
                 }
             }
         });
+        }
+
+        const treatmentTimelineCanvas = document.getElementById('psaTreatmentTimelineChart');
+        const treatmentTimelineEmpty = document.getElementById('psaTreatmentTimelineEmpty');
+        if (treatmentTimelineCanvas) {
+            const lanes = integratedTreatmentTimeline.treatment_lanes || [];
+            const markers = integratedTreatmentTimeline.lane_markers || [];
+            const sharedAxisDates = combinedPsaDates.length ? combinedPsaDates : (integratedTreatmentTimeline.axis_dates || []);
+            if (!lanes.length || !sharedAxisDates.length) {
+                treatmentTimelineCanvas.classList.add('hidden');
+                if (treatmentTimelineEmpty) {
+                    treatmentTimelineEmpty.classList.remove('hidden');
+                }
+            } else {
+                treatmentTimelineCanvas.classList.remove('hidden');
+                if (treatmentTimelineEmpty) {
+                    treatmentTimelineEmpty.classList.add('hidden');
+                }
+                const timelineCtx = treatmentTimelineCanvas.getContext('2d');
+                const laneLabels = new Map();
+                const laneDatasets = lanes.map((lane, laneIndex) => {
+                    laneLabels.set(laneIndex, humanizeClinicalText(lane.label || `Línea ${lane.line_of_therapy || laneIndex + 1}`));
+                    return {
+                        label: humanizeClinicalText(lane.label || `Línea ${lane.line_of_therapy || laneIndex + 1}`),
+                        data: sharedAxisDates.map((axisDate) => {
+                            if (!lane.start_date || !lane.end_date) {
+                                return null;
+                            }
+                            return axisDate >= lane.start_date && axisDate <= lane.end_date ? laneIndex : null;
+                        }),
+                        borderColor: lane.color || '#64748b',
+                        backgroundColor: `${lane.color || '#64748b'}33`,
+                        borderWidth: 12,
+                        pointRadius: 0,
+                        pointHoverRadius: 0,
+                        spanGaps: false,
+                        tension: 0,
+                        fill: false,
+                    };
+                });
+                const markerDataset = {
+                    type: 'scatter',
+                    label: humanizeClinicalText('Hitos clínicos'),
+                    data: markers
+                        .filter((marker) => marker.date)
+                        .map((marker) => ({
+                            x: marker.date,
+                            y: marker.lane_index,
+                            markerType: marker.type,
+                            markerLabel: marker.label || marker.type,
+                            laneLabel: marker.lane_label,
+                            drugScheme: marker.drug_scheme,
+                        })),
+                    backgroundColor: markers.map((marker) => marker.color || '#f59e0b'),
+                    borderColor: '#ffffff',
+                    borderWidth: 1,
+                    pointRadius: 6,
+                    pointHoverRadius: 7,
+                    showLine: false,
+                };
+                new Chart(timelineCtx, {
+                    type: 'line',
+                    data: {
+                        labels: sharedAxisDates,
+                        datasets: [...laneDatasets, markerDataset]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'nearest', intersect: false },
+                        plugins: {
+                            legend: { labels: { color: '#94a3b8' } },
+                            tooltip: {
+                                callbacks: {
+                                    title: (items) => items[0]?.label || '',
+                                    label: (ctx) => {
+                                        if (ctx.dataset.type === 'scatter') {
+                                            const raw = ctx.raw || {};
+                                            return `${humanizeClinicalText(raw.markerLabel || raw.markerType || 'Evento')} — ${humanizeClinicalText(raw.laneLabel || '')}`;
+                                        }
+                                        const lane = lanes[ctx.datasetIndex];
+                                        const duration = lane?.duration_months ? `${lane.duration_months} meses` : 'duración no disponible';
+                                        const outcome = lane?.ongoing ? 'Ongoing' : (lane?.outcome || 'Sin desenlace documentado');
+                                        return `${humanizeClinicalText(lane?.label || '')} — ${duration} — ${humanizeClinicalText(outcome)}`;
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                type: 'category',
+                                grid: { color: '#334155' },
+                                ticks: { color: '#94a3b8', maxRotation: 45, minRotation: 0 }
+                            },
+                            y: {
+                                type: 'linear',
+                                min: -0.5,
+                                max: Math.max(lanes.length - 0.5, 0.5),
+                                grid: { color: '#1e293b' },
+                                ticks: {
+                                    stepSize: 1,
+                                    color: '#94a3b8',
+                                    callback: (value) => laneLabels.get(Number(value)) || ''
+                                },
+                                title: {
+                                    display: true,
+                                    text: humanizeClinicalText('Líneas terapéuticas'),
+                                    color: '#94a3b8'
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+        }
+
+        const liveBenchmarkCanvas = document.getElementById('liveBenchmarkChart');
+        if (liveBenchmarkCanvas && liveBenchmark.curve && (liveBenchmark.curve.times || []).length) {
+            const benchmarkCtx = liveBenchmarkCanvas.getContext('2d');
+            const patientDuration = liveBenchmark.patient_endpoint?.duration_months;
+            const benchmarkAnnotations = {};
+            if (patientDuration !== null && patientDuration !== undefined) {
+                benchmarkAnnotations.patientMarker = {
+                    type: 'line',
+                    xMin: patientDuration,
+                    xMax: patientDuration,
+                    borderColor: '#22d3ee',
+                    borderWidth: 2,
+                    borderDash: [6, 4],
+                    label: {
+                        display: true,
+                        content: humanizeClinicalText('Paciente actual'),
+                        position: 'start',
+                        color: '#22d3ee',
+                        backgroundColor: 'rgba(8, 47, 73, 0.85)',
+                        font: { size: 10 }
+                    }
+                };
+            }
+            new Chart(benchmarkCtx, {
+                type: 'line',
+                data: {
+                    labels: liveBenchmark.curve.times,
+                    datasets: [{
+                        label: humanizeClinicalText(liveBenchmark.primary_endpoint_label || 'Cohorte institucional'),
+                        data: (liveBenchmark.curve.survival_probs || []).map((value) => Math.round(Number(value || 0) * 1000) / 10),
+                        borderColor: '#22d3ee',
+                        backgroundColor: 'rgba(34, 211, 238, 0.08)',
+                        borderWidth: 2,
+                        tension: 0.15,
+                        pointRadius: 2,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { labels: { color: '#94a3b8' } },
+                        annotation: { annotations: benchmarkAnnotations }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: '#334155' },
+                            ticks: { color: '#94a3b8' },
+                            title: { display: true, text: humanizeClinicalText('Meses'), color: '#94a3b8' }
+                        },
+                        y: {
+                            min: 0,
+                            max: 100,
+                            grid: { color: '#334155' },
+                            ticks: { color: '#94a3b8', callback: (value) => `${value}%` },
+                            title: { display: true, text: humanizeClinicalText('Supervivencia'), color: '#94a3b8' }
+                        }
+                    }
+                }
+            });
         }
 
         // ── Waterfall Chart ───────────────────────────────────────────────────
@@ -3919,93 +4624,6 @@
         }
         {% endif %}
 
-        // ── Swimmer Plot ─────────────────────────────────────────────────────
-        {% if copilot.response_visualization and copilot.response_visualization.swimmer|length > 0 %}
-        const swimCtx = document.getElementById('swimmerChart')?.getContext('2d');
-        if (swimCtx) {
-            const swimData = {{ copilot.response_visualization.swimmer | default([], true) | tojson }};
-            const swimLabels = swimData.map(d => humanizeClinicalText(d.label));
-            const swimDatasets = [{
-                label: 'Duración (meses)',
-                data: swimData.map((d, i) => ({
-                    x: [d.start_month, d.start_month + d.duration_months],
-                    y: i
-                })),
-                backgroundColor: swimData.map(d => d.color),
-                borderRadius: 4,
-                borderSkipped: false,
-                barPercentage: 0.6,
-            }];
-
-            new Chart(swimCtx, {
-                type: 'bar',
-                data: {
-                    labels: swimLabels,
-                    datasets: [{
-                        label: 'Duración (meses)',
-                        data: swimData.map(d => [d.start_month, d.start_month + d.duration_months]),
-                        backgroundColor: swimData.map(d => d.color + 'cc'),
-                        borderColor: swimData.map(d => d.color),
-                        borderWidth: 1,
-                        borderRadius: 4,
-                        borderSkipped: false,
-                        barPercentage: 0.5,
-                    }]
-                },
-                options: {
-                    indexAxis: 'y',
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: { display: false },
-                        tooltip: {
-                            callbacks: {
-                                label: (ctx) => {
-                                    const d = swimData[ctx.dataIndex];
-                                    let txt = `${d.duration_months} meses`;
-                                    if (d.outcome) txt += ` — ${humanizeClinicalText(d.outcome)}`;
-                                    if (d.markers?.length) txt += ' | ' + d.markers.map(m => m.type).join(', ');
-                                    return txt;
-                                }
-                            }
-                        },
-                        annotation: {
-                            annotations: (() => {
-                                const annots = {};
-                                swimData.forEach((d, idx) => {
-                                    (d.markers || []).forEach((m, mi) => {
-                                        annots[`m${idx}_${mi}`] = {
-                                            type: 'point',
-                                            xValue: m.month,
-                                            yValue: idx,
-                                            backgroundColor: m.color,
-                                            borderColor: '#fff',
-                                            borderWidth: 1,
-                                            radius: 6,
-                                        };
-                                    });
-                                });
-                                return annots;
-                            })()
-                        }
-                    },
-                    scales: {
-                        x: {
-                            type: 'linear',
-                            grid: { color: '#334155' },
-                            ticks: { color: '#94a3b8', callback: v => v + ' mo' },
-                            title: { display: true, text: 'Meses desde inicio', color: '#94a3b8' }
-                        },
-                        y: {
-                            grid: { display: false },
-                            ticks: { color: '#94a3b8' }
-                        }
-                    }
-                }
-            });
-        }
-        {% endif %}
-
         // ── Spider Plot ──────────────────────────────────────────────────────
         {% if copilot.response_visualization and copilot.response_visualization.spider.has_data %}
         const spiderCtx = document.getElementById('spiderChart')?.getContext('2d');
@@ -4062,20 +4680,63 @@
                     label: { display: true, content: humanizeClinicalText(band.label), position: 'start', color: '#94a3b8', font: { size: 9 } }
                 };
             });
+            const trajectoryForecast = trajData.forecast_curve || psaForecast.forecast_curve || [];
+            const trajectoryLabels = Array.from(new Set([
+                ...(trajData.points || []).map(p => p.date),
+                ...trajectoryForecast.map(p => p.date),
+            ]));
+            const trajectoryLookup = new Map((trajData.points || []).map((point) => [point.date, Number(point.psa)]));
+            const trajectoryForecastLookup = new Map(trajectoryForecast.map((point) => [point.date, point]));
+            const trajectoryDatasets = [{
+                label: 'PSA (ng/mL)',
+                data: trajectoryLabels.map((label) => trajectoryLookup.has(label) ? trajectoryLookup.get(label) : null),
+                borderColor: '#22d3ee',
+                backgroundColor: '#22d3ee33',
+                tension: 0.3,
+                pointRadius: 3,
+                fill: true,
+            }];
+            if (((trajData.forecast_status || psaForecast.status) === 'ready' || (trajData.forecast_status || psaForecast.status) === 'low_confidence') && trajectoryForecast.length) {
+                trajectoryDatasets.push(
+                    {
+                        label: 'Límite inferior forecast',
+                        data: trajectoryLabels.map((label) => trajectoryForecastLookup.has(label) ? Number(trajectoryForecastLookup.get(label).lower_psa) : null),
+                        borderColor: 'rgba(245, 158, 11, 0.12)',
+                        backgroundColor: 'rgba(245, 158, 11, 0.08)',
+                        borderWidth: 1,
+                        pointRadius: 0,
+                        tension: 0.25,
+                        fill: '+1',
+                    },
+                    {
+                        label: 'Límite superior forecast',
+                        data: trajectoryLabels.map((label) => trajectoryForecastLookup.has(label) ? Number(trajectoryForecastLookup.get(label).upper_psa) : null),
+                        borderColor: 'rgba(245, 158, 11, 0.12)',
+                        backgroundColor: 'rgba(245, 158, 11, 0.08)',
+                        borderWidth: 1,
+                        pointRadius: 0,
+                        tension: 0.25,
+                        fill: false,
+                    },
+                    {
+                        label: 'PSA esperado',
+                        data: trajectoryLabels.map((label) => trajectoryForecastLookup.has(label) ? Number(trajectoryForecastLookup.get(label).expected_psa) : null),
+                        borderColor: '#f59e0b',
+                        backgroundColor: 'rgba(245, 158, 11, 0.08)',
+                        borderDash: [6, 4],
+                        borderWidth: 2,
+                        tension: 0.25,
+                        pointRadius: 0,
+                        fill: false,
+                    }
+                );
+            }
 
             new Chart(trajCtx, {
                 type: 'line',
                 data: {
-                    labels: trajData.points.map(p => p.date),
-                    datasets: [{
-                        label: 'PSA (ng/mL)',
-                        data: trajData.points.map(p => p.psa),
-                        borderColor: '#22d3ee',
-                        backgroundColor: '#22d3ee33',
-                        tension: 0.3,
-                        pointRadius: 3,
-                        fill: true,
-                    }]
+                    labels: trajectoryLabels,
+                    datasets: trajectoryDatasets
                 },
                 options: {
                     responsive: true,
@@ -4102,6 +4763,8 @@
         const defaultVisitSchema = {{ visit_schema|default({}, true)|tojson }};
         const defaultAgendaItemContext = {{ agenda_item_form_context|default({}, true)|tojson }};
         let copilotAlerts = {{ (copilot.clinical_alerts or [])|tojson }};
+        let prognosticCaptureTargets = {{ ((profile_view.prognostic_capture_targets if profile_view and profile_view.prognostic_capture_targets is defined else []))|tojson }};
+        let backboneAlignmentPayload = {{ ((profile_view.backbone_alignment if profile_view and profile_view.backbone_alignment is defined else {}))|tojson }};
         let defaultPlanKey = {{ ((profile_view.master_followup_plan.plan_key if profile_view and profile_view.master_followup_plan is defined else ''))|tojson }};
         let masterFollowupPlanPayload = {{ ((profile_view.master_followup_plan if profile_view and profile_view.master_followup_plan is defined else {}))|tojson }};
 
@@ -4512,6 +5175,8 @@
                 'profile-executive-summary',
                 'profile-next-best-action',
                 'profile-agenda',
+                'profile-prognostic-impact',
+                'profile-risk-tools',
                 'copilot-alerts-panel',
                 'profile-documents',
             ].forEach((sectionId) => syncSectionFromDocument(doc, sectionId));
@@ -4523,6 +5188,8 @@
                 const signalsPayload = await signalsResp.json();
                 if (signalsPayload?.success) {
                     copilotAlerts = signalsPayload.copilot_alerts || [];
+                    prognosticCaptureTargets = signalsPayload.prognostic_capture_targets || [];
+                    backboneAlignmentPayload = signalsPayload.backbone_alignment || {};
                     masterFollowupPlanPayload = signalsPayload.master_followup_plan || {};
                     defaultPlanKey = masterFollowupPlanPayload.plan_key || defaultPlanKey;
                 }
@@ -4818,6 +5485,50 @@
             if (documentTypeInput && alert?.expected_document_type) {
                 documentTypeInput.value = alert.expected_document_type;
             }
+        }
+
+        function findRiskToolCaptureTarget(toolKey) {
+            return (prognosticCaptureTargets || []).find((item) => String(item.tool_key || '') === String(toolKey || '')) || null;
+        }
+
+        async function handleRiskToolCapture(toolKey) {
+            const target = findRiskToolCaptureTarget(toolKey);
+            if (!target) {
+                window.alert('No hay una captura dirigida configurada para esta herramienta.');
+                return;
+            }
+            if ((target.action_type || 'capture') === 'document') {
+                primeDocumentFlow(target);
+                return;
+            }
+            setMiniCaptureHiddenContext({
+                agendaIds: [],
+                encounterKey: '',
+                planKey: defaultPlanKey,
+                alertKeys: [],
+            });
+            try {
+                await loadVisitSchema({
+                    captureContext: {
+                        raw_fields: target.raw_fields || [],
+                        title: target.title || 'Completar score pronóstico',
+                        rationale: target.rationale || 'Complete solo los datos faltantes para cerrar la herramienta pronóstica.',
+                        decision_affected: target.decision_affected || target.tool_key || '',
+                        module_owner: target.module_owner || 'risk_tools',
+                        input_group: target.capture_group || 'risk_tool_completion',
+                    },
+                    renderMode: 'mini',
+                    alertPayload: {
+                        title: target.title || 'Completar score pronóstico',
+                        message: target.rationale || '',
+                        primary_button_label: target.primary_button_label || target.action_label || 'Completar datos faltantes',
+                    },
+                });
+            } catch (error) {
+                window.alert('Error: ' + error.message);
+                return;
+            }
+            openMiniCaptureModal();
         }
 
         async function handleCopilotAlert(alertKey) {

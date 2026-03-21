@@ -118,6 +118,35 @@
                 <!-- Filled by JS -->
             </div>
         </div>
+
+        <div class="chart-container">
+            <div class="mb-4 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                    <h3 class="text-sm font-semibold text-white">Centro estadístico de scores pronósticos y reclasificación</h3>
+                    <p class="mt-1 text-xs text-slate-500">Disponibilidad, completitud y señal biológica adversa por herramienta contextualizada al momento clínico.</p>
+                </div>
+            </div>
+            <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <h4 class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">CAPRA / CAPRA-S</h4>
+                    <div class="mt-4 grid grid-cols-1 gap-3" id="riskScoreBuckets">
+                        <!-- Filled by JS -->
+                    </div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4 xl:col-span-2">
+                    <h4 class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Herramientas pronósticas por estado</h4>
+                    <div class="mt-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3" id="riskToolStatsGrid">
+                        <!-- Filled by JS -->
+                    </div>
+                    <div class="mt-5 grid grid-cols-1 md:grid-cols-3 gap-3" id="upgradeStatsGrid">
+                        <!-- Filled by JS -->
+                    </div>
+                    <div class="mt-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3" id="prognosticImpactGrid">
+                        <!-- Filled by JS -->
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 {% endblock %}
 
@@ -207,6 +236,7 @@
             renderResearchLines();
             renderBenchmarkCards();
             renderCalibrationCards();
+            renderRiskToolStats();
         }
 
         // ── Chart: Metastasis Distribution ────────────────────────────────────
@@ -744,6 +774,135 @@
                 </div>`;
             }).join('');
             window.clinicalPresentation?.normalizeDocument(container);
+        }
+
+        function renderRiskToolStats() {
+            const scoreBuckets = document.getElementById('riskScoreBuckets');
+            const toolGrid = document.getElementById('riskToolStatsGrid');
+            const upgradeGrid = document.getElementById('upgradeStatsGrid');
+            const prognosticGrid = document.getElementById('prognosticImpactGrid');
+            const capra = dashboardData.capra_distribution || {};
+            const damico = dashboardData.damico_distribution || {};
+            const capraS = dashboardData.capra_s_distribution || {};
+            const toolStats = dashboardData.risk_tool_stats || {};
+            const upgradeStats = dashboardData.upgrade_stats || {};
+            const modifierStats = dashboardData.prognostic_modifier_stats || {};
+            const alignmentStats = dashboardData.backbone_alignment_stats || {};
+
+            const scoreCards = [
+                { title: 'CAPRA', data: capra, surfaceClass: 'border-cyan-500/15 bg-cyan-500/5' },
+                { title: "D'Amico", data: damico, surfaceClass: 'border-emerald-500/15 bg-emerald-500/5' },
+                { title: 'CAPRA-S', data: capraS, surfaceClass: 'border-violet-500/15 bg-violet-500/5' },
+            ];
+
+            scoreBuckets.innerHTML = scoreCards.map((card) => {
+                const rows = ['BAJO', 'INTERMEDIO', 'ALTO'].map((key) => {
+                    const value = card.data?.[key] || 0;
+                    return `<div class="flex items-center justify-between rounded-xl border border-slate-700/80 bg-slate-950/40 px-3 py-2">
+                        <span class="text-xs uppercase tracking-[0.18em] text-slate-500">${humanizeClinicalText(key)}</span>
+                        <span class="text-sm font-semibold text-white">${value}</span>
+                    </div>`;
+                }).join('');
+                return `<div class="rounded-2xl border ${card.surfaceClass} p-3">
+                    <div class="text-sm font-semibold text-white">${card.title}</div>
+                    <div class="mt-3 space-y-2">${rows}</div>
+                </div>`;
+            }).join('');
+
+            const statusLabels = {
+                calculated: 'Calculado',
+                interpreted: 'Interpretado',
+                proxy: 'Proxy',
+                ready_missing_inputs: 'Faltan datos',
+                not_applicable: 'No aplica',
+            };
+
+            const toolEntries = Object.entries(toolStats);
+            toolGrid.innerHTML = toolEntries.length
+                ? toolEntries.map(([toolKey, stats]) => {
+                    const statRows = Object.entries(statusLabels).map(([key, label]) => {
+                        const value = stats?.[key] || 0;
+                        return `<div class="flex items-center justify-between text-xs">
+                            <span class="text-slate-400">${label}</span>
+                            <span class="font-medium text-white">${value}</span>
+                        </div>`;
+                    }).join('');
+                    return `<div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
+                        <div class="text-sm font-semibold text-white">${humanizeClinicalText(toolKey)}</div>
+                        <div class="mt-3 space-y-2">${statRows}</div>
+                    </div>`;
+                }).join('')
+                : '<div class="text-sm text-slate-500">Aún no hay herramientas pronósticas estructuradas en la cohorte.</div>';
+
+            const upgradeCards = [
+                {
+                    title: 'Upgrade histopatológico',
+                    value: upgradeStats.pathologic_upgrade_count || 0,
+                    meaning: 'Casos con upgrading o patología adversa mayor entre biopsia y reevaluación/pieza final.',
+                },
+                {
+                    title: 'Reclasificación genómica',
+                    value: upgradeStats.genomic_upclassification_count || 0,
+                    meaning: 'Casos con classifier genómico documentado que elevó la agresividad biológica esperada.',
+                },
+                {
+                    title: 'Intermedio desfavorable behaving like high risk',
+                    value: upgradeStats.unfavorable_intermediate_behaving_like_high_risk_count || 0,
+                    meaning: 'Casos intermedios desfavorables que luego mostraron biología o patología de alto riesgo.',
+                },
+            ];
+
+            upgradeGrid.innerHTML = upgradeCards.map((card) => `
+                <div class="rounded-2xl border border-rose-500/15 bg-rose-950/10 p-4">
+                    <div class="flex items-start justify-between gap-3">
+                        <div class="text-sm font-semibold text-white">${humanizeClinicalText(card.title)}</div>
+                        <div class="text-xl font-bold text-rose-200">${card.value}</div>
+                    </div>
+                    <p class="mt-3 text-xs leading-relaxed text-slate-400">${humanizeClinicalText(card.meaning)}</p>
+                </div>
+            `).join('');
+
+            const modifierList = Object.entries(modifierStats)
+                .sort((a, b) => (b[1] || 0) - (a[1] || 0))
+                .slice(0, 4);
+            const alignmentRows = ['aligned', 'adjacent', 'divergent', 'unknown'].map((key) => `
+                <div class="flex items-center justify-between text-xs">
+                    <span class="text-slate-400">${humanizeClinicalText(key)}</span>
+                    <span class="font-medium text-white">${alignmentStats?.[key] || 0}</span>
+                </div>
+            `).join('');
+            const prognosticCards = [
+                {
+                    title: 'Modificadores pronósticos',
+                    body: modifierList.length
+                        ? modifierList.map(([key, value]) => `<div class="flex items-center justify-between text-xs"><span class="text-slate-400">${humanizeClinicalText(key)}</span><span class="font-medium text-white">${value}</span></div>`).join('')
+                        : '<div class="text-xs text-slate-500">Sin modificadores agregados todavía.</div>',
+                },
+                {
+                    title: 'Ajuste real de seguimiento',
+                    body: `<div class="text-2xl font-bold text-cyan-200">${dashboardData.prognostic_followup_impact_count || 0}</div><p class="mt-2 text-xs text-slate-400">Pacientes donde el riesgo ya cambió la cadencia o la vigilancia visible.</p>`,
+                },
+                {
+                    title: 'Scores aún incompletos',
+                    body: `<div class="text-2xl font-bold text-amber-200">${dashboardData.incomplete_prognostic_scores_count || 0}</div><p class="mt-2 text-xs text-slate-400">Casos con herramientas aplicables que todavía requieren inputs o reporte externo.</p>`,
+                },
+                {
+                    title: 'Alineación con backbone trial-like',
+                    body: `<div class="space-y-2">${alignmentRows}</div><p class="mt-3 text-xs text-slate-400">Mide si el esquema actual está alineado, cercano o divergente del backbone del estudio comparable.</p>`,
+                },
+            ];
+
+            prognosticGrid.innerHTML = prognosticCards.map((card) => `
+                <div class="rounded-2xl border border-cyan-500/15 bg-cyan-950/10 p-4">
+                    <div class="text-sm font-semibold text-white">${humanizeClinicalText(card.title)}</div>
+                    <div class="mt-3">${card.body}</div>
+                </div>
+            `).join('');
+
+            window.clinicalPresentation?.normalizeDocument(scoreBuckets);
+            window.clinicalPresentation?.normalizeDocument(toolGrid);
+            window.clinicalPresentation?.normalizeDocument(prognosticGrid);
+            window.clinicalPresentation?.normalizeDocument(upgradeGrid);
         }
 
         // ── Init ──────────────────────────────────────────────────────────────

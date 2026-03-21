@@ -200,11 +200,27 @@ class ActiveSurveillanceProtocol:
     status: str = "active"  # "active", "exited", "reclassified"
 
     def to_dict(self) -> dict[str, Any]:
-        d = asdict(self)
-        d["eligibility"] = [e.to_dict() for e in self.eligibility]
-        d["schedule"] = [s.to_dict() for s in self.schedule]
-        d["reclassification_triggers"] = [t.to_dict() for t in self.reclassification_triggers]
-        return d
+        return {
+            "patient_id": self.patient_id,
+            "enrollment_date": self.enrollment_date,
+            "enrollment_protocol": self.enrollment_protocol,
+            "baseline_biopsy_ref": self.baseline_biopsy_ref,
+            "eligibility": [e.to_dict() for e in self.eligibility],
+            "schedule": [s.to_dict() for s in self.schedule],
+            "reclassification_triggers": [t.to_dict() for t in self.reclassification_triggers],
+            "confirmatory_biopsy_done": self.confirmatory_biopsy_done,
+            "confirmatory_biopsy_date": self.confirmatory_biopsy_date,
+            "confirmatory_biopsy_due": self.confirmatory_biopsy_due,
+            "months_on_as": self.months_on_as,
+            "total_biopsies_on_as": self.total_biopsies_on_as,
+            "total_mris_on_as": self.total_mris_on_as,
+            "exit_reason": self.exit_reason,
+            "exit_date": self.exit_date,
+            "exit_treatment": self.exit_treatment,
+            "anxiety_monitoring": dict(self.anxiety_monitoring),
+            "conversion_rate_context": dict(self.conversion_rate_context),
+            "status": self.status,
+        }
 
 
 # ── Funciones auxiliares ─────────────────────────────────────────────────────
@@ -795,6 +811,7 @@ class ActiveSurveillanceService:
             tone = "warning"
 
         return {
+            "has_data": bool(protocol.enrollment_protocol or protocol.schedule or protocol.reclassification_triggers),
             "status": protocol.status,
             "tone": tone,
             "enrollment_date": protocol.enrollment_date,

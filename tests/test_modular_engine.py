@@ -197,6 +197,32 @@ def test_state_classifier_routes_patients_to_expected_modules(app_client):
     assert nmcrpc.status_code == 200
     assert nmcrpc.get_json()["state"] == "m0_crpc"
 
+    high_volume_sync = client.post(
+        "/api/state-classifier",
+        json={
+            "known_cancer_diagnosis": 1,
+            "metastasis_site": "Bone",
+            "metastasis_count": 6,
+            "volume_disease": "High",
+            "metachronous_metastasis": 0,
+        },
+    )
+    assert high_volume_sync.status_code == 200
+    assert high_volume_sync.get_json()["state"] == "mcspc_high_volume_sync"
+
+    high_volume_metachronous = client.post(
+        "/api/state-classifier",
+        json={
+            "known_cancer_diagnosis": 1,
+            "metastasis_site": "Bone",
+            "metastasis_count": 6,
+            "volume_disease": "High",
+            "metachronous_metastasis": 1,
+        },
+    )
+    assert high_volume_metachronous.status_code == 200
+    assert high_volume_metachronous.get_json()["state"] == "mcspc_high_volume_metachronous"
+
 
 def test_localized_module_uses_nccn_2026_and_eau_2026_logic(app_client):
     client, _ = app_client
@@ -615,6 +641,118 @@ def test_advanced_modules_surface_sequence_specific_options(app_client):
     assert any("recombinación homóloga" in flag["label"].lower() or "hrr" in flag["label"].lower() for flag in m1_result["benchmarking_flags"])
 
 
+def test_high_volume_sync_and_metachronous_surface_darolutamide_and_docetaxel_fitness(app_client):
+    client, _ = app_client
+
+    sync_response = client.post(
+        "/api/modules/mcspc_high_volume_sync/evaluate",
+        json={
+            "metastasis_count": 7,
+            "metastasis_site": "Bone",
+            "ecog_score": 1,
+            "peripheral_neuropathy_grade": 0,
+            "frailty_status": "Fit",
+            "child_pugh_score": "A",
+            "comorbidity_cardio": 0,
+            "cv_risk_documented": 0,
+            "drug_interaction_reviewed": 1,
+        },
+    )
+    assert sync_response.status_code == 200
+    sync_result = sync_response.get_json()["result"]
+    assert sync_result["state"] == "mcspc_high_volume_sync"
+    assert sync_result["fit_for_docetaxel"] is True
+    assert sync_result["triplet_decision"]["status"] == "recommended"
+    assert any(
+        str(item.get("trial", item.get("study_name", ""))).upper() == "ARASENS"
+        and item.get("match") in (True, "Sí", "Si", "si")
+        for item in sync_result["trial_matches"]
+    )
+    assert any(
+        str(item.get("trial", item.get("study_name", ""))).upper() == "PEACE-1"
+        and item.get("match") in (True, "Sí", "Si", "si")
+        for item in sync_result["trial_matches"]
+    )
+
+    metach_response = client.post(
+        "/api/modules/mcspc_high_volume_metachronous/evaluate",
+        json={
+            "metastasis_count": 6,
+            "metastasis_site": "Bone",
+            "ecog_score": 1,
+            "peripheral_neuropathy_grade": 2,
+            "frailty_status": "Fit",
+            "child_pugh_score": "A",
+            "comorbidity_cardio": 1,
+            "cv_risk_documented": 1,
+            "drug_interaction_reviewed": 0,
+        },
+    )
+    assert metach_response.status_code == 200
+    metach_result = metach_response.get_json()["result"]
+    metach_names = {item["name"] for item in metach_result["eligible_treatments"]}
+    assert metach_result["state"] == "mcspc_high_volume_metachronous"
+    assert metach_result["fit_for_docetaxel"] is False
+    assert metach_result["triplet_decision"]["status"] == "contraindicated"
+    assert any("darolutamida" in name.lower() for name in metach_names)
+    assert any(
+        str(item.get("trial", item.get("study_name", ""))).upper() == "ARASENS"
+        and item.get("match") in (False, "No", "False", "no")
+        for item in metach_result["trial_matches"]
+    )
+    assert all(
+        str(item.get("trial", item.get("study_name", ""))).upper() != "PEACE-1"
+        for item in metach_result["trial_matches"]
+    )
+    assert "Neuropatía periférica grado 2 o mayor" in metach_result["docetaxel_hard_stop_reasons"]
+
+
+def test_mhspc_doublets_keep_darolutamide_visible_outside_high_volume(app_client):
+    client, _ = app_client
+
+    low_volume = client.post(
+        "/api/modules/mcspc_low_volume_sync_oligo/evaluate",
+        json={
+            "metastasis_count": 2,
+            "metastasis_site": "Bone",
+            "ecog_score": 0,
+            "comorbidity_seizure": 1,
+            "cv_risk_documented": 1,
+            "drug_interaction_reviewed": 0,
+            "rt_primary_received": 0,
+        },
+    )
+    assert low_volume.status_code == 200
+    low_result = low_volume.get_json()["result"]
+    low_names = {item["name"] for item in low_result["eligible_treatments"]}
+    assert any("darolutamida" in name.lower() for name in low_names)
+    assert low_result["triplet_decision"]["status"] == "not_applicable"
+    low_trials = {str(item.get("trial", item.get("study_name", ""))).upper() for item in low_result["trial_matches"]}
+    assert "PEACE-1" not in low_trials
+    assert "ARASENS" not in low_trials
+
+    oligo_metach = client.post(
+        "/api/modules/mcspc_oligo_metachronous/evaluate",
+        json={
+            "metastasis_count": 3,
+            "metastasis_site": "Bone",
+            "ecog_score": 1,
+            "comorbidity_cardio": 1,
+            "cv_risk_documented": 1,
+            "drug_interaction_reviewed": 0,
+            "mdt_context": "Discusión multidisciplinaria",
+        },
+    )
+    assert oligo_metach.status_code == 200
+    oligo_result = oligo_metach.get_json()["result"]
+    oligo_names = {item["name"] for item in oligo_result["eligible_treatments"]}
+    assert any("darolutamida" in name.lower() for name in oligo_names)
+    assert oligo_result["triplet_decision"]["status"] == "not_applicable"
+    oligo_trials = {str(item.get("trial", item.get("study_name", ""))).upper() for item in oligo_result["trial_matches"]}
+    assert "PEACE-1" not in oligo_trials
+    assert "ARASENS" not in oligo_trials
+
+
 def test_m0_crpc_requires_castration_confirmation(app_client):
     client, _ = app_client
 
@@ -921,6 +1059,8 @@ def test_rich_longitudinal_tables_persist_from_integrated_registration(app_clien
     profile_html = client.get("/patient_profile/55555555555").get_data(as_text=True)
     assert "Benchmarking operativo del estado actual" in profile_html
     assert "Torre de control del antígeno prostático específico" in profile_html
+    assert "psaTreatmentTimelineChart" in profile_html
+    assert "Gráfico de nadador" not in profile_html
     assert "Línea 1" not in profile_html
     patient_response = client.get("/api/patient/55555555555")
     assert patient_response.status_code == 200

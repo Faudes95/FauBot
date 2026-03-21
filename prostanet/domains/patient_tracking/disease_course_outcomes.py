@@ -8,6 +8,7 @@ from prostanet.domains.patient_tracking.reconciled_state import build_reconciled
 from prostanet.domains.patient_tracking.response_assessment import ResponseAssessmentService
 from prostanet.domains.patient_tracking.skeletal_events import SkeletalEventService
 from prostanet.domains.patient_tracking.survival_endpoints import SurvivalEndpointService
+from prostanet.domains.patient_tracking.therapy_catalog import summarize_trial_backbones
 from prostanet.shared.contracts import (
     AdjudicationStatus,
     BenchmarkSnapshot,
@@ -21,6 +22,8 @@ ENGINE_VERSION = "2026.1"
 MHSPC_STATES = {
     "mcspc_oligo_metachronous",
     "mcspc_low_volume_sync_oligo",
+    "mcspc_high_volume_sync",
+    "mcspc_high_volume_metachronous",
     "mcspc_high_volume",
 }
 POSTLOCAL_STATES = {"post_prostatectomy", "recurrence_bcr"}
@@ -1050,6 +1053,7 @@ def _build_benchmark_snapshots(
     bone_dominant = m_substage == "M1B" or str(merged.get("metastasis_site") or "").lower() in {"bone", "hueso"} or any(item.get("event_type") == "skeletal_event" for item in outcome_events)
 
     def add_snapshot(family: str, status: str, matched_trials: list[str], flags: list[str], notes: list[str]):
+        backbone_bundle = summarize_trial_backbones(matched_trials)
         snapshots.append(
             BenchmarkSnapshot(
                 benchmark_family=family,
@@ -1060,6 +1064,10 @@ def _build_benchmark_snapshots(
                 endpoint_snapshot={},
                 cohort_flags=flags,
                 notes=notes,
+                recommended_trial_backbone=list(backbone_bundle.get("recommended_trial_backbone") or []),
+                recommended_trial_backbone_label=str(backbone_bundle.get("recommended_trial_backbone_label") or ""),
+                recommended_trial_backbone_source=str(backbone_bundle.get("recommended_trial_backbone_source") or ""),
+                recommended_trial_backbone_note=str(backbone_bundle.get("recommended_trial_backbone_note") or ""),
             ).to_dict()
         )
 
@@ -1089,12 +1097,20 @@ def _build_benchmark_snapshots(
         )
 
     if state in MHSPC_STATES:
+        matched_trials = ["ARANOTE"]
+        notes = ["Cohorte mHSPC comparable por intensificación hormonal y duración del beneficio."]
+        if state in {"mcspc_high_volume_sync", "mcspc_high_volume"}:
+            matched_trials = ["ARANOTE", "ARASENS", "PEACE-1"]
+            notes = ["Cohorte mHSPC de alto volumen sincrónica comparable por intensificación y backbone trial-like."]
+        elif state == "mcspc_high_volume_metachronous":
+            matched_trials = ["ARANOTE", "ARASENS"]
+            notes = ["Cohorte mHSPC de alto volumen metacrónica comparable; PEACE-1 no se prioriza como backbone principal."]
         add_snapshot(
             "ARANOTE_ARASENS_PEACE1_like",
             "matched",
-            ["ARANOTE", "ARASENS", "PEACE-1"],
+            matched_trials,
             [state, management_track],
-            ["Cohorte mHSPC comparable por volumen, intensificación y duración del beneficio."],
+            notes,
         )
 
     if state == "m1_crpc":

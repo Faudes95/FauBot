@@ -8,6 +8,8 @@ ADVANCED_STATE_SCOPE = [
     "adt_progression_verification",
     "mcspc_oligo_metachronous",
     "mcspc_low_volume_sync_oligo",
+    "mcspc_high_volume_sync",
+    "mcspc_high_volume_metachronous",
     "mcspc_high_volume",
     "m0_crpc",
     "m1_crpc",
@@ -213,6 +215,37 @@ THERAPY_REGIMENS = [
 REGIMEN_LOOKUP = {item["regimen_code"]: item for item in THERAPY_REGIMENS}
 REGIMEN_LABEL_LOOKUP = {item["regimen_code"]: item["label_clinico"] for item in THERAPY_REGIMENS}
 
+TRIAL_BACKBONE_MAP = {
+    "ARASENS": {
+        "regimen_code": "ADT_DOCETAXEL_DAROLUTAMIDE",
+        "note": "Backbone del ensayo ARASENS en mHSPC intensificado.",
+    },
+    "ARANOTE": {
+        "regimen_code": "ADT_DAROLUTAMIDE",
+        "note": "Backbone del ensayo ARANOTE en mHSPC sensible a castración.",
+    },
+    "PEACE-1": {
+        "regimen_code": "ADT_DOCETAXEL_ABIRATERONE",
+        "note": "Backbone del ensayo PEACE-1 en mHSPC de novo/intensificado.",
+    },
+    "PSMAFORE": {
+        "regimen_code": "LU177_PSMA617",
+        "note": "Radioligando evaluado en PSMAfore para mCRPC PSMA+ post-ARPI y pre-taxano.",
+    },
+    "VISION": {
+        "regimen_code": "LU177_PSMA617",
+        "note": "Radioligando evaluado en VISION para mCRPC PSMA+ en línea avanzada.",
+    },
+    "TALAPRO-2": {
+        "regimen_code": "TALAZOPARIB_ENZALUTAMIDE",
+        "note": "Backbone biomarcado de TALAPRO-2 en mCRPC.",
+    },
+    "EMBARK": {
+        "regimen_code": "ADT_ENZALUTAMIDE",
+        "note": "Esquema de intensificación sistémica usado en EMBARK para BCR de alto riesgo.",
+    },
+}
+
 REGIMEN_ALIASES = {
     "adt mono": "ADT_MONO",
     "solo adt": "ADT_MONO",
@@ -273,6 +306,49 @@ def regimen_label(regimen_code: Any) -> str:
     if normalized in REGIMEN_LABEL_LOOKUP:
         return REGIMEN_LABEL_LOOKUP[normalized]
     return str(regimen_code or "")
+
+
+def trial_backbone(trial_name: Any) -> dict[str, Any]:
+    normalized_trial = str(trial_name or "").strip().upper()
+    config = TRIAL_BACKBONE_MAP.get(normalized_trial)
+    if not config:
+        return {}
+    regimen_code = config["regimen_code"]
+    return {
+        "recommended_trial_backbone": regimen_code,
+        "recommended_trial_backbone_label": regimen_label(regimen_code),
+        "recommended_trial_backbone_source": str(trial_name or normalized_trial),
+        "recommended_trial_backbone_note": config.get("note", "Corresponde al esquema usado en el estudio pivote comparable; no sustituye la decisión clínica individual."),
+    }
+
+
+def summarize_trial_backbones(trial_names: list[str]) -> dict[str, Any]:
+    bundles = [trial_backbone(item) for item in trial_names if trial_backbone(item)]
+    if not bundles:
+        return {}
+    labels: list[str] = []
+    regimens: list[str] = []
+    sources: list[str] = []
+    notes: list[str] = []
+    for bundle in bundles:
+        label = str(bundle.get("recommended_trial_backbone_label") or "")
+        regimen = str(bundle.get("recommended_trial_backbone") or "")
+        source = str(bundle.get("recommended_trial_backbone_source") or "")
+        note = str(bundle.get("recommended_trial_backbone_note") or "")
+        if label and label not in labels:
+            labels.append(label)
+        if regimen and regimen not in regimens:
+            regimens.append(regimen)
+        if source and source not in sources:
+            sources.append(source)
+        if note and note not in notes:
+            notes.append(note)
+    return {
+        "recommended_trial_backbone": regimens,
+        "recommended_trial_backbone_label": " · ".join(labels),
+        "recommended_trial_backbone_source": ", ".join(sources),
+        "recommended_trial_backbone_note": " ".join(notes) or "Corresponde al esquema usado en el estudio pivote comparable; no sustituye la decisión clínica individual.",
+    }
 
 
 def normalize_regimen_code(value: Any) -> str:

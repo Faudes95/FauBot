@@ -334,7 +334,7 @@ def support_bundle_for_module(module_id: str, payload: dict[str, Any], result: d
             benchmark_flag("Imagen convencional documentada", "complete" if str(payload.get("conventional_imaging_status", "not_restaged")) in {"M0", "M1"} else "missing", "Separa M0 CRPC de M1 CRPC."),
             benchmark_flag("Fecha de ADT documentada", "complete" if not _missing(payload.get("last_adt_date")) else "missing", "Ayuda a detectar fracaso real de supresión androgénica."),
         ]
-    elif module_id in {"mcspc_oligo_metachronous", "mcspc_low_volume_sync_oligo", "mcspc_high_volume"}:
+    elif module_id in {"mcspc_oligo_metachronous", "mcspc_low_volume_sync_oligo", "mcspc_high_volume_sync", "mcspc_high_volume_metachronous", "mcspc_high_volume"}:
         monitoring = monitoring_plan(
             "Plan de vigilancia metastásica sensible a la castración",
             "Evaluación clínica, laboratorio y síntomas cada 1 a 3 meses con reestadificación guiada por progresión o toxicidad.",
@@ -390,7 +390,7 @@ def support_bundle_for_module(module_id: str, payload: dict[str, Any], result: d
                 ),
             ]
         )
-        if module_id == "mcspc_high_volume" or any("dolor" in item.lower() for item in result.get("contraindications", [])):
+        if module_id in {"mcspc_high_volume_sync", "mcspc_high_volume_metachronous", "mcspc_high_volume"} or any("dolor" in item.lower() for item in result.get("contraindications", [])):
             palliative_flags.append("Vigilar necesidad precoz de radioterapia paliativa, prevención de fractura patológica y compresión medular.")
     elif module_id == "m0_crpc":
         monitoring = monitoring_plan(

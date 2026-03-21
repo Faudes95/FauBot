@@ -13,6 +13,8 @@ STATE_EVENT_EXPECTATIONS = {
     "adt_progression_verification": ["clinical_baseline", "imaging_studies", "survival_endpoint"],
     "mcspc_oligo_metachronous": ["clinical_baseline", "genomic_profile", "treatment_history", "patient_pros", "skeletal_event", "radiation_detail", "survival_endpoint", "vital_status_update"],
     "mcspc_low_volume_sync_oligo": ["clinical_baseline", "genomic_profile", "treatment_history", "patient_pros", "skeletal_event", "radiation_detail", "survival_endpoint", "vital_status_update"],
+    "mcspc_high_volume_sync": ["clinical_baseline", "genomic_profile", "treatment_history", "patient_pros", "skeletal_event", "survival_endpoint", "vital_status_update"],
+    "mcspc_high_volume_metachronous": ["clinical_baseline", "genomic_profile", "treatment_history", "patient_pros", "skeletal_event", "survival_endpoint", "vital_status_update"],
     "mcspc_high_volume": ["clinical_baseline", "genomic_profile", "treatment_history", "patient_pros", "skeletal_event", "survival_endpoint", "vital_status_update"],
     "m0_crpc": ["clinical_baseline", "genomic_profile", "treatment_history", "patient_pros", "survival_endpoint", "vital_status_update"],
     "m1_crpc": ["clinical_baseline", "genomic_profile", "treatment_history", "patient_pros", "imaging_studies", "skeletal_event", "radiation_detail", "survival_endpoint", "vital_status_update"],
@@ -78,6 +80,10 @@ def merge_record_into_assessment_payload(assessment_input: dict[str, Any], recor
     bcr = record.get("bcr") or {}
     surgery = record.get("surgery") or {}
     latest_pro = _latest(record.get("pros") or [])
+    latest_followup = _latest(record.get("follow_ups") or [])
+    latest_followup_payload = {}
+    if isinstance(latest_followup.get("visit_bundle"), dict):
+        latest_followup_payload = dict((latest_followup.get("visit_bundle") or {}).get("payload") or {})
     latest_biopsy = _latest(record.get("biopsies") or [])
     latest_mri_fact = _latest(record.get("mri_facts") or [])
     latest_diagnostic_plan = _latest(record.get("diagnostic_plans") or [])
@@ -108,18 +114,28 @@ def merge_record_into_assessment_payload(assessment_input: dict[str, Any], recor
             "albumin": merged.get("albumin") or baseline.get("albumin"),
             "metastasis_site": merged.get("metastasis_site") or baseline.get("metastasis_site"),
             "volume_disease": merged.get("volume_disease") or baseline.get("volume_disease"),
+            "peripheral_neuropathy_grade": merged.get("peripheral_neuropathy_grade") or baseline.get("peripheral_neuropathy_grade"),
+            "life_expectancy_years": merged.get("life_expectancy_years") or baseline.get("life_expectancy_years"),
+            "dre_suspicious": merged.get("dre_suspicious") if _present(merged.get("dre_suspicious")) else baseline.get("dre_suspicious"),
+            "local_treatment_consideration": merged.get("local_treatment_consideration") or baseline.get("local_treatment_consideration"),
             "ipss_score": merged.get("ipss_score") or demographics.get("ipss_score") or latest_pro.get("ipss_total"),
             "iief5_score": merged.get("iief5_score") or demographics.get("iief5_score") or latest_pro.get("iief5_score"),
             "baseline_qol": merged.get("baseline_qol") or latest_pro.get("eq5d_vas"),
             "hrr_status": merged.get("hrr_status") or genomics.get("hrr_overall"),
             "brca2_status": merged.get("brca2_status") or genomics.get("brca2_status"),
             "msi_status": merged.get("msi_status") or genomics.get("msi_status"),
+            "decipher_score": merged.get("decipher_score") or genomics.get("decipher_score"),
             "decipher_risk": merged.get("decipher_risk") or genomics.get("decipher_risk"),
+            "gps_score": merged.get("gps_score") or genomics.get("gps_score"),
+            "prolaris_score": merged.get("prolaris_score") or genomics.get("prolaris_score"),
             "molecular_report_date": merged.get("molecular_report_date") or genomics.get("test_date"),
             "psa_current": merged.get("psa_current") or bcr.get("bcr_psa"),
             "psadt_months": merged.get("psadt_months") or bcr.get("psadt_at_bcr"),
             "time_to_recurrence_months": merged.get("time_to_recurrence_months") or bcr.get("time_to_bcr_months"),
+            "clinical_tstage": merged.get("clinical_tstage") or baseline.get("clinical_tstage"),
             "pathologic_stage": merged.get("pathologic_stage") or surgery.get("pathological_stage"),
+            "pathology_gleason_primary": merged.get("pathology_gleason_primary") or surgery.get("pathological_gleason_primary"),
+            "pathology_gleason_secondary": merged.get("pathology_gleason_secondary") or surgery.get("pathological_gleason_secondary"),
             "margin_location": merged.get("margin_location") or surgery.get("margin_location"),
             "surgical_margin": merged.get("surgical_margin") if _present(merged.get("surgical_margin")) else surgery.get("surgical_margin_status"),
             "ece_status": merged.get("ece_status") if _present(merged.get("ece_status")) else surgery.get("ece_pathological"),
@@ -152,6 +168,40 @@ def merge_record_into_assessment_payload(assessment_input: dict[str, Any], recor
             "has_bone_scan": merged.get("has_bone_scan") or ("1" if latest_bone else ""),
         }
     )
+
+    followup_fallback_keys = (
+        "life_expectancy_years",
+        "local_treatment_consideration",
+        "clinical_tstage",
+        "nodal_status",
+        "clinical_stage_group",
+        "clinical_risk_group",
+        "histology_subtype",
+        "gleason_primary",
+        "gleason_secondary",
+        "isup_grade",
+        "num_cores_positive",
+        "total_cores",
+        "pathology_gleason_primary",
+        "pathology_gleason_secondary",
+        "pathologic_stage",
+        "surgical_margin",
+        "ece_status",
+        "svi_status",
+        "lni_status",
+        "decipher_score",
+        "decipher_risk",
+        "gps_score",
+        "prolaris_score",
+        "genomic_classifier",
+        "genomic_classifier_result",
+        "drug_scheme",
+        "current_treatment",
+        "peripheral_neuropathy_grade",
+    )
+    for field_name in followup_fallback_keys:
+        if not _present(merged.get(field_name)) and _present(latest_followup_payload.get(field_name)):
+            merged[field_name] = latest_followup_payload.get(field_name)
 
     if not _present(merged.get("conventional_imaging_status")):
         if latest_conventional:

@@ -103,11 +103,20 @@ class SkeletalEventProfile:
     bma_compliance_warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        d = asdict(self)
-        d["sre_events"] = [e.to_dict() for e in self.sre_events]
-        if self.bone_modifying_agent:
-            d["bone_modifying_agent"] = self.bone_modifying_agent.to_dict()
-        return d
+        return {
+            "patient_id": self.patient_id,
+            "sre_events": [e.to_dict() for e in self.sre_events],
+            "bone_modifying_agent": self.bone_modifying_agent.to_dict() if self.bone_modifying_agent else None,
+            "time_to_first_sre_months": self.time_to_first_sre_months,
+            "total_sre_count": self.total_sre_count,
+            "has_cord_compression": self.has_cord_compression,
+            "has_pathological_fracture": self.has_pathological_fracture,
+            "sre_free_months": self.sre_free_months,
+            "sre_risk_score": self.sre_risk_score,
+            "bone_metastasis_count": self.bone_metastasis_count,
+            "recommendations": list(self.recommendations),
+            "bma_compliance_warnings": list(self.bma_compliance_warnings),
+        }
 
 
 # ── Funciones auxiliares ─────────────────────────────────────────────────────

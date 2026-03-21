@@ -6,7 +6,9 @@ from clinical_scores import (
     briganti_lni,
     calculate_capra_s,
     capra_score,
+    damico_classification,
     kattan_organ_confined,
+    mskcc_bcr_post_rp,
     partin_tables,
 )
 
@@ -16,6 +18,8 @@ POSTLOCAL_MODULES = {"post_prostatectomy", "recurrence_bcr"}
 ADVANCED_MODULES = {
     "mcspc_oligo_metachronous",
     "mcspc_low_volume_sync_oligo",
+    "mcspc_high_volume_sync",
+    "mcspc_high_volume_metachronous",
     "mcspc_high_volume",
     "m0_crpc",
     "m1_crpc",
@@ -77,6 +81,13 @@ def _summarize_capra_s(score: dict[str, Any]) -> str:
     return f"CAPRA-S {value}/12."
 
 
+def _summarize_damico(score: dict[str, Any]) -> str:
+    risk = score.get("risk_group")
+    if not risk:
+        return "D'Amico no calculable con los datos actuales."
+    return f"D'Amico {risk.lower()}, riesgo basal de recurrencia bioquímica en localizado."
+
+
 def _summarize_partin(result: dict[str, Any]) -> str:
     oc = result.get("oc_prob")
     ece = result.get("ece_prob")
@@ -98,6 +109,13 @@ def _summarize_briganti(result: dict[str, Any]) -> str:
     if risk in (None, ""):
         return "Briganti no calculable con los datos actuales."
     return f"Briganti: riesgo ganglionar estimado {risk}%."
+
+
+def _summarize_mskcc_post_rp(result: dict[str, Any]) -> str:
+    bcr_free = result.get("bcr_free_5y")
+    if bcr_free in (None, ""):
+        return "MSKCC BCR post-RP no calculable con los datos actuales."
+    return f"MSKCC post-RP: libre de recurrencia bioquímica a 5 años {bcr_free}."
 
 
 def _external_classifier_entry(payload: dict[str, Any], stage: str) -> dict[str, Any]:
@@ -211,6 +229,7 @@ def _predict_entry(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _localized_algorithms(payload: dict[str, Any]) -> list[dict[str, Any]]:
     capra = capra_score(payload)
+    damico = damico_classification(payload)
     briganti = briganti_lni(payload)
     partin = partin_tables(payload)
     msk = kattan_organ_confined(payload)
@@ -227,6 +246,19 @@ def _localized_algorithms(payload: dict[str, Any]) -> list[dict[str, Any]]:
             source_url="https://urology.ucsf.edu/research/cancer/prostate-cancer-risk-assessment-and-the-ucla-prostate-cancer-index",
             evidence_note="Se usa como capa de refinamiento y no desplaza la recomendacion primaria NCCN/EAU.",
             result_snapshot=capra,
+        ),
+        _algorithm_entry(
+            key="damico",
+            name="D'Amico",
+            integration_mode="local_computation",
+            status="calculado",
+            stage="localized_initial",
+            summary=_summarize_damico(damico),
+            clinical_use="Ordena el riesgo clinico basal de localizado y sirve como comparador clasico de cohortes pretratamiento.",
+            source_label="D'Amico",
+            source_url="https://pubmed.ncbi.nlm.nih.gov/9827722/",
+            evidence_note="Se integra como clasificador clinico basal y no sustituye la recomendacion primaria por guias.",
+            result_snapshot=damico,
         ),
         _algorithm_entry(
             key="briganti",
@@ -290,6 +322,23 @@ def _postlocal_algorithms(payload: dict[str, Any], stage: str) -> list[dict[str,
                 source_url="https://urology.ucsf.edu/research/cancer/prostate-cancer-risk-assessment-and-the-ucla-prostate-cancer-index",
                 evidence_note="Solo es valido en el contexto posoperatorio correcto.",
                 result_snapshot=capra_s,
+            )
+        )
+    if all(_present(payload.get(field)) for field in ("psa", "pathology_gleason_primary", "pathology_gleason_secondary", "surgical_margin", "ece_status", "svi_status", "lni_status")):
+        msk_post = mskcc_bcr_post_rp(payload)
+        items.append(
+            _algorithm_entry(
+                key="mskcc_bcr_post_rp",
+                name="MSKCC BCR post-RP",
+                integration_mode="local_computation",
+                status="calculado",
+                stage=stage,
+                summary=_summarize_mskcc_post_rp(msk_post),
+                clinical_use="Refina el riesgo posoperatorio de recurrencia bioquímica y la conversación sobre vigilancia o rescate.",
+                source_label="MSKCC post-RP",
+                source_url="https://www.mskcc.org/nomograms/prostate/post_op",
+                evidence_note="Se calcula con los coeficientes oficiales publicados por MSKCC para el modelo postoperatorio.",
+                result_snapshot=msk_post,
             )
         )
     items.append(_external_classifier_entry(payload, stage))

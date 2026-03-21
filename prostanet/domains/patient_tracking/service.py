@@ -9,6 +9,7 @@ from prostanet.domains.patient_tracking.followup_agenda import (
     LINE_OF_THERAPY_CONTEXT_OPTIONS,
     LINE_OF_THERAPY_NUMBER_OPTIONS,
 )
+from prostanet.domains.patient_tracking.risk_tools import build_intake_score_requirements
 from prostanet.domains.patient_tracking.therapy_catalog import (
     normalize_regimen_code,
     therapy_catalog_entries,
@@ -38,6 +39,8 @@ STATE_SCOPE_MAP = {
     "adt_progression_verification": "advanced",
     "mcspc_oligo_metachronous": "advanced",
     "mcspc_low_volume_sync_oligo": "advanced",
+    "mcspc_high_volume_sync": "advanced",
+    "mcspc_high_volume_metachronous": "advanced",
     "mcspc_high_volume": "advanced",
     "m0_crpc": "advanced",
     "m1_crpc": "advanced",
@@ -298,6 +301,132 @@ def _postlocal_fragment() -> RegistrationFragment:
     )
 
 
+def _survival_fragment() -> RegistrationFragment:
+    applicable_states = [
+        "post_prostatectomy",
+        "recurrence_bcr",
+        "adt_progression_verification",
+        "mcspc_oligo_metachronous",
+        "mcspc_low_volume_sync_oligo",
+        "mcspc_high_volume_sync",
+        "mcspc_high_volume_metachronous",
+        "mcspc_high_volume",
+        "m0_crpc",
+        "m1_crpc",
+    ]
+    return RegistrationFragment(
+        id="fragment_survival_status",
+        title="Estado vital y anclas de supervivencia",
+        applies_to_states=applicable_states,
+        persist_targets=["survival_status_records", "survival_anchor_events", "patient_identity"],
+        clinical_influence=[
+            "Cierra la trazabilidad para OS, rPFS, MFS, TTR, TTPP y TTSRE sin romper el longitudinal existente.",
+        ],
+        fields=[
+            _field("vital_status", "Estado vital", "select", options=["", "alive", "deceased", "lost_to_followup"], group="Estado vital", group_order=1, clinical_role="required"),
+            _field("last_contact_date", "Último contacto documentado", "date", group="Estado vital", group_order=1, clinical_role="required"),
+            _field("last_contact_status", "Tipo de último contacto", "select", options=["", "clinic_visit", "phone", "lab_result", "imaging", "document_review"], group="Estado vital", group_order=1, clinical_role="required"),
+            _field("date_of_death", "Fecha de defunción", "date", group="Estado vital", group_order=1, clinical_role="monitoring"),
+            _field("cause_of_death", "Causa de muerte", "select", options=["", "prostate_cancer", "other_cancer", "cardiovascular", "infection", "treatment_related", "other", "unknown"], group="Estado vital", group_order=1, clinical_role="monitoring"),
+            _field("death_source", "Fuente del estado vital", "text", group="Estado vital", group_order=1, clinical_role="monitoring"),
+            _field("radiographic_progression_date", "Fecha de progresión radiográfica", "date", group="Endpoints", group_order=2, clinical_role="monitoring"),
+            _field("psa_progression_date", "Fecha de progresión PSA", "date", group="Endpoints", group_order=2, clinical_role="monitoring"),
+            _field("crpc_confirmation_date", "Fecha de confirmación CRPC", "date", group="Endpoints", group_order=2, clinical_role="monitoring"),
+            _field("next_line_start_date", "Fecha de inicio de siguiente línea", "date", group="Endpoints", group_order=2, clinical_role="monitoring"),
+        ],
+    )
+
+
+def _structured_biopsy_fragment() -> RegistrationFragment:
+    return RegistrationFragment(
+        id="fragment_structured_biopsy_operational",
+        title="Biopsia estructurada y concordancia MRI",
+        applies_to_states=["diagnostic_workup", "post_negative_biopsy_followup", "localized_initial"],
+        persist_targets=["structured_biopsy", "biopsy_details"],
+        clinical_influence=[
+            "Permite registrar tipo de biopsia, contexto y mapeo dirigido para vigilancia activa y rebiopsia.",
+        ],
+        fields=[
+            _field("biopsy_date", "Fecha de biopsia", "date", group="Biopsia estructurada", group_order=1, clinical_role="monitoring"),
+            _field("biopsy_type", "Tipo de biopsia", "select", options=["", "systematic", "mri_targeted", "fusion", "saturation"], group="Biopsia estructurada", group_order=1, clinical_role="monitoring"),
+            _field("biopsy_route", "Vía de biopsia", "select", options=["", "transperineal", "transrectal"], group="Biopsia estructurada", group_order=1, clinical_role="monitoring"),
+            _field("biopsy_context", "Contexto de biopsia", "select", options=["", "diagnostic", "confirmatory_as", "followup_as", "rebiopsy"], group="Biopsia estructurada", group_order=1, clinical_role="monitoring"),
+            _field("mri_pirads_at_biopsy", "PI-RADS al momento de biopsia", "number", group="Biopsia estructurada", group_order=1, clinical_role="decision_refiner"),
+            _field("total_cores", "Número total de cilindros", "number", group="Biopsia estructurada", group_order=1, clinical_role="monitoring"),
+            _field("positive_cores", "Número de cilindros positivos", "number", group="Biopsia estructurada", group_order=1, clinical_role="monitoring"),
+        ],
+    )
+
+
+def _active_surveillance_operational_fragment() -> RegistrationFragment:
+    return RegistrationFragment(
+        id="fragment_active_surveillance_operational",
+        title="Operación real de vigilancia activa",
+        applies_to_states=["localized_initial", "post_negative_biopsy_followup"],
+        persist_targets=["active_surveillance_update"],
+        clinical_influence=[
+            "Sostiene elegibilidad, confirmatory biopsy y triggers de salida del protocolo en una tabla operacional.",
+        ],
+        fields=[
+            _field("as_protocol", "Protocolo de vigilancia activa", "select", options=["", "NCCN_very_low", "NCCN_low", "NCCN_favorable_intermediate", "PRIAS", "Royal_Marsden"], group="Vigilancia activa", group_order=1, clinical_role="monitoring"),
+            _field("confirmatory_biopsy_planned", "Biopsia confirmatoria planeada", "select", options=["", "0", "1"], group="Vigilancia activa", group_order=1, clinical_role="monitoring"),
+            _field("confirmatory_biopsy_date", "Fecha de biopsia confirmatoria", "date", group="Vigilancia activa", group_order=1, clinical_role="monitoring"),
+            _field("as_exit_reason", "Motivo de salida de vigilancia activa", "select", options=["", "gleason_upgrade", "volume_increase", "mri_progression", "patient_preference", "psa_kinetics"], group="Vigilancia activa", group_order=1, clinical_role="monitoring"),
+            _field("as_exit_treatment", "Tratamiento de conversión", "select", options=["", "prostatectomy", "radiation", "focal_therapy", "observation"], group="Vigilancia activa", group_order=1, clinical_role="monitoring"),
+        ],
+    )
+
+
+def _skeletal_bone_fragment() -> RegistrationFragment:
+    return RegistrationFragment(
+        id="fragment_skeletal_bone_operational",
+        title="Eventos esqueléticos y salud ósea",
+        applies_to_states=[
+            "adt_progression_verification",
+            "mcspc_oligo_metachronous",
+            "mcspc_low_volume_sync_oligo",
+            "mcspc_high_volume_sync",
+            "mcspc_high_volume_metachronous",
+            "mcspc_high_volume",
+            "m0_crpc",
+            "m1_crpc",
+        ],
+        persist_targets=["skeletal_events", "bone_modifying_agent", "bone_health_snapshot"],
+        clinical_influence=[
+            "Hace capturable el primer SRE, el curso de denosumab/zoledrónico y el monitoreo de ONJ/óseo.",
+        ],
+        fields=[
+            _field("worst_t_score", "Peor T-score documentado", "number", group="Salud ósea", group_order=1, clinical_role="monitoring"),
+            _field("frax_major_pct", "FRAX fractura mayor", "number", group="Salud ósea", group_order=1, clinical_role="monitoring", unit="%"),
+            _field("frax_hip_pct", "FRAX cadera", "number", group="Salud ósea", group_order=1, clinical_role="monitoring", unit="%"),
+            _field("dental_clearance_done", "Clearance dental documentado", "select", options=["", "0", "1"], group="Agente modificador óseo", group_order=2, clinical_role="monitoring"),
+            _field("onj_monitoring", "Monitoreo de osteonecrosis mandibular", "select", options=["", "0", "1"], group="Agente modificador óseo", group_order=2, clinical_role="monitoring"),
+            _field("bma_agent", "Agente modificador óseo", "select", options=["", "denosumab", "zoledronic_acid"], group="Agente modificador óseo", group_order=2, clinical_role="monitoring"),
+            _field("bma_start_date", "Inicio de agente modificador óseo", "date", group="Agente modificador óseo", group_order=2, clinical_role="monitoring"),
+        ],
+    )
+
+
+def _radiotherapy_detail_fragment() -> RegistrationFragment:
+    return RegistrationFragment(
+        id="fragment_radiotherapy_detailed",
+        title="Radioterapia detallada",
+        applies_to_states=["localized_initial", "post_prostatectomy", "recurrence_bcr", "mcspc_oligo_metachronous", "mcspc_low_volume_sync_oligo", "mcspc_high_volume_sync", "mcspc_high_volume_metachronous", "mcspc_high_volume", "m1_crpc"],
+        persist_targets=["radiotherapy_course", "radiation_details"],
+        clinical_influence=[
+            "Diferencia RT definitiva, adyuvante, salvamento y MDT con dosis, fraccionamiento y toxicidad.",
+        ],
+        fields=[
+            _field("rt_intent", "Intención de radioterapia", "select", options=["", "definitive", "adjuvant", "salvage", "palliative", "MDT"], group="Radioterapia", group_order=1, clinical_role="monitoring"),
+            _field("modality", "Modalidad de radioterapia", "select", options=["", "EBRT_IMRT", "EBRT_VMAT", "SBRT", "LDR_brachy", "HDR_brachy", "protons", "combined"], group="Radioterapia", group_order=1, clinical_role="monitoring"),
+            _field("target_volume", "Campo / volumen blanco", "select", options=["", "prostate_only", "prostate_sv", "whole_pelvis", "boost_dominant", "metastasis_directed", "prostate_pelvis_boost"], group="Radioterapia", group_order=1, clinical_role="monitoring"),
+            _field("total_dose_gy", "Dosis total", "number", group="Radioterapia", group_order=1, clinical_role="monitoring", unit="Gy"),
+            _field("fractions", "Número de fracciones", "number", group="Radioterapia", group_order=1, clinical_role="monitoring"),
+            _field("salvage_psa_at_start", "PSA al inicio de RT de salvamento", "number", group="Radioterapia", group_order=1, clinical_role="monitoring", unit="ng/mL"),
+        ],
+    )
+
+
 def _advanced_history_fragment() -> RegistrationFragment:
     return RegistrationFragment(
         id="fragment_treatment_history",
@@ -306,6 +435,8 @@ def _advanced_history_fragment() -> RegistrationFragment:
             "adt_progression_verification",
             "mcspc_oligo_metachronous",
             "mcspc_low_volume_sync_oligo",
+            "mcspc_high_volume_sync",
+            "mcspc_high_volume_metachronous",
             "mcspc_high_volume",
             "m0_crpc",
             "m1_crpc",
@@ -346,6 +477,7 @@ def _advanced_history_fragment() -> RegistrationFragment:
             _field("psma_positive", "PSMA positivo", "select", options=["0", "1"], default="0", group="Biomarcadores", group_order=3, clinical_role="decision_refiner"),
             _field("psma_negative_dominant_lesions", "Lesiones dominantes PSMA negativas", "select", options=["0", "1"], default="0", group="Biomarcadores", group_order=3, clinical_role="decision_refiner"),
             _field("seizure_history", "Antecedente convulsivo", "select", options=["0", "1"], default="0", group="Seguridad ARPI", group_order=3, clinical_role="decision_refiner"),
+            _field("peripheral_neuropathy_grade", "Neuropatía periférica", "select", options=["", "0", "1", "2", "3", "4"], default="", group="Seguridad ARPI", group_order=3, clinical_role="decision_refiner"),
             _field("dermatitis_history", "Dermatitis / rash previo", "select", options=["0", "1"], default="0", group="Seguridad ARPI", group_order=3, clinical_role="decision_refiner"),
             _field("mini_cog_score", "Mini-Cog basal", "number", group="Seguridad ARPI", group_order=3, clinical_role="decision_refiner"),
             _field("fatigue_score", "Brief Fatigue Inventory basal", "number", group="Seguridad ARPI", group_order=3, clinical_role="decision_refiner"),
@@ -428,6 +560,7 @@ def _persist_targets_for_field(field_name: str, scope: str) -> list[str]:
         "molecular_assay_date": ["genomic_profile"],
         "psma_positive": ["imaging_studies", "clinical_assessments"],
         "psma_negative_dominant_lesions": ["imaging_studies", "clinical_assessments"],
+        "peripheral_neuropathy_grade": ["clinical_assessments", "clinical_baseline"],
         "mcrpc_line_context": ["prior_clinical_history"],
         "current_adt_context": ["prior_clinical_history", "clinical_assessments"],
         "castrate_testosterone_status": ["clinical_baseline", "clinical_assessments"],
@@ -435,6 +568,37 @@ def _persist_targets_for_field(field_name: str, scope: str) -> list[str]:
         "dxa_baseline_done": ["clinical_assessments"],
         "calcium_vitd_started": ["clinical_assessments"],
         "bone_protection_started": ["clinical_assessments"],
+        "vital_status": ["survival_status_records", "patient_identity"],
+        "date_of_death": ["survival_status_records", "patient_identity"],
+        "cause_of_death": ["survival_status_records", "patient_identity"],
+        "last_contact_date": ["survival_status_records", "patient_identity"],
+        "last_contact_status": ["survival_status_records", "patient_identity"],
+        "death_source": ["survival_status_records", "patient_identity"],
+        "radiographic_progression_date": ["survival_anchor_events", "clinical_assessments"],
+        "psa_progression_date": ["survival_anchor_events", "clinical_assessments"],
+        "crpc_confirmation_date": ["survival_anchor_events", "clinical_assessments"],
+        "next_line_start_date": ["survival_anchor_events", "treatment_history"],
+        "biopsy_route": ["structured_biopsy", "biopsy_details"],
+        "biopsy_context": ["structured_biopsy", "biopsy_details"],
+        "mri_pirads_at_biopsy": ["structured_biopsy", "mri_facts"],
+        "as_protocol": ["active_surveillance_update"],
+        "confirmatory_biopsy_planned": ["active_surveillance_update"],
+        "confirmatory_biopsy_date": ["active_surveillance_update"],
+        "as_exit_reason": ["active_surveillance_update"],
+        "as_exit_treatment": ["active_surveillance_update"],
+        "worst_t_score": ["bone_health_snapshot"],
+        "frax_major_pct": ["bone_health_snapshot"],
+        "frax_hip_pct": ["bone_health_snapshot"],
+        "dental_clearance_done": ["bone_modifying_agent", "bone_health_snapshot"],
+        "onj_monitoring": ["bone_modifying_agent", "bone_health_snapshot"],
+        "bma_agent": ["bone_modifying_agent"],
+        "bma_start_date": ["bone_modifying_agent"],
+        "rt_intent": ["radiotherapy_course", "radiation_details"],
+        "modality": ["radiotherapy_course", "radiation_details"],
+        "target_volume": ["radiotherapy_course", "radiation_details"],
+        "total_dose_gy": ["radiotherapy_course", "radiation_details"],
+        "fractions": ["radiotherapy_course", "radiation_details"],
+        "salvage_psa_at_start": ["radiotherapy_course"],
     }
     default_targets = {
         "diagnostic": ["clinical_assessments", "diagnostic_plan"],
@@ -473,6 +637,7 @@ class PatientTrackingService:
         module_id: str,
         state: str,
         assessment_input: dict[str, Any],
+        assessment_result: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         scope = self.scope_for_state(state or module_id)
         config = deepcopy(SCOPE_CONFIG[scope])
@@ -481,11 +646,21 @@ class PatientTrackingService:
             fragments.append(_diagnostic_fragment())
         elif scope == "localized":
             fragments.append(_localized_fragment())
+            fragments.append(_structured_biopsy_fragment())
+            fragments.append(_active_surveillance_operational_fragment())
+            fragments.append(_radiotherapy_detail_fragment())
         elif scope == "postlocal":
             fragments.append(_postlocal_fragment())
             fragments.append(_advanced_history_fragment())
+            fragments.append(_survival_fragment())
+            fragments.append(_radiotherapy_detail_fragment())
         else:
             fragments.append(_advanced_history_fragment())
+            fragments.append(_survival_fragment())
+            fragments.append(_skeletal_bone_fragment())
+            fragments.append(_radiotherapy_detail_fragment())
+        if scope == "diagnostic":
+            fragments.append(_structured_biopsy_fragment())
         fragments.append(_mexico_fragment())
 
         imported_fields = []
@@ -512,6 +687,12 @@ class PatientTrackingService:
             "line_of_therapy_number": assessment_input.get("line_of_therapy_number", assessment_input.get("line_of_therapy", "")),
             "line_of_therapy_context": assessment_input.get("line_of_therapy_context", ""),
         }
+        score_requirements = build_intake_score_requirements(
+            module_id=module_id,
+            state=state,
+            assessment_input=assessment_input,
+            assessment_result=assessment_result or {},
+        )
 
         return {
             "scope": scope,
@@ -524,6 +705,9 @@ class PatientTrackingService:
             "therapy_catalog_entries": therapy_catalog_entries(),
             "canonicalization_map": self.canonicalization_map(),
             "imported_clinical_fields": imported_fields,
+            "applicable_scores": score_requirements.get("applicable_scores", []),
+            "required_fields_by_score": score_requirements.get("required_fields_by_score", {}),
+            "score_missing_inputs": score_requirements.get("score_missing_inputs", []),
         }
 
     def merge_assessment_payload(self, assessment: dict[str, Any], registration_payload: dict[str, Any]) -> dict[str, Any]:

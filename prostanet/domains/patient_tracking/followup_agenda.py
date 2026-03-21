@@ -41,6 +41,8 @@ ADVANCED_STATES = {
     "adt_progression_verification",
     "mcspc_oligo_metachronous",
     "mcspc_low_volume_sync_oligo",
+    "mcspc_high_volume_sync",
+    "mcspc_high_volume_metachronous",
     "mcspc_high_volume",
     "m0_crpc",
     "m1_crpc",
@@ -607,6 +609,7 @@ def _build_visit_sections(state: str, management_track: str) -> list[dict[str, A
                     _field("mini_cog_score", "Mini-Cog", "number"),
                     _field("fatigue_score", "Brief Fatigue Inventory", "number"),
                     _field("seizure_history", "Antecedente convulsivo", "checkbox"),
+                    _field("peripheral_neuropathy_grade", "Neuropatía periférica", "select", options=["", "0", "1", "2", "3", "4"]),
                     _field("dermatitis_history", "Dermatitis / rash previo", "checkbox"),
                     _field("dxa_t_score_lumbar", "DXA T-score lumbar", "number"),
                     _field("dxa_t_score_hip", "DXA T-score cadera", "number"),
@@ -710,6 +713,51 @@ def _filter_fields(sections: list[dict[str, Any]], field_names: list[str], requi
                 }
             )
     return filtered_sections
+
+
+def _append_dynamic_capture_fields(sections: list[dict[str, Any]], field_names: list[str]) -> list[dict[str, Any]]:
+    wanted = [name for name in field_names if name and not str(name).startswith("source_document:")]
+    if not wanted:
+        return sections
+    present = {
+        str(field.get("name") or "")
+        for section in sections
+        for field in list(section.get("fields") or [])
+    }
+    missing = [name for name in wanted if name not in present]
+    if not missing:
+        return sections
+
+    try:
+        from prostanet.domains.patient_tracking.risk_tools import FIELD_REGISTRY
+    except Exception:
+        FIELD_REGISTRY = {}
+
+    dynamic_fields = []
+    for field_name in missing:
+        meta = dict(FIELD_REGISTRY.get(field_name) or {})
+        if not meta:
+            continue
+        dynamic_fields.append(
+            _field(
+                field_name,
+                meta.get("label") or field_name.replace("_", " "),
+                meta.get("field_type") or "text",
+                options=meta.get("options", []),
+                help_text=meta.get("help_text", ""),
+                unit=meta.get("unit", ""),
+            )
+        )
+    if not dynamic_fields:
+        return sections
+
+    return sections + [
+        {
+            "title": "Refinadores pronósticos y datos faltantes",
+            "subtitle": "Campos dinámicos añadidos para completar scores aplicables sin abrir otro formulario.",
+            "fields": dynamic_fields,
+        }
+    ]
 
 
 def _agenda_item_field_names(item: dict[str, Any], *, exact_required_only: bool = False) -> list[str]:
@@ -920,6 +968,7 @@ def build_visit_schema(
             if alert_capture
             else list(dict.fromkeys(["visit_date", *field_scope, "clinician_notes"]))
         )
+        sections = _append_dynamic_capture_fields(sections, scoped_fields)
         sections = _filter_fields(sections, scoped_fields, field_scope)
         agenda_item_context = {
             "mode": "mini_capture" if alert_capture else "capture_block",

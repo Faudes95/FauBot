@@ -408,6 +408,9 @@ class MasterFollowupPlan:
     optional_items: list[dict[str, Any]] = field(default_factory=list)
     highlight_actions: list[str] = field(default_factory=list)
     gaps_to_close: list[str] = field(default_factory=list)
+    prognostic_rationale: list[dict[str, Any]] = field(default_factory=list)
+    cadence_adjusted_by: list[str] = field(default_factory=list)
+    backbone_alignment: dict[str, Any] = field(default_factory=dict)
     summary: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -474,6 +477,35 @@ class AdjudicationStatus:
 
 
 @dataclass(frozen=True)
+class PrognosticModifier:
+    modifier_key: str
+    title: str
+    severity: str
+    why_it_matters_now: str = ""
+    decision_domains_affected: list[str] = field(default_factory=list)
+    recommended_actions: list[str] = field(default_factory=list)
+    followup_impact: list[str] = field(default_factory=list)
+    source_tools: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class BackboneAlignment:
+    trial_backbone: list[str] = field(default_factory=list)
+    trial_backbone_label: str = ""
+    current_regimen: str = ""
+    current_regimen_label: str = ""
+    alignment_status: str = "unknown"
+    clinical_note: str = ""
+    matched_trials: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class TrialComparableEndpoint:
     endpoint_key: str
     label: str
@@ -500,6 +532,10 @@ class BenchmarkSnapshot:
     endpoint_snapshot: dict[str, Any] = field(default_factory=dict)
     cohort_flags: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    recommended_trial_backbone: list[str] = field(default_factory=list)
+    recommended_trial_backbone_label: str = ""
+    recommended_trial_backbone_source: str = ""
+    recommended_trial_backbone_note: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -706,6 +742,207 @@ class VerifiedFactBundle:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class VitalStatusRecord:
+    vital_status: str = "alive"
+    date_of_death: str | None = None
+    cause_of_death: str | None = None
+    last_contact_date: str = ""
+    last_contact_status: str = ""
+    death_source: str = ""
+    source_type: str = ""
+    source_record_id: int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class SurvivalAnchorEvent:
+    anchor_type: str
+    anchor_date: str = ""
+    anchor_source: str = ""
+    source_type: str = ""
+    source_record_id: int | None = None
+    payload: dict[str, Any] = field(default_factory=dict)
+    active: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class BiopsyCoreRecord:
+    core_id: str
+    location_sextant: str
+    core_type: str
+    core_length_mm: float | None = None
+    tumor_length_mm: float | None = None
+    involvement_pct: float | None = None
+    gleason_primary: int | None = None
+    gleason_secondary: int | None = None
+    isup_grade: int | None = None
+    positive: bool = False
+    mri_target_concordance: bool | None = None
+    cribriform_pattern: bool = False
+    intraductal_carcinoma: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class BiopsyTarget:
+    target_id: str
+    target_label: str = ""
+    pirads_score: int | None = None
+    lesion_location: str = ""
+    positive_core_count: int = 0
+    total_core_count: int = 0
+    concordance_status: str = ""
+    notes: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class BiopsySession:
+    session_key: str
+    biopsy_date: str = ""
+    biopsy_type: str = ""
+    biopsy_route: str = ""
+    biopsy_context: str = ""
+    mri_pirads_at_biopsy: int | None = None
+    systematic_cores: list[BiopsyCoreRecord] = field(default_factory=list)
+    targeted_cores: list[BiopsyCoreRecord] = field(default_factory=list)
+    targets: list[BiopsyTarget] = field(default_factory=list)
+    complications: list[str] = field(default_factory=list)
+    source_type: str = ""
+    source_record_id: int | None = None
+    legacy_biopsy_id: int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["systematic_cores"] = [item.to_dict() for item in self.systematic_cores]
+        data["targeted_cores"] = [item.to_dict() for item in self.targeted_cores]
+        data["targets"] = [item.to_dict() for item in self.targets]
+        return data
+
+
+@dataclass(frozen=True)
+class ASScheduleRecord:
+    item_type: str
+    title: str
+    due_date: str
+    interval_months: int = 0
+    status: str = "scheduled"
+    completed_date: str = ""
+    priority: str = "routine"
+    evidence_basis: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class ASTriggerEvent:
+    trigger_type: str
+    detected_date: str = ""
+    detail: str = ""
+    severity: str = ""
+    recommended_action: str = ""
+    evidence_basis: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class SkeletalRelatedEventRecord:
+    event_type: str
+    event_date: str = ""
+    site: str = ""
+    intervention: str = ""
+    surgical_intervention: bool = False
+    rt_dose_gy: float | None = None
+    rt_fractions: int | None = None
+    details: str = ""
+    severity: str = "standard"
+    resolved: bool = False
+    evidence_tags: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class BoneModifyingAgentCourse:
+    agent: str = ""
+    start_date: str = ""
+    end_date: str | None = None
+    frequency: str = ""
+    dental_clearance_done: bool = False
+    dental_clearance_date: str | None = None
+    last_dental_evaluation: str | None = None
+    onj_monitoring: bool = False
+    onj_detected: bool = False
+    calcium_vitamin_d_supplementation: bool = False
+    renal_function_adequate: bool | None = None
+    last_renal_check_date: str | None = None
+    doses_administered: int = 0
+    notes: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class RadiotherapyToxicityRecord:
+    domain: str
+    phase: str
+    grade: int
+    details: str = ""
+    onset_date: str = ""
+    evidence_tags: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class RadiotherapyCourseRecord:
+    course_key: str
+    rt_intent: str = ""
+    modality: str = ""
+    target_volume: str = ""
+    total_dose_gy: float = 0.0
+    fractions: int = 0
+    dose_per_fraction_gy: float = 0.0
+    boost_dose_gy: float | None = None
+    boost_technique: str | None = None
+    rt_start_date: str = ""
+    rt_end_date: str = ""
+    concurrent_adt: bool = False
+    adt_neoadjuvant_months: float | None = None
+    adt_concurrent: bool = False
+    adt_adjuvant_months: float | None = None
+    adt_total_planned_months: float | None = None
+    salvage_psa_at_start: float | None = None
+    salvage_pre_imaging: str | None = None
+    salvage_nodal_coverage: bool | None = None
+    mdt_sites_treated: int | None = None
+    mdt_site_details: list[dict[str, Any]] = field(default_factory=list)
+    toxicity: list[RadiotherapyToxicityRecord] = field(default_factory=list)
+    evidence_tags: list[str] = field(default_factory=list)
+    notes: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["toxicity"] = [item.to_dict() for item in self.toxicity]
+        return data
 
 
 def module_schema(

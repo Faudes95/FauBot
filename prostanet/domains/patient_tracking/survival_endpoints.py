@@ -29,6 +29,7 @@ ENDPOINT_TYPES = (
     "OS",              # Overall Survival
     "rPFS",            # Radiographic Progression-Free Survival
     "MFS",             # Metastasis-Free Survival (para localizado / m0 CRPC)
+    "TTR",             # Time to Recurrence / relapse after local therapy
     "BCR_FS",          # Biochemical Recurrence-Free Survival
     "TTPP",            # Time to PSA Progression
     "TTSRE",           # Time to First Skeletal-Related Event
@@ -135,6 +136,71 @@ def _parse_date(value: Any) -> date | None:
 
 def _months_between(d1: date, d2: date) -> float:
     return round((d2 - d1).days / 30.44, 1)
+
+
+def _merge_canonical_survival_context(patient: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(patient)
+    identity = patient.get("identity") or {}
+    bcr = patient.get("bcr") or {}
+    surgery = patient.get("surgery") or {}
+    radiation = patient.get("radiation") or []
+    if isinstance(radiation, dict):
+        radiation = [radiation]
+    treatments = patient.get("treatments") or []
+    latest_treatment = treatments[-1] if treatments else {}
+    next_treatment = treatments[1] if len(treatments) > 1 else {}
+    for field in ("id", "nss", "diagnosis_date", "vital_status", "date_of_death", "cause_of_death", "last_contact_date", "last_contact_status", "death_source"):
+        if identity.get(field) not in (None, ""):
+            merged[field if field != "id" else "patient_id"] = identity.get(field)
+    if bcr:
+        merged.setdefault("bcr_date", bcr.get("bcr_date"))
+        merged.setdefault("biochemical_recurrence_date", bcr.get("bcr_date"))
+        merged.setdefault("psa_progression_date", bcr.get("bcr_date"))
+    if surgery:
+        merged.setdefault("surgery_date", surgery.get("surgery_date"))
+        merged.setdefault("local_therapy_date", surgery.get("surgery_date"))
+    if radiation:
+        latest_radiation = radiation[-1]
+        merged.setdefault("rt_end_date", latest_radiation.get("rt_end_date") or latest_radiation.get("rt_date") or latest_radiation.get("rt_start_date"))
+        merged.setdefault("local_therapy_date", latest_radiation.get("rt_end_date") or latest_radiation.get("rt_date") or latest_radiation.get("rt_start_date"))
+    if latest_treatment:
+        merged.setdefault("treatment_start_date", latest_treatment.get("start_date"))
+        merged.setdefault("current_line_start_date", latest_treatment.get("start_date"))
+        merged.setdefault("line_of_therapy", latest_treatment.get("line_of_therapy") or latest_treatment.get("line_of_therapy_number"))
+    if next_treatment:
+        merged.setdefault("next_line_start_date", next_treatment.get("start_date"))
+    status = patient.get("survival_status_detail") or {}
+    if isinstance(status, dict):
+        for field in ("vital_status", "date_of_death", "cause_of_death", "last_contact_date", "last_contact_status", "death_source"):
+            if status.get(field) not in (None, ""):
+                merged[field] = status.get(field)
+    for anchor in patient.get("survival_anchor_events") or []:
+        if not isinstance(anchor, dict):
+            continue
+        anchor_type = str(anchor.get("anchor_type") or "")
+        anchor_date = anchor.get("anchor_date")
+        if not anchor_date:
+            continue
+        if anchor_type == "treatment_start":
+            merged.setdefault("treatment_start_date", anchor_date)
+            merged.setdefault("current_line_start_date", anchor_date)
+        elif anchor_type == "radiographic_progression":
+            merged.setdefault("radiographic_progression_date", anchor_date)
+        elif anchor_type == "metastasis":
+            merged.setdefault("metastatic_diagnosis_date", anchor_date)
+            merged.setdefault("first_metastasis_date", anchor_date)
+        elif anchor_type == "psa_progression":
+            merged.setdefault("psa_progression_date", anchor_date)
+            merged.setdefault("biochemical_recurrence_date", anchor_date)
+        elif anchor_type == "first_sre":
+            merged.setdefault("first_sre_date", anchor_date)
+        elif anchor_type == "crpc_confirmed":
+            merged.setdefault("crpc_confirmation_date", anchor_date)
+        elif anchor_type == "next_line_start":
+            merged.setdefault("next_line_start_date", anchor_date)
+        elif anchor_type == "death":
+            merged.setdefault("date_of_death", anchor_date)
+    return merged
 
 
 # ── Servicio principal ───────────────────────────────────────────────────────
@@ -309,6 +375,17 @@ class SurvivalEndpointService:
         )
 
     @staticmethod
+    def compute_ttr(patient: dict[str, Any]) -> SurvivalEndpoint | None:
+        """Alias clínico explícito de tiempo a recurrencia tras tratamiento local."""
+        bcr_fs = SurvivalEndpointService.compute_bcr_fs(patient)
+        if not bcr_fs:
+            return None
+        payload = bcr_fs.to_dict()
+        payload["endpoint_type"] = "TTR"
+        payload["evidence_tags"] = list(payload.get("evidence_tags") or []) + ["ICECaP surrogate framing"]
+        return SurvivalEndpoint(**payload)
+
+    @staticmethod
     def compute_ttpp(patient: dict[str, Any]) -> SurvivalEndpoint | None:
         """Calcula Time to PSA Progression según PCWG3."""
         start = _parse_date(patient.get("treatment_start_date") or patient.get("current_line_start_date"))
@@ -353,6 +430,11 @@ class SurvivalEndpointService:
 
         first_sre_months = None
         first_sre_date_str = None
+
+        first_sre_date = _parse_date(patient.get("first_sre_date"))
+        if first_sre_date:
+            first_sre_date_str = first_sre_date.isoformat()
+            first_sre_months = _months_between(start, first_sre_date)
 
         if sre_profile:
             first_sre_months = sre_profile.get("time_to_first_sre_months")
@@ -469,6 +551,7 @@ class SurvivalEndpointService:
     @staticmethod
     def compute_endpoints(patient: dict[str, Any], state: str) -> SurvivalStatus:
         """Calcula todos los endpoints aplicables según el estado clínico."""
+        patient = _merge_canonical_survival_context(patient)
         endpoints: list[SurvivalEndpoint] = []
         active_endpoints: dict[str, str] = {}
 
@@ -479,6 +562,10 @@ class SurvivalEndpointService:
 
         # BCR-FS — para estados post-tratamiento local
         if state in ("post_prostatectomy", "recurrence_bcr", "localized_initial"):
+            ttr_ep = SurvivalEndpointService.compute_ttr(patient)
+            if ttr_ep:
+                endpoints.append(ttr_ep)
+                active_endpoints["TTR"] = "reached" if not ttr_ep.censored else "ongoing"
             bcr_ep = SurvivalEndpointService.compute_bcr_fs(patient)
             if bcr_ep:
                 endpoints.append(bcr_ep)
@@ -494,7 +581,7 @@ class SurvivalEndpointService:
         # rPFS — para enfermedad avanzada bajo tratamiento
         advanced_states = {
             "mcspc_oligo_metachronous", "mcspc_low_volume_sync_oligo",
-            "mcspc_high_volume", "m0_crpc", "m1_crpc",
+            "mcspc_high_volume_sync", "mcspc_high_volume_metachronous", "mcspc_high_volume", "m0_crpc", "m1_crpc",
         }
         if state in advanced_states:
             rpfs_ep = SurvivalEndpointService.compute_rpfs(patient)
@@ -512,10 +599,10 @@ class SurvivalEndpointService:
         # TTSRE — para enfermedad metastásica
         metastatic_states = {
             "mcspc_oligo_metachronous", "mcspc_low_volume_sync_oligo",
-            "mcspc_high_volume", "m1_crpc",
+            "mcspc_high_volume_sync", "mcspc_high_volume_metachronous", "mcspc_high_volume", "m1_crpc",
         }
         if state in metastatic_states:
-            sre_profile = patient.get("sre_profile")
+            sre_profile = patient.get("skeletal_event_profile") or patient.get("sre_profile")
             if isinstance(sre_profile, dict):
                 ttsre_ep = SurvivalEndpointService.compute_ttsre(patient, sre_profile)
             else:
@@ -527,7 +614,7 @@ class SurvivalEndpointService:
         # Tiempo a CRPC — para enfermedad bajo ADT
         adt_states = {
             "mcspc_oligo_metachronous", "mcspc_low_volume_sync_oligo",
-            "mcspc_high_volume", "adt_progression_verification",
+            "mcspc_high_volume_sync", "mcspc_high_volume_metachronous", "mcspc_high_volume", "adt_progression_verification",
         }
         if state in adt_states:
             crpc_ep = SurvivalEndpointService.compute_time_to_crpc(patient)
@@ -775,6 +862,7 @@ class SurvivalEndpointService:
                 "OS": "Supervivencia global (OS)",
                 "rPFS": "SLP radiográfica (rPFS)",
                 "MFS": "Supervivencia libre de metástasis (MFS)",
+                "TTR": "Tiempo a recurrencia (TTR)",
                 "BCR_FS": "Supervivencia libre de BCR",
                 "TTPP": "Tiempo a progresión PSA",
                 "TTSRE": "Tiempo a primer evento esquelético",

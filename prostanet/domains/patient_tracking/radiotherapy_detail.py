@@ -122,10 +122,32 @@ class DetailedRadiotherapyCourse:
     notes: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        d = asdict(self)
-        d["toxicity"] = [t.to_dict() for t in self.toxicity]
-        d["mdt_site_details"] = [s.to_dict() for s in self.mdt_site_details]
-        return d
+        return {
+            "rt_id": self.rt_id,
+            "rt_intent": self.rt_intent,
+            "modality": self.modality,
+            "target_volume": self.target_volume,
+            "total_dose_gy": self.total_dose_gy,
+            "fractions": self.fractions,
+            "dose_per_fraction_gy": self.dose_per_fraction_gy,
+            "boost_dose_gy": self.boost_dose_gy,
+            "boost_technique": self.boost_technique,
+            "rt_start_date": self.rt_start_date,
+            "rt_end_date": self.rt_end_date,
+            "concurrent_adt": self.concurrent_adt,
+            "adt_neoadjuvant_months": self.adt_neoadjuvant_months,
+            "adt_concurrent": self.adt_concurrent,
+            "adt_adjuvant_months": self.adt_adjuvant_months,
+            "adt_total_planned_months": self.adt_total_planned_months,
+            "salvage_psa_at_start": self.salvage_psa_at_start,
+            "salvage_pre_imaging": self.salvage_pre_imaging,
+            "salvage_nodal_coverage": self.salvage_nodal_coverage,
+            "mdt_sites_treated": self.mdt_sites_treated,
+            "mdt_site_details": [s.to_dict() for s in self.mdt_site_details],
+            "toxicity": [t.to_dict() for t in self.toxicity],
+            "evidence_tags": list(self.evidence_tags),
+            "notes": self.notes,
+        }
 
 
 @dataclass
@@ -145,9 +167,20 @@ class RTHistorySummary:
     cumulative_pelvic_dose_gy: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
-        d = asdict(self)
-        d["courses"] = [c.to_dict() for c in self.courses]
-        return d
+        return {
+            "patient_id": self.patient_id,
+            "courses": [c.to_dict() for c in self.courses],
+            "total_courses": self.total_courses,
+            "has_definitive_rt": self.has_definitive_rt,
+            "has_adjuvant_rt": self.has_adjuvant_rt,
+            "has_salvage_rt": self.has_salvage_rt,
+            "has_palliative_rt": self.has_palliative_rt,
+            "has_mdt": self.has_mdt,
+            "cumulative_gu_toxicity_max": self.cumulative_gu_toxicity_max,
+            "cumulative_gi_toxicity_max": self.cumulative_gi_toxicity_max,
+            "prior_pelvic_rt": self.prior_pelvic_rt,
+            "cumulative_pelvic_dose_gy": self.cumulative_pelvic_dose_gy,
+        }
 
 
 # ── Funciones auxiliares ─────────────────────────────────────────────────────

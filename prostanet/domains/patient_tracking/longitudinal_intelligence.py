@@ -17,6 +17,8 @@ POSTLOCAL_STATES = {"post_prostatectomy", "recurrence_bcr"}
 MHSPC_STATES = {
     "mcspc_oligo_metachronous",
     "mcspc_low_volume_sync_oligo",
+    "mcspc_high_volume_sync",
+    "mcspc_high_volume_metachronous",
     "mcspc_high_volume",
 }
 ADVANCED_STATES = {
@@ -202,7 +204,7 @@ def build_state_classifier_payload(patient: dict[str, Any], latest_assessment: d
         "metastasis_site": metastasis_site,
         "metastasis_count": metastasis_count,
         "volume_disease": derive_mhspc_volume_context(patient.get("baseline") or {}) or ("high" if metastasis_count >= 4 or metastasis_site == "Visceral" else "low"),
-        "metachronous_metastasis": 1 if state == "mcspc_oligo_metachronous" else 0,
+        "metachronous_metastasis": 1 if state in {"mcspc_oligo_metachronous", "mcspc_high_volume_metachronous"} else 0,
         "psa_current": _safe_float(_latest(patient.get("follow_ups", []), "visit_date").get("psa_current")) or _safe_float((patient.get("bcr") or {}).get("bcr_psa")) or _safe_float((patient.get("baseline") or {}).get("baseline_psa")),
         "current_adt_context": _derive_current_adt_context(patient, state),
         "castrate_testosterone_status": _derive_castrate_status(patient, state),
