@@ -31,8 +31,17 @@ from prostanet.domains.research_intelligence.research_exports import (
     build_csv_export_payload,
     build_redcap_export_payload,
 )
+from prostanet.domains.patient_tracking.psma_imaging.analytics import (
+    build_psma_imaging_analytics,
+)
+from prostanet.domains.patient_tracking.laboratory_intelligence.analytics import (
+    build_laboratory_dashboard_metrics,
+)
 from prostanet.domains.research_intelligence.survival_registry import (
     build_survival_registry_payload,
+)
+from prostanet.domains.clinical_validation.repository import (
+    get_latest_validation_summary,
 )
 
 
@@ -72,6 +81,8 @@ def build_epidemiology_dashboard_payload() -> dict[str, Any]:
     )
     operational = build_operational_outcomes_payload(records)
     quality = build_quality_indicator_payload(records)
+    psma_imaging = build_psma_imaging_analytics(records)
+    laboratory_intelligence = build_laboratory_dashboard_metrics(records)
     benchmarking = build_institutional_benchmark_payload(records)
     exports = {
         "csv": build_csv_export_payload(),
@@ -85,12 +96,15 @@ def build_epidemiology_dashboard_payload() -> dict[str, Any]:
         "exportable_records": exports["csv"].get("record_count", 0),
         "consent_coverage_pct": consent.get("coverage_pct", 0.0),
     }
+    validation = get_latest_validation_summary()
     return {
         "survival": survival,
         "multivariate": multivariate,
         "comparative_effectiveness": comparative,
         "operational_outcomes": operational,
         "quality_indicators": quality,
+        "psma_imaging": psma_imaging,
+        "laboratory_intelligence": laboratory_intelligence,
         "benchmarking": benchmarking,
         "dynamic_cohorts": dynamic_cohorts,
         "exports": {
@@ -100,4 +114,5 @@ def build_epidemiology_dashboard_payload() -> dict[str, Any]:
         },
         "consent_governance": consent,
         "research_readiness": readiness,
+        "longitudinal_validation": validation,
     }

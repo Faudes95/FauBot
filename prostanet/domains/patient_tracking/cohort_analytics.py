@@ -263,6 +263,7 @@ def build_analysis_dataset_row(patient: dict[str, Any], state: str, management_t
     latest_followup = _latest(patient.get("follow_ups") or [], "visit_date")
     latest_biopsy = _latest(patient.get("biopsies") or [], "biopsy_date")
     latest_imaging = _latest(patient.get("imaging") or [], "study_date")
+    psma_profile = patient.get("psma_structured_profile") or {}
     latest_genomic = patient.get("genomics") or {}
     completeness = compute_patient_cohort_completeness(patient, state)
     endpoints = compute_patient_endpoint_readiness(patient, state)
@@ -289,6 +290,12 @@ def build_analysis_dataset_row(patient: dict[str, Any], state: str, management_t
         "latest_biopsy_isup": latest_biopsy.get("isup_grade"),
         "latest_pirads": latest_imaging.get("pirads_score"),
         "latest_imaging_type": latest_imaging.get("study_type"),
+        "psma_radioligand": psma_profile.get("psma_radioligand"),
+        "psma_rads_score": psma_profile.get("psma_rads_score"),
+        "psma_uptake_pattern": psma_profile.get("psma_uptake_pattern"),
+        "psma_structured_complete": bool(psma_profile.get("structured_complete")),
+        "psma_upstaged_vs_conventional": bool(psma_profile.get("psma_upstaged_vs_conventional")),
+        "psma_management_changed": bool(psma_profile.get("psma_management_changed")),
         "current_treatment": latest_followup.get("current_treatment"),
         "current_regimen_code": _latest(patient.get("treatments") or [], "start_date").get("drug_scheme"),
         "line_of_therapy": _latest(patient.get("treatments") or [], "start_date").get("line_of_therapy"),

@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from prostanet.domains.evidence_registry.service import EvidenceRegistryService
 from prostanet.domains.guideline_comparison.service import GuidelineComparisonService
+from prostanet.domains.patient_tracking.psma_imaging import (
+    build_psma_decision_impact,
+    build_psma_structured_profile_from_payload,
+)
 from prostanet.domains.recurrence_bcr.rules_eau import classify_recurrence_eau
 from prostanet.domains.recurrence_bcr.rules_nccn import classify_recurrence
 from prostanet.domains.recurrence_bcr.schemas import RECURRENCE_BCR_SCHEMA
@@ -23,6 +27,12 @@ class RecurrenceBCRService:
         nccn = classify_recurrence(payload)
         eau = classify_recurrence_eau(payload)
         comparison = self.comparison.compare(nccn, eau)
+        psma_profile = (
+            build_psma_structured_profile_from_payload(payload)
+            if str(payload.get("psma_pet_done", "0")) == "1"
+            else {"available": False}
+        )
+        psma_impact = build_psma_decision_impact(psma_profile, state=self.module_id, patient={"baseline": payload})
         psa_current = float(payload.get("psa_current", payload.get("psa", 0)) or 0)
         psadt = float(payload.get("psadt_months", 0) or 0)
         treatments = []
@@ -45,6 +55,13 @@ class RecurrenceBCRService:
             treatments.append({"name": "Early salvage RT evaluation", "priority": "preferred", "notes": "Use PSA persistence/recurrence thresholds and clinical risk."})
             if nccn["psma_pet_recommended"] and not nccn["psma_pet_done"]:
                 treatments.append({"name": "PSMA-PET directed salvage staging", "priority": "selected_candidate", "notes": nccn["psma_pet_reason"]})
+            if psma_impact.get("clinical_pattern") == "local_pelvic" and psma_impact.get("confidence") != "low":
+                treatments.append({"name": "Salvage RT guiada por PSMA", "priority": "eligible", "notes": "PSMA local/pélvico mantiene abierta la ventana curativa y refuerza rescate dirigido."})
+            elif psma_impact.get("clinical_pattern") == "oligometastatic":
+                treatments.append({"name": "MDT / rescate multimodal guiado por PSMA", "priority": "selected_candidate", "notes": "PSMA multifocal de bajo burden abre discusión de MDT/SBRT o rescate combinado."})
+            elif psma_impact.get("clinical_pattern") == "diseminado":
+                not_recommended.append("No priorizar rescate local aislado cuando el PSMA documenta patrón diseminado o estadio M1b/M1c.")
+                treatments.append({"name": "Reestadificación sistémica post-PSMA", "priority": "eligible", "notes": "La distribución por PSMA reduce la plausibilidad de rescate local aislado."})
             durations.append("If ADT is added with secondary RT, use a risk-adapted duration in the 6-24 month range.")
             trials.extend([{"trial": "RTOG 9601", "match": True}, {"trial": "GETUG-AFU 16", "match": True}])
         else:
@@ -53,8 +70,17 @@ class RecurrenceBCRService:
             treatments.append({"name": "Re-staging after RT recurrence", "priority": "preferred", "notes": "Confirm local-only versus systemic recurrence before treatment selection."})
             if nccn["psma_pet_recommended"] and not nccn["psma_pet_done"]:
                 treatments.append({"name": "PSMA-PET directed salvage staging", "priority": "selected_candidate", "notes": nccn["psma_pet_reason"]})
+            if psma_impact.get("clinical_pattern") == "local_pelvic" and psma_impact.get("confidence") != "low":
+                treatments.append({"name": "Revisión de rescate local guiada por PSMA", "priority": "eligible", "notes": "PSMA local/pélvico apoya salvamento local si sigue siendo técnicamente factible."})
+            elif psma_impact.get("clinical_pattern") == "oligometastatic":
+                treatments.append({"name": "MDT/SBRT guiado por PSMA", "priority": "selected_candidate", "notes": "PSMA con burden limitado abre ruta oligometastásica contextual."})
+            elif psma_impact.get("clinical_pattern") == "diseminado":
+                not_recommended.append("No usar una lectura diseminada de PSMA como base para rescate local aislado después de RT.")
             trials.append({"trial": "Local salvage after RT evidence set", "match": True})
             not_recommended.append("Do not use PSMA-PET after RT recurrence unless the patient is a realistic local-salvage candidate.")
+        if psma_impact.get("confidence") == "low":
+            not_recommended.append("No escalar una decisión mayor con PSMA-RADS bajo/intermedio o estructura PSMA incompleta sin correlación adicional.")
+        durations.extend(psma_impact.get("recommended_actions", [])[:2])
 
         case_summary = (
             f"El caso corresponde a {nccn['label']} con antígeno prostático específico actual de {psa_current:g} ng/mL "
@@ -94,6 +120,7 @@ class RecurrenceBCRService:
                 f"El tiempo de duplicación del antígeno prostático específico observado es de {psadt:g} meses.",
                 "Las rutas sistémicas para segunda recurrencia bioquímica de alto riesgo solo deben activarse si cumplen exactamente los criterios del escenario y no queda rescate local potencialmente curativo.",
                 "La tomografía por emisión de positrones dirigida al antígeno prostático específico de membrana debe usarse solo si cambia una decisión de rescate y no como imagen rutinaria indiscriminada.",
+                psma_impact.get("rationale"),
             ],
             alternatives=[
                 "Radioterapia de rescate temprana y terapia de privación androgénica adaptada al riesgo si el escenario es posterior a prostatectomía radical.",

@@ -244,6 +244,13 @@
     {% set clinical_signals = profile.clinical_signals if profile else {} %}
     {% set next_best_action = profile.next_best_action if profile else {} %}
     {% set transition_proposals = profile.transition_proposals if profile else [] %}
+    {% set transition_resolution = profile.transition_resolution if profile else {} %}
+    {% set care_intent_contract = profile.care_intent_contract if profile else {} %}
+    {% set longitudinal_truth_snapshot = profile.longitudinal_truth_snapshot if profile else {} %}
+    {% set decision_recalculation_trace = profile.decision_recalculation_trace if profile else {} %}
+    {% set guideline_followup_plan = profile.guideline_followup_plan if profile else {} %}
+    {% set laboratory_intelligence_profile = profile.laboratory_intelligence_profile if profile else {} %}
+    {% set latest_clinically_decisive_visit = profile.latest_clinically_decisive_visit if profile else {} %}
     {% set recommendation_audit = profile.recommendation_audit if profile else [] %}
     {% set document_board = profile.document_board if profile else {} %}
     {% set advanced_panel_context = profile.advanced_panel_context if profile else {} %}
@@ -276,6 +283,8 @@
     {% set forecast_reliability = profile.forecast_reliability if profile else {} %}
     {% set live_benchmark = profile.live_benchmark if profile else {} %}
     {% set benchmark_reliability = profile.benchmark_reliability if profile else {} %}
+    {% set psma_structured_profile = profile.psma_structured_profile if profile else (patient.psma_structured_profile if patient else {}) %}
+    {% set psma_decision_impact = profile.psma_decision_impact if profile else (patient.psma_decision_impact if patient else {}) %}
     {% set agenda_resolution_trace = profile.agenda_resolution_trace if profile else [] %}
     {% set consent_summary = profile.consent_summary if profile else {} %}
     {% set consent_evidence = profile.consent_evidence if profile else {} %}
@@ -404,6 +413,58 @@
                 <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4 lg:max-w-sm">
                     <div class="text-xs uppercase tracking-wider text-slate-500">Qué cambia</div>
                     <div class="mt-2 text-sm text-slate-200">Agenda, paneles, evidencia y siguiente acción ya se muestran con el estado reconciliado.</div>
+                </div>
+            </div>
+        </section>
+        {% endif %}
+
+        {% if psma_structured_profile and psma_structured_profile.available %}
+        <section class="pn-surface">
+            <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div class="lg:max-w-2xl">
+                    <div class="text-xs uppercase tracking-[0.2em] text-cyan-300">Imagen PSMA estructurada</div>
+                    <div class="mt-2 text-sm font-semibold text-white">
+                        {{ psma_structured_profile.psma_radioligand or 'Radioligando no documentado' }} ·
+                        {% if psma_structured_profile.psma_rads_score %}PSMA-RADS {{ psma_structured_profile.psma_rads_score }}{% else %}PSMA-RADS no documentado{% endif %}
+                    </div>
+                    <p class="mt-2 text-sm text-slate-400">
+                        Lesión índice: {{ psma_structured_profile.psma_index_lesion_site or 'No documentada' }}
+                        {% if psma_structured_profile.psma_index_lesion_suvmax is not none %}· SUVmax {{ psma_structured_profile.psma_index_lesion_suvmax }}{% endif %}
+                        · patrón {{ psma_structured_profile.psma_uptake_pattern or 'indeterminado' }}
+                    </p>
+                    <p class="mt-2 text-sm text-slate-300">{{ psma_decision_impact.rationale or 'Sin impacto clínico adicional documentado.' }}</p>
+                </div>
+                <div class="grid grid-cols-1 gap-3 lg:w-[420px]">
+                    <div class="rounded-xl border border-slate-700 bg-slate-900/60 p-4">
+                        <div class="text-xs uppercase tracking-wider text-slate-500">Correlación con imagen convencional</div>
+                        <div class="mt-2 text-sm text-white">{{ psma_structured_profile.conventional_stage_before_psma or 'No comparable' }} → {{ psma_structured_profile.psma_stage_after_psma or 'No documentado' }}</div>
+                        <div class="mt-2 text-xs text-slate-400">
+                            {% if psma_structured_profile.psma_upstaged_vs_conventional is sameas true %}
+                            Upstaging documentado por PSMA.
+                            {% elif psma_structured_profile.psma_upstaged_vs_conventional is sameas false %}
+                            Sin upstaging documentado por PSMA.
+                            {% else %}
+                            Correlación formal no disponible.
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="rounded-xl border border-slate-700 bg-slate-900/60 p-4">
+                        <div class="text-xs uppercase tracking-wider text-slate-500">Qué cambia hoy</div>
+                        <div class="mt-2 text-sm font-semibold {{ 'text-emerald-300' if psma_decision_impact.confidence == 'high' else 'text-amber-200' if psma_decision_impact.confidence == 'medium' else 'text-rose-200' }}">
+                            Confianza {{ psma_decision_impact.confidence or 'unknown' }}
+                        </div>
+                        <ul class="mt-2 space-y-1 text-xs text-slate-300 list-disc pl-5">
+                            {% for action in psma_decision_impact.recommended_actions[:3] %}
+                            <li>{{ action }}</li>
+                            {% endfor %}
+                            {% if not psma_decision_impact.recommended_actions %}
+                            <li>La imagen aporta contexto, pero no modifica de forma dominante la conducta actual.</li>
+                            {% endif %}
+                        </ul>
+                        {% if psma_structured_profile.psma_management_changed is sameas true %}
+                        <div class="mt-3 text-xs text-cyan-200">Cambio de conducta documentado por PSMA.</div>
+                        {% endif %}
+                    </div>
                 </div>
             </div>
         </section>
@@ -761,13 +822,23 @@
             <div class="relative z-10 space-y-5">
                 <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-5">
                     <div class="max-w-4xl">
+                        <div class="hidden">
+                            <span data-testid="effective-state-raw">{{ clinical_signals.effective_state_final or clinical_signals.effective_state or clinical_signals.reconciled_state or '' }}</span>
+                            <span data-testid="effective-track-raw">{{ clinical_signals.effective_management_track_final or clinical_signals.effective_management_track or clinical_signals.reconciled_management_track or '' }}</span>
+                            <span data-testid="transition-policy">{{ transition_resolution.policy or '' }}</span>
+                            <span data-testid="schedule-state-raw">{{ profile.schedule_state if profile and profile.schedule_state is defined else '' }}</span>
+                            <span data-testid="schedule-track-raw">{{ profile.schedule_management_track if profile and profile.schedule_management_track is defined else '' }}</span>
+                            <span data-testid="action-schedule-consistency">{{ 'true' if guideline_followup_plan.action_schedule_consistency is not defined or guideline_followup_plan.action_schedule_consistency else 'false' }}</span>
+                        </div>
                         <p class="pm-summary-kicker">Panel ejecutivo del caso</p>
-                        <h2 class="pm-summary-title mt-3">{{ clinical_compass.official_diagnosis or clinical_compass.current_diagnosis or 'Diagnóstico en consolidación' }}</h2>
-                        <p class="pm-summary-copy mt-3">{{ clinical_compass.current_stage_label or clinical_compass.operational_module_label or 'Clasificación operativa pendiente de consolidación.' }}</p>
+                        <h2 class="pm-summary-title mt-3" data-testid="top-summary-diagnosis">{{ clinical_compass.official_diagnosis or clinical_compass.current_diagnosis or 'Diagnóstico en consolidación' }}</h2>
+                        <p class="pm-summary-copy mt-3" data-testid="top-summary-stage">{{ clinical_compass.current_stage_label or clinical_compass.operational_module_label or 'Clasificación operativa pendiente de consolidación.' }}</p>
                     </div>
                     <div class="pm-quick-jump">
                         <a href="#profile-compass">Brújula</a>
+                        <a href="#profile-decision-trace">Qué cambió</a>
                         <a href="#profile-tnm">TNM</a>
+                        <a href="#profile-labs-intelligence">Laboratorios</a>
                         <a href="#profile-agenda">Agenda</a>
                         <a href="#profile-documents">Documentos</a>
                         <a href="#profile-evidence">Evidencia</a>
@@ -789,16 +860,16 @@
                         <div class="pm-focus-grid">
                             <div class="pm-focus-card">
                                 <h3>Diagnóstico / etapa</h3>
-                                <p class="mt-3 text-base font-semibold text-white">{{ clinical_compass.official_diagnosis or clinical_compass.current_diagnosis or 'Diagnóstico en consolidación' }}</p>
-                                <p class="mt-2 text-sm text-slate-300">{{ clinical_compass.current_stage_label or 'Sin etapa reconciliada' }}</p>
+                                <p class="mt-3 text-base font-semibold text-white" data-testid="effective-diagnosis">{{ clinical_compass.official_diagnosis or clinical_compass.current_diagnosis or 'Diagnóstico en consolidación' }}</p>
+                                <p class="mt-2 text-sm text-slate-300" data-testid="effective-state">{{ clinical_compass.current_stage_label or 'Sin etapa reconciliada' }}</p>
                                 {% if clinical_compass.official_diagnosis_status != 'complete' and clinical_compass.official_diagnosis_missing_fields %}
                                 <p class="mt-2 text-xs text-amber-200">Completar: {{ clinical_compass.official_diagnosis_missing_fields | join(', ') }}</p>
                                 {% endif %}
                             </div>
                             <div class="pm-focus-card">
                                 <h3>Decisión hoy</h3>
-                                <p class="mt-3 text-sm font-semibold text-white">{{ clinical_compass.primary_clinical_question or next_best_action.title or 'Sin decisión prioritaria estructurada' }}</p>
-                                <p class="mt-2 text-sm text-slate-300">{{ next_best_action.rationale or clinical_compass.recommended_direction or 'El copiloto no ha emitido una dirección adicional.' }}</p>
+                                <p class="mt-3 text-sm font-semibold text-white" data-testid="intent-headline">{{ care_intent_contract.headline or clinical_compass.primary_clinical_question or next_best_action.title or 'Sin decisión prioritaria estructurada' }}</p>
+                                <p class="mt-2 text-sm text-slate-300" data-testid="next-best-action-rationale">{{ care_intent_contract.narrative or next_best_action.rationale or clinical_compass.recommended_direction or 'El copiloto no ha emitido una dirección adicional.' }}</p>
                             </div>
                             <div class="pm-focus-card">
                                 <h3>Último dato decisor</h3>
@@ -808,7 +879,7 @@
                             </div>
                             <div class="pm-focus-card">
                                 <h3>Seguridad activa</h3>
-                                <ul>
+                                <ul data-testid="active-alerts">
                                     {% for item in clinical_signals.active_safety[:3] or [] %}
                                     <li>{{ item }}</li>
                                     {% else %}
@@ -928,11 +999,11 @@
             <div class="grid grid-cols-1 xl:grid-cols-4 gap-4">
                 <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4 xl:col-span-2">
                     <div class="text-xs uppercase tracking-wider text-slate-500">Siguiente mejor acción</div>
-                    <div class="mt-2 text-base font-semibold text-white">{{ next_best_action.title or 'Sin siguiente acción prioritaria' }}</div>
+                    <div class="mt-2 text-base font-semibold text-white" data-testid="next-best-action">{{ care_intent_contract.headline or next_best_action.title or 'Sin siguiente acción prioritaria' }}</div>
                     {% if next_best_action.rationale %}
-                    <p class="mt-2 text-sm text-slate-300">{{ next_best_action.rationale }}</p>
+                    <p class="mt-2 text-sm text-slate-300">{{ care_intent_contract.narrative or next_best_action.rationale }}</p>
                     {% endif %}
-                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5" data-testid="blocking-inputs">
                         {% for item in next_best_action.immediate_actions or [] %}
                         <li>{{ item }}</li>
                         {% else %}
@@ -942,7 +1013,7 @@
                 </div>
                 <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
                     <div class="text-xs uppercase tracking-wider text-slate-500">Dato crítico faltante</div>
-                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5" data-testid="active-safety">
                         {% for item in clinical_signals.critical_missing or [] %}
                         <li>{{ item }}</li>
                         {% else %}
@@ -969,10 +1040,10 @@
                     </ul>
                 </div>
             </div>
-            {% if transition_proposals %}
+            {% if transition_proposals and transition_resolution.policy == 'manual_confirmation_required' %}
             <div class="mt-5 grid grid-cols-1 xl:grid-cols-2 gap-4">
                 {% for proposal in transition_proposals[:2] %}
-                <div class="rounded-2xl border border-amber-500/20 bg-amber-950/10 p-4">
+                <div class="rounded-2xl border border-amber-500/20 bg-amber-950/10 p-4" data-testid="transition-card">
                     <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
                         <div>
                             <div class="text-xs uppercase tracking-wider text-slate-500">Transición sugerida</div>
@@ -1039,9 +1110,9 @@
             <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-5">
                 <div class="max-w-4xl">
                     <div class="text-xs uppercase tracking-[0.2em] text-emerald-300">Brújula clínica actual</div>
-                    <div class="sr-only">Última evaluación clínica modular</div>
+                    <div class="sr-only">Síntesis clínica vigente · Última evaluación clínica modular</div>
                     <h2 class="mt-2 text-2xl font-bold text-white">{{ clinical_compass.official_diagnosis or clinical_compass.current_diagnosis }}</h2>
-                    <p class="mt-2 text-sm text-slate-300">{{ assessment_nccn.get('resumen_del_caso') or assessment_report.get('summary') or clinical_compass.recommended_direction }}</p>
+                    <p class="mt-2 text-sm text-slate-300">{{ clinical_compass.recommended_direction or assessment_nccn.get('resumen_del_caso') or assessment_report.get('summary') }}</p>
                     <div class="mt-4 flex flex-wrap gap-2">
                         <span class="px-2.5 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border border-cyan-500/20 bg-cyan-500/10 text-cyan-200">{{ clinical_compass.current_stage_label }}</span>
                         {% if clinical_compass.operational_module_label and clinical_compass.operational_module_label != clinical_compass.current_stage_label %}
@@ -1065,7 +1136,7 @@
                 </div>
                 <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 xl:max-w-sm">
                     <div class="text-xs uppercase tracking-wider text-slate-500">Dirección clínica recomendada</div>
-                    <div class="mt-2 text-sm font-semibold text-white">{{ assessment_nccn.get('titulo_clinico') or assessment_nccn.get('label') or clinical_compass.current_stage_label }}</div>
+                    <div class="mt-2 text-sm font-semibold text-white">{{ clinical_compass.recommendation_family or clinical_compass.current_stage_label or assessment_nccn.get('titulo_clinico') or assessment_nccn.get('label') }}</div>
                     <p class="mt-2 text-sm text-slate-300">{{ clinical_compass.recommended_direction }}</p>
                     <div class="mt-3 text-xs text-slate-500 uppercase tracking-wider">Familia recomendada</div>
                     <p class="mt-1 text-sm text-cyan-200">{{ clinical_compass.recommendation_family }}</p>
@@ -1149,6 +1220,130 @@
                 </div>
             </div>
         </section>
+
+        {% if decision_recalculation_trace.available or laboratory_intelligence_profile.available or guideline_followup_plan %}
+        <section id="profile-decision-trace" class="pn-surface pm-section-anchor border border-cyan-700/20 bg-cyan-950/5">
+            <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
+                <div>
+                    <div class="text-xs uppercase tracking-[0.2em] text-cyan-300">Brújula longitudinal viva</div>
+                    <h2 class="mt-2 text-lg font-bold text-white">Qué cambió hoy y por qué cambió la conducta</h2>
+                    <p class="mt-2 text-sm text-slate-300">
+                        {{ decision_recalculation_trace.headline or next_best_action.title or 'Sin recálculo longitudinal visible todavía.' }}
+                    </p>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/50 p-4 xl:max-w-sm">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Último dato decisivo</div>
+                    <div class="mt-2 text-sm font-semibold text-white">
+                        {{ latest_clinically_decisive_visit.visit_date or decision_recalculation_trace.latest_clinically_decisive_visit.visit_date or 'Sin visita decisiva documentada' }}
+                    </div>
+                    <div class="mt-2 text-xs text-slate-400">
+                        {{ latest_clinically_decisive_visit.source_type or decision_recalculation_trace.latest_clinically_decisive_visit.source_type or 'assessment' }}
+                        · {{ decision_recalculation_trace.visibility_status or 'contextual' }}
+                    </div>
+                    {% if latest_clinically_decisive_visit.changed_fields or latest_clinically_decisive_visit.fields_changed or decision_recalculation_trace.superseded_inputs %}
+                    <div class="mt-3 text-xs text-slate-400">
+                        Campos decisivos:
+                        {{ (latest_clinically_decisive_visit.changed_fields or latest_clinically_decisive_visit.fields_changed or [])|join(', ') if (latest_clinically_decisive_visit.changed_fields or latest_clinically_decisive_visit.fields_changed) else (decision_recalculation_trace.superseded_inputs[:3] | map(attribute='field_name') | join(', ')) }}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="mt-5 grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Qué cambió hoy</div>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in decision_recalculation_trace.what_changed_today or [] %}
+                        <li>{{ item }}</li>
+                        {% else %}
+                        <li>Sin supersedencia longitudinal visible todavía.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Por qué cambió</div>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in decision_recalculation_trace.why_changed or [] %}
+                        <li>{{ item }}</li>
+                        {% else %}
+                        <li>La conducta permanece estable con la evidencia actual.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Agenda guiada por evidencia</div>
+                    <div class="mt-2 text-sm font-semibold text-white" data-testid="schedule-state">{{ guideline_followup_plan.policy or 'NCCN-first con fallback EAU' }}</div>
+                    <p class="mt-2 text-sm text-slate-300" data-testid="schedule-primary-intent">{{ guideline_followup_plan.schedule_primary_intent or guideline_followup_plan.baseline_guideline_plan.cadence_summary or clinical_compass.monitoring_cadence }}</p>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in guideline_followup_plan.cadence_adjustment_reasons or [] %}
+                        <li>{{ item }}</li>
+                        {% else %}
+                        <li>Sin ajuste adicional de cadencia documentado.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+        </section>
+        {% endif %}
+
+        {% if laboratory_intelligence_profile.available %}
+        <section id="profile-labs-intelligence" class="pn-surface pm-section-anchor">
+            <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4 mb-5">
+                <div>
+                    <div class="text-xs uppercase tracking-[0.2em] text-cyan-300">Torre multiparámetro</div>
+                    <h2 class="mt-2 text-lg font-bold text-white">Laboratorios longitudinales con impacto clínico real</h2>
+                    <p class="mt-2 text-sm text-slate-300">Los laboratorios más recientes ya alimentan seguridad activa, castración, carga tumoral y readiness terapéutico.</p>
+                </div>
+                <div class="grid grid-cols-2 gap-3 xl:min-w-[280px]">
+                    <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-3">
+                        <div class="text-[11px] uppercase tracking-[0.16em] text-slate-500">Series</div>
+                        <div class="mt-2 text-2xl font-semibold text-cyan-200">{{ laboratory_intelligence_profile.coverage.series_count or 0 }}</div>
+                    </div>
+                    <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-3">
+                        <div class="text-[11px] uppercase tracking-[0.16em] text-slate-500">Alertas activas</div>
+                        <div class="mt-2 text-2xl font-semibold {{ 'text-rose-200' if laboratory_intelligence_profile.active_alerts else 'text-emerald-200' }}">{{ laboratory_intelligence_profile.active_alerts|length }}</div>
+                    </div>
+                </div>
+            </div>
+            <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/50 p-4 xl:col-span-2">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Series longitudinales</div>
+                    <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {% for family in laboratory_intelligence_profile.families or [] %}
+                        <div class="rounded-xl border border-slate-800 bg-slate-950/40 p-4">
+                            <div class="text-sm font-semibold text-white">{{ family.label }}</div>
+                            <div class="mt-3 space-y-3">
+                                {% for series in family.series[:4] %}
+                                <div class="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-3">
+                                    <div class="flex items-center justify-between gap-3">
+                                        <div class="text-xs uppercase tracking-[0.16em] text-slate-500">{{ series.label }}</div>
+                                        <span class="text-[11px] uppercase tracking-[0.16em] {{ 'text-rose-300' if series.status == 'danger' else 'text-amber-300' if series.status == 'warning' else 'text-emerald-300' if series.status == 'success' else 'text-slate-400' }}">{{ series.status }}</span>
+                                    </div>
+                                    <div class="mt-2 text-lg font-semibold text-white">{{ series.latest_value if series.latest_value is not none else 'N/D' }}{% if series.unit %} {{ series.unit }}{% endif %}</div>
+                                    <div class="mt-1 text-[11px] text-slate-500">{{ series.latest_date or 'Sin fecha reciente' }} · {{ series.points|length }} punto(s)</div>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Seguridad activa y checkpoints</div>
+                    <ul class="mt-3 space-y-3 text-sm text-slate-300 list-disc pl-5">
+                        {% for alert in laboratory_intelligence_profile.active_alerts or [] %}
+                        <li>
+                            <div class="font-medium text-white">{{ alert.title }}</div>
+                            <div class="text-xs text-slate-400">{{ alert.message }}</div>
+                            <div class="mt-1 text-[11px] text-cyan-200">{{ alert.recommended_action }}</div>
+                        </li>
+                        {% else %}
+                        <li>Sin alertas longitudinales activas para la seguridad terapéutica.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+        </section>
+        {% endif %}
 
         {# ═══ TNM STAGING PANEL ═══ #}
         {% set _tnm_copilot = (profile.copilot or {}) if profile else {} %}
@@ -4857,6 +5052,7 @@
         function renderVisitField(field) {
             const required = field.required ? 'required' : '';
             const defaultValue = field.default ?? '';
+            const conditions = field.conditional_visibility ? `data-conditions='${escapeHtml(JSON.stringify(field.conditional_visibility))}'` : '';
             const label = `
                 <label class="block text-xs font-medium text-slate-400 mb-1">
                     ${escapeHtml(field.label || '')}
@@ -4896,12 +5092,41 @@
             }
             const help = field.help_text ? `<div class="mt-1 text-[11px] text-slate-500">${escapeHtml(field.help_text)}</div>` : '';
             return `
-                <div class="${['textarea', 'multi_select'].includes(field.field_type) ? 'md:col-span-2' : ''}">
+                <div ${conditions} class="${['textarea', 'multi_select'].includes(field.field_type) ? 'md:col-span-2' : ''}">
                     ${label}
                     ${control}
                     ${help}
                 </div>
             `;
+        }
+
+        function evaluateConditionalVisibility(form, conditions = {}) {
+            return Object.entries(conditions || {}).every(([fieldName, accepted]) => {
+                const fieldNodes = Array.from(form.querySelectorAll(`[name="${fieldName}"]`));
+                if (!fieldNodes.length) return false;
+                const acceptedValues = Array.isArray(accepted) ? accepted.map(String) : [String(accepted)];
+                const values = fieldNodes.flatMap((node) => {
+                    if (node.type === 'checkbox') {
+                        if (node.dataset.fieldType === 'multi_select') return node.checked ? [String(node.value)] : [];
+                        return [node.checked ? '1' : '0'];
+                    }
+                    return [String(node.value ?? '')];
+                });
+                return values.some((value) => acceptedValues.includes(value));
+            });
+        }
+
+        function updateConditionalSchemaFields(root = document) {
+            Array.from(root.querySelectorAll('[data-conditions]')).forEach((wrapper) => {
+                const form = wrapper.closest('form') || root;
+                let conditions = {};
+                try {
+                    conditions = JSON.parse(wrapper.dataset.conditions || '{}');
+                } catch (error) {
+                    conditions = {};
+                }
+                wrapper.classList.toggle('hidden', !evaluateConditionalVisibility(form, conditions));
+            });
         }
 
         function buildSchemaSectionsMarkup(sections) {
@@ -4944,6 +5169,10 @@
 
             const sections = buildSchemaSectionsMarkup(schema.sections || []);
             sectionsHost.innerHTML = sections || '<div class="rounded-xl border border-slate-700 bg-slate-950/40 p-4 text-sm text-slate-300">No hay variables configuradas para esta captura.</div>';
+            updateConditionalSchemaFields(sectionsHost);
+            sectionsHost.querySelectorAll('input, select, textarea').forEach((node) => {
+                node.addEventListener('change', () => updateConditionalSchemaFields(sectionsHost));
+            });
 
             if (agendaContext && (agendaContext.mode === 'item_scoped' || agendaContext.mode === 'capture_block')) {
                 contextBox.classList.remove('hidden');
@@ -5003,6 +5232,10 @@
 
             sectionsHost.innerHTML = buildSchemaSectionsMarkup(schema.sections || [])
                 || '<div class="rounded-xl border border-slate-700 bg-slate-950/40 p-4 text-sm text-slate-300">No hay variables configuradas para esta alerta.</div>';
+            updateConditionalSchemaFields(sectionsHost);
+            sectionsHost.querySelectorAll('input, select, textarea').forEach((node) => {
+                node.addEventListener('change', () => updateConditionalSchemaFields(sectionsHost));
+            });
 
             const fixedContext = schema.fixed_context || {};
             if (title) title.textContent = fixedContext.title || alertPayload?.title || 'Resolver alerta clínica';
@@ -5212,6 +5445,8 @@
             [
                 'profile-executive-summary',
                 'profile-next-best-action',
+                'profile-decision-trace',
+                'profile-labs-intelligence',
                 'profile-agenda',
                 'profile-prognostic-impact',
                 'profile-risk-tools',

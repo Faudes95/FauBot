@@ -857,11 +857,86 @@ def api_patient_signals(patient_id):
                 "forecast_reliability": bundle.get("forecast_reliability", profile_view.get("forecast_reliability", {})),
                 "live_benchmark": bundle.get("live_benchmark", profile_view.get("live_benchmark", {})),
                 "benchmark_reliability": bundle.get("benchmark_reliability", profile_view.get("benchmark_reliability", {})),
+                "longitudinal_truth_snapshot": bundle.get("longitudinal_truth_snapshot", profile_view.get("longitudinal_truth_snapshot", {})),
+                "decision_recalculation_trace": bundle.get("decision_recalculation_trace", profile_view.get("decision_recalculation_trace", {})),
+                "guideline_followup_plan": bundle.get("guideline_followup_plan", profile_view.get("guideline_followup_plan", {})),
+                "transition_resolution": bundle.get("transition_resolution", patient.get("transition_resolution", {})),
+                "care_intent_contract": bundle.get("care_intent_contract", patient.get("care_intent_contract", {})),
+                "laboratory_intelligence_profile": bundle.get("laboratory_intelligence_profile", profile_view.get("laboratory_intelligence_profile", {})),
+                "latest_clinically_decisive_visit": bundle.get("latest_clinically_decisive_visit", profile_view.get("latest_clinically_decisive_visit", {})),
+                "effective_state_final": bundle.get("signals", {}).get("effective_state_final") or bundle.get("signals", {}).get("effective_state") or bundle.get("signals", {}).get("reconciled_state"),
+                "effective_management_track_final": bundle.get("signals", {}).get("effective_management_track_final") or bundle.get("signals", {}).get("effective_management_track") or bundle.get("signals", {}).get("reconciled_management_track"),
+                "effective_state": bundle.get("signals", {}).get("effective_state") or bundle.get("signals", {}).get("reconciled_state"),
+                "effective_management_track": bundle.get("signals", {}).get("effective_management_track") or bundle.get("signals", {}).get("reconciled_management_track"),
+                "blocking_inputs": bundle.get("blocking_inputs", []),
+                "hard_blocking_inputs": bundle.get("hard_blocking_inputs", []),
+                "decision_blocking_inputs": bundle.get("decision_blocking_inputs", []),
+                "supportive_gaps": bundle.get("supportive_gaps", []),
+                "required_to_recalculate": bundle.get("required_to_recalculate", []),
+                "optional_context_inputs": bundle.get("optional_context_inputs", []),
+                "decision_domains_blocked": bundle.get("decision_domains_blocked", []),
+                "guideline_basis": bundle.get("guideline_basis", []),
+                "ui_contradiction_flags": bundle.get("ui_contradiction_flags", []),
                 **_reconciled_patient_snapshot(patient),
             }
         )
     except Exception as e:
         logger.error(f"Error getting patient signals: {e}")
+        return error_response(str(e), 500)
+
+
+@app.route('/api/patients/<int:patient_id>/labs-intelligence', methods=['GET'])
+def api_patient_labs_intelligence(patient_id):
+    import tracking_db
+    try:
+        tracking_db.refresh_longitudinal_intelligence(patient_id, force_recompute=False)
+        patient = tracking_db.get_patient_full_record(patient_id)
+        if not patient:
+            return error_response("Paciente no encontrado", 404)
+        payload = tracking_db.get_patient_labs_intelligence(patient_id)
+        if payload is None:
+            return error_response("Paciente no encontrado", 404)
+        return jsonify(
+            {
+                "success": True,
+                "laboratory_intelligence_profile": payload,
+                "active_alerts": payload.get("active_alerts", []),
+                "trend_series": payload.get("series", []),
+                "treatment_linked_rules": payload.get("therapy_safety_checkpoints", []),
+                "coverage_gaps": payload.get("coverage", {}),
+                "latest_clinically_decisive_visit": patient.get("latest_clinically_decisive_visit", {}),
+                **_reconciled_patient_snapshot(patient),
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error getting patient labs intelligence: {e}")
+        return error_response(str(e), 500)
+
+
+@app.route('/api/patients/<int:patient_id>/decision-trace', methods=['GET'])
+def api_patient_decision_trace(patient_id):
+    import tracking_db
+    try:
+        tracking_db.refresh_longitudinal_intelligence(patient_id, force_recompute=False)
+        patient = tracking_db.get_patient_full_record(patient_id)
+        if not patient:
+            return error_response("Paciente no encontrado", 404)
+        payload = tracking_db.get_patient_decision_trace(patient_id)
+        if payload is None:
+            return error_response("Paciente no encontrado", 404)
+        return jsonify(
+            {
+                "success": True,
+                "decision_recalculation_trace": payload,
+                "longitudinal_truth_snapshot": patient.get("longitudinal_truth_snapshot", {}),
+                "decision_snapshot_history": patient.get("decision_snapshot_history", []),
+                "guideline_plan_history": patient.get("guideline_plan_history", []),
+                "missing_input_history": patient.get("missing_input_history", []),
+                **_reconciled_patient_snapshot(patient),
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error getting patient decision trace: {e}")
         return error_response(str(e), 500)
 
 

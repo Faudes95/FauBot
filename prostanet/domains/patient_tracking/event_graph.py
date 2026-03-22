@@ -165,6 +165,13 @@ def merge_record_into_assessment_payload(assessment_input: dict[str, Any], recor
             "risk_calculator_pathway": merged.get("risk_calculator_pathway") or latest_diagnostic_plan.get("risk_calculator_pathway"),
             "psma_pet_done": merged.get("psma_pet_done") or ("1" if latest_psma else ""),
             "psma_pet_result": merged.get("psma_pet_result") or latest_psma.get("psma_result"),
+            "psma_radioligand": merged.get("psma_radioligand") or latest_psma.get("psma_radioligand"),
+            "psma_index_lesion_site": merged.get("psma_index_lesion_site") or latest_psma.get("psma_index_lesion_site"),
+            "psma_index_lesion_suvmax": merged.get("psma_index_lesion_suvmax") or latest_psma.get("psma_index_lesion_suvmax") or latest_psma.get("psma_suv_max"),
+            "psma_uptake_pattern": merged.get("psma_uptake_pattern") or (latest_psma.get("findings", {}) if isinstance(latest_psma.get("findings"), dict) else {}).get("psma_uptake_pattern"),
+            "psma_rads_score": merged.get("psma_rads_score") or latest_psma.get("psma_rads_score"),
+            "psma_stage_after_psma": merged.get("psma_stage_after_psma") or latest_psma.get("psma_stage_after_psma"),
+            "psma_management_changed": merged.get("psma_management_changed") or latest_psma.get("psma_management_changed"),
             "has_bone_scan": merged.get("has_bone_scan") or ("1" if latest_bone else ""),
         }
     )

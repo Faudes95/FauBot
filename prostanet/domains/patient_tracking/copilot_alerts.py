@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from prostanet.domains.patient_tracking.alert_engine import ClinicalAlertEngine
+from prostanet.domains.patient_tracking.longitudinal_truth_service import truth_value
 from prostanet.shared.contracts import CopilotAlert
 
 
@@ -190,6 +191,8 @@ def _runtime_alert_data(patient: dict[str, Any], management_track: str, raw_asse
     payload.update(identity)
     payload.update(baseline)
     payload.update(prior)
+    truth = patient.get("longitudinal_truth_snapshot") or {}
+    truth_values = dict(truth.get("field_values") or {})
     if followups:
         last_fu = followups[-1]
         payload["psa"] = last_fu.get("psa_current")
@@ -197,9 +200,38 @@ def _runtime_alert_data(patient: dict[str, Any], management_track: str, raw_asse
         payload["ecog"] = last_fu.get("ecog_current")
         payload["testosterone"] = last_fu.get("testosterone_current")
         payload["alp"] = last_fu.get("alp_current")
+        payload["ldh"] = last_fu.get("ldh_current")
+        payload["creatinine"] = last_fu.get("creatinine_current")
+        payload["bilirubin"] = last_fu.get("bilirubin_current")
+        payload["ast"] = last_fu.get("ast_current")
+        payload["alt"] = last_fu.get("alt_current")
+        payload["ggt"] = last_fu.get("ggt_current")
+        payload["glucose"] = last_fu.get("glucose_current")
         payload["current_treatment"] = last_fu.get("current_treatment")
         if len(followups) >= 2:
             payload["ecog_previous"] = followups[-2].get("ecog_current")
+    for field_name in (
+        "psa",
+        "hemoglobin",
+        "ecog",
+        "testosterone",
+        "alp",
+        "ldh",
+        "creatinine",
+        "bilirubin",
+        "ast",
+        "alt",
+        "ggt",
+        "glucose",
+        "current_treatment",
+        "current_adt_context",
+        "castrate_testosterone_status",
+    ):
+        value = truth_values.get(field_name)
+        if value in (None, ""):
+            value = truth_value(patient, field_name, default=None)
+        if value not in (None, ""):
+            payload[field_name] = value
     payload["management_track"] = management_track
     adt_context = (
         payload.get("current_adt_context")

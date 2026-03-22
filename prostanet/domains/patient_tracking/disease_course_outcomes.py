@@ -825,6 +825,8 @@ def _build_crpc_outcomes(
             )
         )
     psma_positive = _normalize_status(_first_nonempty(merged.get("psma_positive"), latest_followup.get("psma_positive")))
+    psma_profile = patient.get("psma_structured_profile") or {}
+    psma_impact = patient.get("psma_decision_impact") or {}
     if psma_positive == "positive":
         events.append(
             _emit_outcome(
@@ -839,6 +841,48 @@ def _build_crpc_outcomes(
                 payload={"psma_positive": True},
             )
         )
+        if psma_profile.get("available"):
+            events.append(
+                _emit_outcome(
+                    event_type="psma_structured_pathway",
+                    scenario_state=state,
+                    management_track=management_track,
+                    axis="precision_pathway",
+                    event_date=str(psma_profile.get("study_date") or latest_followup.get("visit_date") or ""),
+                    summary="PSMA estructurado disponible.",
+                    decision_impact=psma_impact.get("rationale") or "La imagen PSMA estructurada refina rescate, MDT o elegibilidad a radioligando.",
+                    evidence_basis=["PSMA-RADS", "NCCN 2026 radioligand"],
+                    payload={"psma_pattern": psma_profile.get("psma_uptake_pattern"), "psma_rads_score": psma_profile.get("psma_rads_score")},
+                )
+            )
+            if psma_profile.get("psma_upstaged_vs_conventional") is True:
+                events.append(
+                    _emit_outcome(
+                        event_type="psma_upstaging_event",
+                        scenario_state=state,
+                        management_track=management_track,
+                        axis="restaging",
+                        event_date=str(psma_profile.get("study_date") or latest_followup.get("visit_date") or ""),
+                        summary="PSMA con upstaging frente a imagen convencional.",
+                        decision_impact="Cambia la lectura de burden/estado y puede redirigir rescate o transición sistémica.",
+                        evidence_basis=["proPSMA", "NCCN 2026 imaging"],
+                        payload={"stage_before": psma_profile.get("conventional_stage_before_psma"), "stage_after": psma_profile.get("psma_stage_after_psma")},
+                    )
+                )
+            if psma_impact.get("confidence") == "low":
+                events.append(
+                    _emit_outcome(
+                        event_type="psma_low_confidence_finding",
+                        scenario_state=state,
+                        management_track=management_track,
+                        axis="restaging",
+                        event_date=str(psma_profile.get("study_date") or latest_followup.get("visit_date") or ""),
+                        summary="PSMA estructurado de baja confianza.",
+                        decision_impact="Debe interpretarse con cautela y correlacionarse antes de escalar una conducta mayor.",
+                        evidence_basis=["PSMA-RADS"],
+                        payload={"psma_rads_score": psma_profile.get("psma_rads_score")},
+                    )
+                )
     else:
         pending.append(
             _pending_status(

@@ -494,6 +494,56 @@ def test_recurrence_module_exposes_bcr2_pathway(app_client):
     assert any("apalutam" in item.lower() for item in result["not_recommended"])
 
 
+def test_recurrence_bcr_structured_psma_keeps_salvage_window_visible(app_client):
+    client, _ = app_client
+    response = client.post(
+        "/api/modules/recurrence_bcr/evaluate",
+        json={
+            "prior_prostatectomy": 1,
+            "prior_radiation": 0,
+            "bcr2": 0,
+            "psa_current": 0.55,
+            "psa_nadir": 0.02,
+            "psadt_months": 8,
+            "eligible_pelvic_therapy": 1,
+            "prior_secondary_rt": 0,
+            "imaging_negative": 0,
+            "psma_pet_done": 1,
+            "psma_radioligand": "68Ga-PSMA-11",
+            "psma_index_lesion_site": "ganglio pélvico",
+            "psma_index_lesion_suvmax": 14.2,
+            "psma_uptake_pattern": "focal",
+            "psma_rads_score": "4",
+            "psma_total_lesions": 1,
+            "psma_lesion_locations": ["pelvis"],
+            "conventional_stage_before_psma": "M0",
+            "psma_stage_after_psma": "M0",
+            "psma_management_changed": "Sí",
+        },
+    )
+
+    assert response.status_code == 200
+    result = response.get_json()["result"]
+    treatment_names = {item["name"] for item in result["eligible_treatments"]}
+    assert any("early salvage" in name.lower() for name in treatment_names)
+    assert any("psma" in name.lower() and "rescate" in name.lower() for name in treatment_names)
+    assert any("ventana curativa" in item.lower() for item in result["durations_and_conditions"])
+
+
+def test_psma_structured_fields_are_conditional_in_module_schemas(app_client):
+    client, _ = app_client
+
+    recurrence_schema = client.get("/api/modules/recurrence_bcr/schema").get_json()["schema"]
+    recurrence_fields = {field["name"]: field for field in recurrence_schema["fields"]}
+    assert recurrence_fields["psma_radioligand"]["conditional_visibility"] == {"psma_pet_done": ["1"]}
+    assert recurrence_fields["psma_rads_score"]["conditional_visibility"] == {"psma_pet_done": ["1"]}
+
+    m1_schema = client.get("/api/modules/m1_crpc/schema").get_json()["schema"]
+    m1_fields = {field["name"]: field for field in m1_schema["fields"]}
+    assert m1_fields["psma_radioligand"]["conditional_visibility"] == {"psma_pet_done": ["1"]}
+    assert m1_fields["psma_rads_score"]["conditional_visibility"] == {"psma_pet_done": ["1"]}
+
+
 def test_boolean_option_label_resolver_supports_explicit_contextual_and_fallback_labels():
     assert resolve_option_label("psma_positive", "0", ["0", "1"]) == "No"
     assert resolve_option_label("cv_risk_documented", "1", ["0", "1"]) == "Documentado"
@@ -818,6 +868,44 @@ def test_precision_paths_surface_akeega_and_pre_taxane_pluvicto(app_client):
     assert m1_response.status_code == 200
     m1_names = {item["name"] for item in m1_response.get_json()["result"]["eligible_treatments"]}
     assert "Lutecio-177 dirigido al antígeno prostático específico de membrana" in m1_names
+
+
+def test_m1_crpc_structured_psma_degrades_pluvicto_confidence_when_partial(app_client):
+    client, _ = app_client
+
+    response = client.post(
+        "/api/modules/m1_crpc/evaluate",
+        json={
+            "hrr_status": "Negativo",
+            "hrr_gene": "Desconocido",
+            "biomarker_source": "Biopsia metastásica",
+            "molecular_report_date": "2026-03-01",
+            "msi_status": "estable",
+            "metastasis_site": "Bone",
+            "prior_therapy": "Enzalutamida",
+            "prior_docetaxel_cycles": 0,
+            "castrate_testosterone_confirmed": 1,
+            "mcrpc_line_context": "post_arpi_pre_taxane",
+            "docetaxel_fit": 0,
+            "chemotherapy_delay_candidate": 1,
+            "pain_symptoms": "Leve",
+            "ecog_performance_status": 1,
+            "psma_positive": 1,
+            "psma_pet_done": 1,
+            "psma_negative_dominant_lesions": 1,
+            "psma_radioligand": "18F-PSMA-1007",
+            "psma_uptake_pattern": "multifocal",
+            "psma_rads_score": "3",
+            "psma_total_lesions": 3,
+        },
+    )
+
+    assert response.status_code == 200
+    result = response.get_json()["result"]
+    treatment_names = {item["name"] for item in result["eligible_treatments"]}
+    assert "Lutecio-177 dirigido al antígeno prostático específico de membrana" in treatment_names
+    assert any("psma como plena" in item.lower() for item in result["not_recommended"])
+    assert any("18f-psma-1007" in item.lower() for item in result["not_recommended"])
 
 
 def test_supportive_documents_are_mapped_without_displacing_guidelines(app_client):

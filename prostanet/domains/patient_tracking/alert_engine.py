@@ -14,6 +14,10 @@ from dataclasses import dataclass, asdict
 from datetime import date
 from typing import Any
 
+from prostanet.domains.patient_tracking.laboratory_intelligence.alert_engine import (
+    build_laboratory_alerts,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -144,70 +148,37 @@ class ClinicalAlertEngine:
             - Testosterona >50 ng/dL bajo ADT → WARNING (castración no lograda)
             - ALP >2x ULN → WARNING (posible progresión ósea)
         """
-        alerts: list[ClinicalAlert] = []
-
-        hb = patient.get("hemoglobin") or patient.get("hemoglobina")
-        if hb is not None:
-            try:
-                hb = float(hb)
-                if 0 < hb < 10:
-                    alerts.append(ClinicalAlert(
-                        patient_id=patient_id,
-                        alert_type="anemia_adt",
-                        severity="warning",
-                        category="laboratory",
-                        title="Anemia significativa (Hb < 10 g/dL)",
-                        message=f"Hemoglobina: {hb:.1f} g/dL. Anemia grado 2+ frecuente bajo ADT/quimioterapia.",
-                        recommended_action="Evaluar causa (ferropenia, sangrado, infiltración medular). Considerar transfusión si sintomático o Hb <8.",
-                        guideline_reference="CTCAE v5 / NCCN Supportive Care",
-                        triggering_value=f"{hb:.1f} g/dL",
-                        threshold="< 10 g/dL",
-                    ))
-            except (ValueError, TypeError):
-                pass
-
-        testosterone = patient.get("testosterone") or patient.get("testosterone_current")
-        adt_context = patient.get("adt_context", "none")
-        if testosterone is not None and adt_context not in ("none", "", None):
-            try:
-                t = float(testosterone)
-                if t > 50:
-                    alerts.append(ClinicalAlert(
-                        patient_id=patient_id,
-                        alert_type="castration_not_achieved",
-                        severity="warning",
-                        category="laboratory",
-                        title="Testosterona > 50 ng/dL — Castración no lograda",
-                        message=f"Testosterona: {t:.0f} ng/dL bajo ADT. No se ha logrado nivel de castración.",
-                        recommended_action="Verificar adherencia a ADT. Considerar cambio de análogo GnRH o orquiectomía. Repetir testosterona en 4 semanas.",
-                        guideline_reference="NCCN 5.2026 / EAU 2026: T <50 ng/dL requerido",
-                        triggering_value=f"{t:.0f} ng/dL",
-                        threshold="< 50 ng/dL",
-                    ))
-            except (ValueError, TypeError):
-                pass
-
-        alp = patient.get("alp") or patient.get("alkaline_phosphatase")
-        if alp is not None:
-            try:
-                alp = float(alp)
-                if alp > 240:  # ~2x ULN (ULN ~120 UI/L)
-                    alerts.append(ClinicalAlert(
-                        patient_id=patient_id,
-                        alert_type="alp_elevated",
-                        severity="warning",
-                        category="laboratory",
-                        title="Fosfatasa alcalina > 2x ULN",
-                        message=f"ALP: {alp:.0f} UI/L. Elevación significativa sugiere progresión ósea o hepatopatía.",
-                        recommended_action="Gammagrama óseo o PSMA-PET para evaluación de carga ósea. Descartar obstrucción biliar.",
-                        guideline_reference="NCCN 5.2026",
-                        triggering_value=f"{alp:.0f} UI/L",
-                        threshold="> 240 UI/L (2x ULN)",
-                    ))
-            except (ValueError, TypeError):
-                pass
-
-        return alerts
+        latest_values = {
+            "hemoglobin": patient.get("hemoglobin") or patient.get("hemoglobina"),
+            "testosterone": patient.get("testosterone") or patient.get("testosterone_current"),
+            "alp": patient.get("alp") or patient.get("alkaline_phosphatase"),
+            "ldh": patient.get("ldh"),
+            "creatinine": patient.get("creatinine") or patient.get("creatinine_current"),
+            "bilirubin": patient.get("bilirubin") or patient.get("bilirubin_current"),
+            "ast": patient.get("ast") or patient.get("ast_current"),
+            "alt": patient.get("alt") or patient.get("alt_current"),
+            "ggt": patient.get("ggt") or patient.get("ggt_current"),
+        }
+        structured_alerts = build_laboratory_alerts(
+            latest_values,
+            treatment_text=str(patient.get("current_treatment") or ""),
+            adt_context=str(patient.get("adt_context") or patient.get("current_adt_context") or ""),
+        )
+        return [
+            ClinicalAlert(
+                patient_id=patient_id,
+                alert_type=str(alert.key),
+                severity=str(alert.severity),
+                category="laboratory",
+                title=str(alert.title),
+                message=str(alert.message),
+                recommended_action=str(alert.recommended_action),
+                guideline_reference=str(alert.guideline_reference),
+                triggering_value=str(alert.triggering_value),
+                threshold=str(alert.threshold),
+            )
+            for alert in structured_alerts
+        ]
 
     @staticmethod
     def evaluate_ecog_alerts(patient_id: int, patient: dict[str, Any]) -> list[ClinicalAlert]:

@@ -4,6 +4,10 @@ from prostanet.shared.precision_medicine_legacy import evaluate_patient_for_mcrp
 
 from prostanet.domains.evidence_registry.service import EvidenceRegistryService
 from prostanet.domains.guideline_comparison.service import GuidelineComparisonService
+from prostanet.domains.patient_tracking.psma_imaging import (
+    build_psma_decision_impact,
+    build_psma_structured_profile_from_payload,
+)
 from prostanet.domains.m1_crpc.rules_eau import evaluate_m1_crpc_eau
 from prostanet.domains.m1_crpc.rules_nccn import evaluate_m1_crpc
 from prostanet.domains.m1_crpc.schemas import M1_CRPC_SCHEMA
@@ -32,15 +36,27 @@ class M1CrpcService:
         biomarker_source = str(payload.get("biomarker_source", "Desconocida"))
         hrr_gene = str(payload.get("hrr_gene", "Desconocido"))
         psma_negative_dominant_lesions = str(payload.get("psma_negative_dominant_lesions", "0")) == "1"
+        psma_profile = (
+            build_psma_structured_profile_from_payload(payload)
+            if str(payload.get("psma_pet_done", "0")) == "1" or str(payload.get("psma_positive", "0")) == "1"
+            else {"available": False}
+        )
+        psma_impact = build_psma_decision_impact(psma_profile, state=self.module_id, patient={"baseline": payload})
         molecular_report_date = str(payload.get("molecular_report_date", "")).strip()
         biomarker_traceable = biomarker_source not in {"", "Desconocida", "Desconocido"} and (not nccn["hrr_positive"] or hrr_gene not in {"", "Desconocido"})
-        vision_eligible = nccn["psma_positive"] and not psma_negative_dominant_lesions and nccn["prior_arpi"] and nccn["prior_docetaxel"]
+        explicit_partial_psma = psma_profile.get("source_mode") == "structured" and (
+            psma_impact.get("confidence") == "low"
+            or str(psma_profile.get("psma_radioligand") or "") in {"", "Desconocido"}
+            or str(psma_profile.get("psma_rads_score") or "") == "3"
+        )
+        vision_eligible = nccn["psma_positive"] and not psma_negative_dominant_lesions and nccn["prior_arpi"] and nccn["prior_docetaxel"] and not explicit_partial_psma
         pre_taxane_pluvicto_candidate = (
             nccn["psma_positive"]
             and not psma_negative_dominant_lesions
             and nccn["prior_arpi"]
             and not nccn["prior_docetaxel"]
             and (nccn["chemotherapy_delay_candidate"] or not nccn["docetaxel_fit"] or nccn["line_context"] == "post_arpi_pre_taxane")
+            and not explicit_partial_psma
         )
         card_applicable = nccn["prior_arpi"] and nccn["prior_docetaxel"]
         supportive_context = [
@@ -49,6 +65,7 @@ class M1CrpcService:
             "VISION se usa para exigir elegibilidad PSMA estructurada y exposición previa correcta antes de priorizar lutecio-177 PSMA-617.",
             "PROfound se usa para exigir biomarcador HRR trazable por gen y por fuente analítica antes de priorizar olaparib.",
             "Las rutas de primera línea guiadas por biomarcadores se restringen a contexto first-line mCRPC y a biomarcadores trazables.",
+            psma_impact.get("rationale"),
         ]
         treatments = []
         missing_inputs = []
@@ -161,7 +178,7 @@ class M1CrpcService:
                     {
                         "name": "Lu-177 PSMA-617",
                         "priority": "preferred",
-                        "notes": self._note_for(legacy, "Lu-177 PSMA") or "Elegibilidad tipo VISION documentada con PSMA positivo y sin lesiones dominantes PSMA-negativas.",
+                        "notes": self._note_for(legacy, "Lu-177 PSMA") or "Elegibilidad tipo VISION documentada con PSMA positivo de alta confianza y sin lesiones dominantes PSMA-negativas.",
                     }
                 )
             elif pre_taxane_pluvicto_candidate:
@@ -177,9 +194,11 @@ class M1CrpcService:
                     {
                         "name": "Lu-177 PSMA-617",
                         "priority": "selected_candidate",
-                        "notes": "PSMA positivo documentado, pero aún falta confirmar elegibilidad completa de radioligando.",
+                        "notes": "PSMA positivo documentado, pero la elegibilidad de radioligando sigue siendo parcial o incompleta.",
                     }
                 )
+            if str(psma_profile.get("psma_radioligand") or "") == "18F-PSMA-1007":
+                not_recommended.append("Usar cautela al sobreinterpretar hallazgos óseos dudosos con 18F-PSMA-1007 cuando la decisión dependa exclusivamente del PET.")
             if nccn["symptomatic_bone_only"]:
                 treatments.append({"name": "Radium-223", "priority": "eligible", "notes": self._note_for(legacy, "Radium-223")})
             if card_applicable:
@@ -213,6 +232,8 @@ class M1CrpcService:
             not_recommended.append("No priorizar PARP sin gen HRR y fuente del biomarcador claramente trazables.")
         if nccn["psma_positive"] and psma_negative_dominant_lesions:
             not_recommended.append("No priorizar lutecio-177 PSMA-617 si existen lesiones dominantes PSMA-negativas no resueltas.")
+        if explicit_partial_psma:
+            not_recommended.append("No etiquetar la elegibilidad PSMA como plena cuando PSMA-RADS es intermedio, el radioligando es desconocido o la documentación estructurada es insuficiente.")
 
         preferred_seen = False
         for item in treatments:

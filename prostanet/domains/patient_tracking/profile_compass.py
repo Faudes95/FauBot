@@ -733,6 +733,10 @@ def _build_clinical_compass(
     state_timeline: list[dict[str, Any]],
     diagnosis_context: dict[str, Any],
     copilot_modifiers: dict[str, Any] | None = None,
+    next_best_action: dict[str, Any] | None = None,
+    decision_recalculation_trace: dict[str, Any] | None = None,
+    longitudinal_truth_snapshot: dict[str, Any] | None = None,
+    guideline_followup_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     display_result = (display_assessment or {}).get("display_result", {}) if display_assessment else {}
     raw_result = (raw_assessment or {}).get("result_snapshot", {}) if raw_assessment else {}
@@ -741,8 +745,17 @@ def _build_clinical_compass(
     monitoring = display_result.get("monitoring_plan", {}) if display_result else {}
     decision_quality = display_result.get("decision_quality", {}) if display_result else {}
     state_conflict = bool(reconciliation.get("state_conflict_flag"))
+    runtime_action = dict(next_best_action or {})
+    recalculation_trace = dict(decision_recalculation_trace or {})
+    truth_snapshot = dict(longitudinal_truth_snapshot or {})
+    truth_values = dict(truth_snapshot.get("field_values") or {})
+    guideline_plan = dict(guideline_followup_plan or {})
     freshness = _build_data_freshness(patient, state)
-    last_decisive = freshness[1] if state in DIAGNOSTIC_STATES and len(freshness) > 1 else freshness[0]
+    last_decisive = (
+        recalculation_trace.get("latest_clinically_decisive_visit")
+        or truth_snapshot.get("latest_clinically_decisive_visit")
+        or (freshness[1] if state in DIAGNOSTIC_STATES and len(freshness) > 1 else freshness[0])
+    )
     current_diagnosis = diagnosis_context.get("official_diagnosis") or _first_nonempty(
         display_assessment.get("module_label"),
         STATE_DISPLAY_MAP.get(state),
@@ -752,12 +765,59 @@ def _build_clinical_compass(
     modifier_bundle = copilot_modifiers or {}
     what_could_change_course = _merge_unique_text(
         _as_list(display_result.get("decision_changing_inputs"))[:4] or _as_list(display_result.get("missing_critical_inputs"))[:4],
+        recalculation_trace.get("why_changed", []),
+        limit=6,
+    )
+    what_could_change_course = _merge_unique_text(
+        what_could_change_course,
         modifier_bundle.get("what_could_change_course", []),
         limit=6,
     )
     next_actions = _merge_unique_text(
+        _as_list(runtime_action.get("immediate_actions"))[:4],
         _as_list(monitoring.get("actions"))[:4],
+        limit=6,
+    )
+    next_actions = _merge_unique_text(
+        next_actions,
         modifier_bundle.get("next_actions", []),
+        limit=6,
+    )
+    recommended_direction = (
+        "La etapa longitudinal reconciliada requiere confirmar transición y reemitir recomendación modular sobre el estado vigente."
+        if state_conflict
+        else _first_nonempty(
+            runtime_action.get("rationale"),
+            nccn.get("trayectoria_recomendada"),
+            nccn.get("recommendation"),
+            "Sin dirección priorizada",
+        )
+    )
+    monitoring_cadence = _first_nonempty(
+        guideline_plan.get("baseline_guideline_plan", {}).get("cadence_summary"),
+        monitoring.get("cadence"),
+        guideline_plan.get("course_adjusted_plan", {}).get("title"),
+        "Sin cadencia estructurada",
+    )
+    confidence_category = _first_nonempty(
+        runtime_action.get("confidence_label"),
+        recalculation_trace.get("visibility_status"),
+        decision_quality.get("confidence_category"),
+        "No documentada",
+    )
+    recommendation_family = (
+        "Estado reconciliado por confirmar"
+        if state_conflict
+        else _first_nonempty(
+            runtime_action.get("recommendation_family"),
+            decision_quality.get("recommendation_family"),
+            raw_result.get("recommendation_family"),
+            "No documentada",
+        )
+    )
+    why_this_now = _merge_unique_text(
+        recalculation_trace.get("what_changed_today", []),
+        _as_list(nccn.get("fundamentos_personalizados"))[:3] or _as_list(display_result.get("report_sections", {}).get("risk_features"))[:3],
         limit=6,
     )
     return {
@@ -773,25 +833,22 @@ def _build_clinical_compass(
         "state_conflict_reason": reconciliation.get("state_conflict_reason", ""),
         "management_intent_status": _first_nonempty(latest_event.get("management_intent_status_label"), "Pendiente de confirmación"),
         "event_kind_label": _first_nonempty(latest_event.get("event_kind_label"), "Recomendación generada"),
-        "primary_clinical_question": PRIMARY_QUESTION_MAP.get(state, "¿Cuál es la siguiente mejor decisión clínica?"),
-        "recommended_direction": (
-            "La etapa longitudinal reconciliada requiere confirmar transición y reemitir recomendación modular sobre el estado vigente."
-            if state_conflict
-            else _first_nonempty(nccn.get("trayectoria_recomendada"), nccn.get("recommendation"), "Sin dirección priorizada")
-        ),
-        "why_this_now": _as_list(nccn.get("fundamentos_personalizados"))[:3] or _as_list(display_result.get("report_sections", {}).get("risk_features"))[:3],
+        "primary_clinical_question": _first_nonempty(runtime_action.get("title"), PRIMARY_QUESTION_MAP.get(state), "¿Cuál es la siguiente mejor decisión clínica?"),
+        "recommended_direction": recommended_direction,
+        "why_this_now": why_this_now,
         "what_could_change_course": what_could_change_course,
         "next_actions": next_actions,
-        "monitoring_cadence": _first_nonempty(monitoring.get("cadence"), "Sin cadencia estructurada"),
+        "monitoring_cadence": monitoring_cadence,
         "data_freshness": freshness,
         "last_decisive_data": last_decisive,
         "evidence_anchor": _build_primary_evidence_anchor(display_result),
-        "confidence_category": _first_nonempty(decision_quality.get("confidence_category"), "No documentada"),
-        "recommendation_family": "Estado reconciliado por confirmar" if state_conflict else _first_nonempty(decision_quality.get("recommendation_family"), raw_result.get("recommendation_family"), "No documentada"),
+        "confidence_category": confidence_category,
+        "recommendation_family": recommendation_family,
         "decision_changing_inputs": _as_list(display_result.get("decision_changing_inputs")),
         "why_not_more_confident": _as_list(decision_quality.get("why_not_more_confident")) or _as_list(display_result.get("why_not_more_confident")),
         "active_modifiers": modifier_bundle.get("active_modifiers", []),
         "safety_modifiers": modifier_bundle.get("safety_modifiers", []),
+        "longitudinal_truth_summary": truth_values,
     }
 
 
@@ -2392,6 +2449,28 @@ def build_patient_profile_view_model(
         patient,
         patient.get("latest_assessment") or reconciliation_input or assessment,
     )
+    bundle_signals = dict((longitudinal_bundle or {}).get("signals") or {})
+    bundle_transition_resolution = dict(
+        (longitudinal_bundle or {}).get("transition_resolution")
+        or patient.get("transition_resolution")
+        or {}
+    )
+    if bundle_transition_resolution.get("policy") == "auto_applied":
+        if bundle_transition_resolution.get("target_state"):
+            reconciliation["reconciled_state"] = bundle_transition_resolution.get("target_state")
+        if bundle_transition_resolution.get("target_management_track"):
+            reconciliation["reconciled_management_track"] = bundle_transition_resolution.get("target_management_track")
+        reconciliation["state_conflict_flag"] = False
+        reconciliation["state_conflict_reason"] = ""
+    elif bundle_signals:
+        if bundle_signals.get("reconciled_state"):
+            reconciliation["reconciled_state"] = bundle_signals.get("reconciled_state")
+        if bundle_signals.get("reconciled_management_track"):
+            reconciliation["reconciled_management_track"] = bundle_signals.get("reconciled_management_track")
+        if bundle_signals.get("state_conflict_flag") is not None:
+            reconciliation["state_conflict_flag"] = bundle_signals.get("state_conflict_flag")
+        if bundle_signals.get("state_conflict_reason"):
+            reconciliation["state_conflict_reason"] = bundle_signals.get("state_conflict_reason")
     state = reconciliation.get("reconciled_state") or assessment.get("state") or patient.get("prior_history", {}).get("current_state") or ""
     diagnostic_state = state in DIAGNOSTIC_STATES
     display_result = assessment.get("display_result", {}) if assessment else {}
@@ -2467,6 +2546,7 @@ def build_patient_profile_view_model(
         actionable_encounters[0] if actionable_encounters else {},
     )
     latest_signal_snapshot = dict(patient.get("latest_signal_snapshot") or {})
+    latest_signal_snapshot.update(dict((longitudinal_bundle or {}).get("signals") or {}))
     latest_signal_snapshot.update(
         {
             "explicit_state": reconciliation.get("explicit_state"),
@@ -2480,6 +2560,16 @@ def build_patient_profile_view_model(
     latest_signal_snapshot.setdefault("critical_missing", [])
     latest_signal_snapshot.setdefault("awaiting_review", [])
     latest_signal_snapshot.setdefault("active_safety", [])
+    if longitudinal_bundle and longitudinal_bundle.get("next_best_action"):
+        latest_signal_snapshot["next_best_action"] = dict(longitudinal_bundle.get("next_best_action") or {})
+    if longitudinal_bundle and longitudinal_bundle.get("transition_resolution"):
+        latest_signal_snapshot["transition_resolution"] = dict(longitudinal_bundle.get("transition_resolution") or {})
+    elif patient.get("transition_resolution"):
+        latest_signal_snapshot["transition_resolution"] = dict(patient.get("transition_resolution") or {})
+    if longitudinal_bundle and longitudinal_bundle.get("care_intent_contract"):
+        latest_signal_snapshot["care_intent_contract"] = dict(longitudinal_bundle.get("care_intent_contract") or {})
+    elif patient.get("care_intent_contract"):
+        latest_signal_snapshot["care_intent_contract"] = dict(patient.get("care_intent_contract") or {})
     adjudication_snapshot = dict(patient.get("latest_adjudication_snapshot") or {})
     trial_benchmark_snapshot = dict(patient.get("latest_trial_benchmark_snapshot") or {})
     if not adjudication_snapshot or not trial_benchmark_snapshot:
@@ -2520,6 +2610,42 @@ def build_patient_profile_view_model(
     longitudinal_bundle = longitudinal_bundle or {}
     psa_forecast = dict(longitudinal_bundle.get("psa_forecast") or {})
     live_benchmark = dict(longitudinal_bundle.get("live_benchmark") or {})
+    longitudinal_truth_snapshot = dict(
+        longitudinal_bundle.get("longitudinal_truth_snapshot")
+        or patient.get("longitudinal_truth_snapshot")
+        or {}
+    )
+    decision_recalculation_trace = dict(
+        longitudinal_bundle.get("decision_recalculation_trace")
+        or patient.get("decision_recalculation_trace")
+        or {}
+    )
+    transition_resolution = dict(
+        longitudinal_bundle.get("transition_resolution")
+        or patient.get("transition_resolution")
+        or {}
+    )
+    care_intent_contract = dict(
+        longitudinal_bundle.get("care_intent_contract")
+        or patient.get("care_intent_contract")
+        or {}
+    )
+    guideline_followup_plan = dict(
+        longitudinal_bundle.get("guideline_followup_plan")
+        or patient.get("guideline_followup_plan")
+        or {}
+    )
+    laboratory_intelligence_profile = dict(
+        longitudinal_bundle.get("laboratory_intelligence_profile")
+        or patient.get("laboratory_intelligence_profile")
+        or {}
+    )
+    latest_clinically_decisive_visit = dict(
+        longitudinal_bundle.get("latest_clinically_decisive_visit")
+        or patient.get("latest_clinically_decisive_visit")
+        or decision_recalculation_trace.get("latest_clinically_decisive_visit")
+        or {}
+    )
     if not psa_forecast:
         from prostanet.domains.patient_tracking.psa_forecast import build_psa_forecast
 
@@ -2593,7 +2719,9 @@ def build_patient_profile_view_model(
         }
     )
     transition_proposals = [
-        proposal for proposal in (patient.get("transition_proposals") or []) if proposal.get("proposal_status") == "open"
+        proposal for proposal in (patient.get("transition_proposals") or [])
+        if proposal.get("proposal_status") == "open"
+        and transition_resolution.get("policy") == "manual_confirmation_required"
     ]
     document_board = _build_document_board(patient)
     copilot_sections = _build_copilot_sections(patient, state, management_track, raw_assessment)
@@ -2711,6 +2839,8 @@ def build_patient_profile_view_model(
         "management_track": management_track,
         "reconciled_state": state,
         "reconciled_management_track": management_track,
+        "schedule_state": patient.get("schedule_state", state),
+        "schedule_management_track": patient.get("schedule_management_track", management_track),
         "state_conflict_flag": reconciliation.get("state_conflict_flag", False),
         "state_conflict_reason": reconciliation.get("state_conflict_reason", ""),
         "clinical_compass": _build_clinical_compass(
@@ -2722,6 +2852,10 @@ def build_patient_profile_view_model(
             state_timeline=state_timeline,
             diagnosis_context=diagnosis_context,
             copilot_modifiers=copilot_modifiers,
+            next_best_action=latest_signal_snapshot.get("next_best_action", {}),
+            decision_recalculation_trace=decision_recalculation_trace,
+            longitudinal_truth_snapshot=longitudinal_truth_snapshot,
+            guideline_followup_plan=guideline_followup_plan,
         ),
         "official_diagnosis": diagnosis_context.get("official_diagnosis", ""),
         "official_diagnosis_status": diagnosis_context.get("official_diagnosis_status", "missing"),
@@ -2764,6 +2898,15 @@ def build_patient_profile_view_model(
         "forecast_reliability": forecast_reliability,
         "live_benchmark": live_benchmark,
         "benchmark_reliability": benchmark_reliability,
+        "psma_structured_profile": patient.get("psma_structured_profile", {}),
+        "psma_decision_impact": patient.get("psma_decision_impact", {}),
+        "longitudinal_truth_snapshot": longitudinal_truth_snapshot,
+        "decision_recalculation_trace": decision_recalculation_trace,
+        "transition_resolution": transition_resolution,
+        "care_intent_contract": care_intent_contract,
+        "guideline_followup_plan": guideline_followup_plan,
+        "laboratory_intelligence_profile": laboratory_intelligence_profile,
+        "latest_clinically_decisive_visit": latest_clinically_decisive_visit,
         "agenda_resolution_trace": agenda_resolution_trace,
         "longitudinal_sections": _build_longitudinal_sections(patient, state, assessment),
         "supportive_evidence_context": _as_list(display_result.get("supportive_evidence_context"))[:3],

@@ -53,7 +53,11 @@ class OligometDecisionEngine:
         """Evalúa candidatura oligometastásica completa."""
         lesions = patient.get("lesions") or []
         lesion_count = len(lesions) if lesions else int(patient.get("metastasis_count") or patient.get("lesion_count") or 0)
-        psma_avid = str(patient.get("psma_positive", "0")) == "1"
+        psma_profile = dict(patient.get("psma_structured_profile") or {})
+        psma_avid = bool(psma_profile.get("psma_positive")) if psma_profile else str(patient.get("psma_positive", "0")) == "1"
+        psma_pattern = str(psma_profile.get("psma_uptake_pattern") or "")
+        psma_rads = str(psma_profile.get("psma_rads_score") or "")
+        psma_negative_dominant = bool(psma_profile.get("psma_negative_dominant_lesions")) or str(patient.get("psma_negative_dominant_lesions", "0")) == "1"
         has_visceral = any(
             str(l.get("anatomical_location", "")).lower() in {"liver", "hígado", "lung", "pulmón", "brain", "cerebro"}
             for l in lesions
@@ -63,17 +67,19 @@ class OligometDecisionEngine:
             "lesion_count": lesion_count,
             "is_oligometastatic": lesion_count <= 5 and lesion_count > 0,
             "psma_avid": psma_avid,
+            "psma_pattern": psma_pattern,
+            "psma_rads_score": psma_rads,
             "has_visceral": has_visceral,
         }
 
         # SBRT eligibility
-        result["sbrt_eligibility"] = cls._evaluate_sbrt_eligibility(lesions, lesion_count, psma_avid, has_visceral)
+        result["sbrt_eligibility"] = cls._evaluate_sbrt_eligibility(lesions, lesion_count, psma_avid, has_visceral, psma_pattern, psma_rads, psma_negative_dominant)
 
         # Oligoprogression detection
         result["oligoprogression"] = cls._detect_oligoprogression(patient, lesions)
 
         # MDT vs systemic decision
-        result["mdt_decision"] = cls._mdt_vs_systemic(patient, lesions, lesion_count, psma_avid, has_visceral)
+        result["mdt_decision"] = cls._mdt_vs_systemic(patient, lesions, lesion_count, psma_avid, has_visceral, psma_pattern, psma_rads, psma_negative_dominant)
 
         # SBRT dose recommendations per lesion
         result["sbrt_doses"] = cls._sbrt_dose_recommendations(lesions)
@@ -84,7 +90,8 @@ class OligometDecisionEngine:
 
     @staticmethod
     def _evaluate_sbrt_eligibility(lesions: list, lesion_count: int,
-                                    psma_avid: bool, has_visceral: bool) -> dict[str, Any]:
+                                    psma_avid: bool, has_visceral: bool, psma_pattern: str, psma_rads: str,
+                                    psma_negative_dominant: bool) -> dict[str, Any]:
         eligible = True
         reasons: list[str] = []
         disqualifiers: list[str] = []
@@ -112,6 +119,13 @@ class OligometDecisionEngine:
 
         if not psma_avid:
             reasons.append("PSMA no confirmado — elegibilidad reducida")
+        if psma_pattern == "diseminado":
+            eligible = False
+            disqualifiers.append("Patrón PSMA diseminado — no sostener etiqueta oligometastásica fuerte")
+        if psma_rads == "3":
+            reasons.append("PSMA-RADS 3 — confianza intermedia, MDT solo como contexto discutible")
+        if psma_negative_dominant:
+            reasons.append("Lesiones dominantes PSMA-negativas — confianza reducida para MDT basado solo en PET")
 
         if eligible:
             if psma_avid:
@@ -152,7 +166,8 @@ class OligometDecisionEngine:
 
     @staticmethod
     def _mdt_vs_systemic(patient: dict[str, Any], lesions: list,
-                          lesion_count: int, psma_avid: bool, has_visceral: bool) -> dict[str, Any]:
+                          lesion_count: int, psma_avid: bool, has_visceral: bool, psma_pattern: str,
+                          psma_rads: str, psma_negative_dominant: bool) -> dict[str, Any]:
         """Algoritmo de decisión MDT vs sistémico."""
         if lesion_count == 0 or lesion_count > 5:
             return {"decision": "systemic_only", "rationale": "No oligometastásico — sistémico estándar"}
@@ -163,13 +178,25 @@ class OligometDecisionEngine:
                 "rationale": "Metástasis visceral presente — sistémico prioritario. MDT solo en contexto de oligoprogresión focal.",
                 "reference": "NCCN 2026",
             }
+        if psma_pattern == "diseminado":
+            return {
+                "decision": "systemic_primary",
+                "rationale": "Patrón PSMA diseminado — degradar la vía oligometastásica fuerte y priorizar sistémico.",
+                "reference": "NCCN 2026 / PSMA contextual",
+            }
 
         if psma_avid:
+            if psma_rads == "3":
+                return {
+                    "decision": "contextual_mdt_only",
+                    "rationale": "PSMA-RADS 3 mantiene incertidumbre; MDT solo debe discutirse con correlación adicional.",
+                    "reference": "PSMA-RADS contextual",
+                }
             non_psma = [l for l in lesions if str(l.get("psma_avid", "1")) == "0"]
-            if non_psma:
+            if non_psma or psma_negative_dominant:
                 return {
                     "decision": "biopsy_then_decide",
-                    "rationale": f"Lesión(es) no PSMA-avid detectada(s) ({len(non_psma)}). Biopsia recomendada antes de MDT para descartar histología discordante.",
+                    "rationale": f"Lesión(es) no PSMA-avid o dominantes PSMA-negativas detectada(s) ({max(len(non_psma), 1)}). Biopsia recomendada antes de MDT para descartar histología discordante.",
                     "reference": "PEACE-V trial design",
                 }
             return {

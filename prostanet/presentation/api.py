@@ -6,6 +6,18 @@ import tracking_db
 from prostanet.application.module_registry import ModuleRegistry
 from prostanet.domains.clinical_assessments.service import ClinicalAssessmentService
 from prostanet.domains.clinical_assessments.scenario_harness import run_scenario_harness
+from prostanet.domains.clinical_validation import (
+    DEFAULT_BASE_URL as VALIDATION_DEFAULT_BASE_URL,
+    list_trajectory_summaries,
+    run_longitudinal_validation,
+)
+from prostanet.domains.clinical_validation.repository import (
+    get_validation_case,
+    get_validation_report,
+    get_validation_run,
+    list_validation_runs,
+    save_validation_run_report,
+)
 from prostanet.domains.patient_tracking.service import PatientTrackingService
 from prostanet.shared.converters import safe_bool, safe_float, safe_int
 from prostanet.shared.presentation_text import (
@@ -257,6 +269,65 @@ def clinical_calibration() -> tuple:
     return jsonify({"success": True, "calibration": summary})
 
 
+@modular_api.route("/api/validation/trajectories", methods=["GET"])
+def validation_trajectories() -> tuple:
+    trajectories = list_trajectory_summaries()
+    family_counts: dict[str, int] = {}
+    for item in trajectories:
+        family = str(item.get("scenario_family") or "")
+        family_counts[family] = family_counts.get(family, 0) + 1
+    return jsonify(
+        {
+            "success": True,
+            "total_trajectories": len(trajectories),
+            "family_counts": family_counts,
+            "trajectories": trajectories,
+            "recent_runs": list_validation_runs(limit=5),
+        }
+    )
+
+
+@modular_api.route("/api/validation/run", methods=["POST"])
+def validation_run() -> tuple:
+    try:
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            data = {}
+        report = run_longitudinal_validation(
+            base_url=str(data.get("base_url") or VALIDATION_DEFAULT_BASE_URL),
+            cohort_mode=str(data.get("cohort_mode") or "isolated_temp_db"),
+            visual_mode=str(data.get("visual_mode") or "playwright_real"),
+        )
+        save_validation_run_report(report)
+        return jsonify({"success": True, **report})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/validation/run/<run_id>", methods=["GET"])
+def validation_run_detail(run_id: str) -> tuple:
+    payload = get_validation_run(run_id)
+    if not payload:
+        return jsonify({"success": False, "error": "Corrida de validación no encontrada."}), 404
+    return jsonify({"success": True, "run": payload, "report": get_validation_report(run_id)})
+
+
+@modular_api.route("/api/validation/run/<run_id>/cases/<case_id>", methods=["GET"])
+def validation_run_case(run_id: str, case_id: str) -> tuple:
+    payload = get_validation_case(run_id, case_id)
+    if not payload:
+        return jsonify({"success": False, "error": "Caso de validación no encontrado."}), 404
+    return jsonify({"success": True, "case": payload})
+
+
+@modular_api.route("/api/validation/run/<run_id>/report", methods=["GET"])
+def validation_run_report(run_id: str) -> tuple:
+    payload = get_validation_report(run_id)
+    if not payload:
+        return jsonify({"success": False, "error": "Reporte de validación no encontrado."}), 404
+    return jsonify({"success": True, "report": payload})
+
+
 @modular_api.route("/api/patients/<nss>/state-timeline", methods=["GET"])
 def patient_state_timeline(nss: str) -> tuple:
     from tracking_db import get_patient_state_timeline
@@ -316,11 +387,22 @@ def patient_schedule(patient_id: int) -> tuple:
             management_track=track,
             horizon_months=horizon,
         )
+        patient = tracking_db.get_patient_full_record(patient_id) or patient
+        longitudinal_bundle = tracking_db.refresh_longitudinal_intelligence(patient_id, force_recompute=False) or {}
+        guideline_followup_plan = longitudinal_bundle.get("guideline_followup_plan") or patient.get("guideline_followup_plan", {})
+        care_intent_contract = longitudinal_bundle.get("care_intent_contract") or patient.get("care_intent_contract", {})
+        transition_resolution = longitudinal_bundle.get("transition_resolution") or patient.get("transition_resolution", {})
+        decision_trace = longitudinal_bundle.get("decision_recalculation_trace") or patient.get("decision_recalculation_trace", {})
+        latest_decisive_visit = longitudinal_bundle.get("latest_clinically_decisive_visit") or patient.get("latest_clinically_decisive_visit", {})
+        decision_input_requirements = longitudinal_bundle.get("decision_input_requirements") or patient.get("decision_input_requirements", {})
 
         return jsonify({
             "success": True,
             "state": schedule_bundle.get("state", state),
             "management_track": schedule_bundle.get("management_track", track),
+            "schedule_state": schedule_bundle.get("schedule_state", state),
+            "schedule_management_track": schedule_bundle.get("schedule_management_track", track),
+            "schedule_override_reason": schedule_bundle.get("schedule_override_reason", ""),
             "reconciled_state": reconciliation.get("reconciled_state", state),
             "state_conflict_flag": reconciliation.get("state_conflict_flag", False),
             "state_conflict_reason": reconciliation.get("state_conflict_reason", ""),
@@ -337,8 +419,22 @@ def patient_schedule(patient_id: int) -> tuple:
             "next_encounter": schedule_bundle.get("next_encounter", {}),
             "master_followup_plan": schedule_bundle.get("master_followup_plan", {}),
             "master_followup_summary": schedule_bundle.get("master_followup_summary", {}),
+            "guideline_followup_plan": guideline_followup_plan,
+            "transition_resolution": transition_resolution,
+            "care_intent_contract": care_intent_contract,
+            "decision_recalculation_trace": decision_trace,
+            "latest_clinically_decisive_visit": latest_decisive_visit,
+            "schedule_primary_intent": guideline_followup_plan.get("schedule_primary_intent", ""),
+            "care_intent_key": guideline_followup_plan.get("care_intent_key", ""),
+            "action_schedule_consistency": guideline_followup_plan.get("action_schedule_consistency", True),
+            "blocking_inputs": decision_input_requirements.get("blocking_inputs", []),
+            "hard_blocking_inputs": decision_input_requirements.get("hard_blocking_inputs", []),
+            "decision_blocking_inputs": decision_input_requirements.get("decision_blocking_inputs", []),
+            "supportive_gaps": decision_input_requirements.get("supportive_gaps", []),
+            "required_to_recalculate": decision_input_requirements.get("required_to_recalculate", []),
             "plan_key": (schedule_bundle.get("master_followup_plan") or {}).get("plan_key", ""),
             "guideline_basis": (schedule_bundle.get("master_followup_plan") or {}).get("guideline_basis", []),
+            "cadence_adjustment_reasons": guideline_followup_plan.get("cadence_adjustment_reasons", []),
             "plan_version": (schedule_bundle.get("master_followup_plan") or {}).get("plan_version", ""),
             "plan_status": (schedule_bundle.get("master_followup_plan") or {}).get("plan_status", "active"),
             "calendar_horizon_months": (schedule_bundle.get("master_followup_plan") or {}).get("calendar_horizon_months", horizon),

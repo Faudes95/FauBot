@@ -181,7 +181,27 @@
                     <div class="mt-4 grid grid-cols-1 gap-3" id="institutionalBenchmarkGrid"></div>
                 </div>
             </div>
+            <div class="mt-4 grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <h4 class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Imagen avanzada PSMA</h4>
+                    <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3" id="psmaImagingGrid"></div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <h4 class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Distribución PSMA-RADS y radioligandos</h4>
+                    <canvas id="chartPsmaImaging" height="220"></canvas>
+                </div>
+            </div>
+            <div class="mt-4 grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <h4 class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Inteligencia longitudinal de laboratorios</h4>
+                    <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3" id="laboratoryIntelligenceGrid"></div>
+                </div>
+            </div>
             <div class="mt-4 grid grid-cols-1 xl:grid-cols-4 gap-4">
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <h4 class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Validación longitudinal</h4>
+                    <div class="mt-4 grid grid-cols-1 gap-3" id="validationRunGrid"></div>
+                </div>
                 <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
                     <h4 class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Cohortes dinámicas</h4>
                     <div class="mt-4 grid grid-cols-1 gap-3" id="dynamicCohortGrid"></div>
@@ -274,6 +294,8 @@
             renderPanelMessage('qualityIndicatorGrid', 'Cargando quality indicators institucionales…');
             renderPanelMessage('operationalOutcomeGrid', 'Cargando outcomes operativos…');
             renderPanelMessage('institutionalBenchmarkGrid', 'Cargando benchmarking institucional…');
+            renderPanelMessage('psmaImagingGrid', 'Cargando epidemiología PSMA estructurada…');
+            renderPanelMessage('laboratoryIntelligenceGrid', 'Cargando inteligencia longitudinal de laboratorios…');
             renderPanelMessage('dynamicCohortGrid', 'Cargando cohortes dinámicas…');
             renderPanelMessage('multivariateGrid', 'Cargando modelos multivariados…');
             renderPanelMessage('comparativeGrid', 'Cargando análisis comparativo observacional…');
@@ -357,6 +379,8 @@
                 renderPanelMessage('qualityIndicatorGrid', 'Los quality indicators no estuvieron disponibles en esta carga.', 'amber');
                 renderPanelMessage('operationalOutcomeGrid', 'Los outcomes operativos no estuvieron disponibles en esta carga.', 'amber');
                 renderPanelMessage('institutionalBenchmarkGrid', 'El benchmarking institucional no estuvo disponible en esta carga.', 'amber');
+                renderPanelMessage('psmaImagingGrid', 'La epidemiología PSMA no estuvo disponible en esta carga.', 'amber');
+                renderPanelMessage('laboratoryIntelligenceGrid', 'La inteligencia longitudinal de laboratorios no estuvo disponible en esta carga.', 'amber');
                 renderPanelMessage('dynamicCohortGrid', 'Las cohortes dinámicas no estuvieron disponibles en esta carga.', 'amber');
                 renderPanelMessage('multivariateGrid', 'El análisis multivariado no estuvo disponible en esta carga.', 'amber');
                 renderPanelMessage('comparativeGrid', 'El análisis comparativo no estuvo disponible en esta carga.', 'amber');
@@ -424,6 +448,9 @@
             renderQualityIndicatorPanels();
             renderOperationalOutcomePanels();
             renderInstitutionalBenchmarkPanels();
+            renderPsmaImagingPanels();
+            renderLaboratoryIntelligencePanels();
+            renderValidationPanels();
             renderDynamicCohortPanels();
             renderMultivariatePanels();
             renderComparativePanels();
@@ -1223,6 +1250,65 @@
             window.clinicalPresentation?.normalizeDocument(container);
         }
 
+        function renderPsmaImagingPanels() {
+            const container = document.getElementById('psmaImagingGrid');
+            const payload = dashboardResearch?.psma_imaging || {};
+            const cards = [
+                { title: 'Cobertura PSMA estructurada', value: `${payload.structured_coverage_pct || 0}%`, detail: `${payload.structured_coverage_count || 0} pacientes con PSMA estructurado.` },
+                { title: 'Upstaging por PSMA', value: `${payload.upstaging_rate_pct || 0}%`, detail: 'Comparado contra imagen convencional cuando fue documentada.' },
+                { title: 'Cambio de conducta', value: `${payload.management_change_rate_pct || 0}%`, detail: 'Conducta modificada y registrada por PSMA.' },
+                { title: 'Estudios PSMA', value: payload.study_count || 0, detail: 'Estudios PSMA longitudinales en la cohorte institucional.' },
+            ];
+            container.innerHTML = cards.map((card) => `
+                <div class="rounded-2xl border border-cyan-500/15 bg-cyan-950/10 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">${humanizeClinicalText(card.title)}</div>
+                    <div class="mt-2 text-xl font-bold text-cyan-200">${card.value}</div>
+                    <div class="mt-2 text-xs text-slate-400">${humanizeClinicalText(card.detail)}</div>
+                </div>
+            `).join('');
+            const rads = payload.psma_rads_distribution || {};
+            const ligands = payload.radioligand_distribution || {};
+            const labels = [...Object.keys(rads).map((key) => `RADS ${key}`), ...Object.keys(ligands)];
+            const values = [...Object.values(rads), ...Object.values(ligands)];
+            replaceChart('chartPsmaImaging', {
+                type: 'bar',
+                data: {
+                    labels: labels.length ? labels : ['Sin datos'],
+                    datasets: [{
+                        data: values.length ? values : [0],
+                        backgroundColor: labels.map((_, index) => index < Object.keys(rads).length ? COLORS.cyan : COLORS.purple),
+                        borderRadius: 6,
+                        borderSkipped: false,
+                    }],
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } },
+                },
+            });
+            window.clinicalPresentation?.normalizeDocument(container);
+        }
+
+        function renderLaboratoryIntelligencePanels() {
+            const container = document.getElementById('laboratoryIntelligenceGrid');
+            const payload = dashboardResearch?.laboratory_intelligence || {};
+            const cards = [
+                { title: 'Cobertura longitudinal', value: `${payload.longitudinal_coverage_pct || 0}%`, detail: `${payload.record_count || 0} expedientes con series multiparámetro evaluables.` },
+                { title: 'Alertas activas', value: payload.alerts_active_count || 0, detail: 'Alertas longitudinales de seguridad, castración, carga tumoral y función orgánica.' },
+                { title: 'Castración documentada', value: payload.castration_documented_count || 0, detail: 'Pacientes con testosterona longitudinal utilizable en la cohorte.' },
+                { title: 'Panel hepatorrenal', value: `${payload.hepatic_panel_count || 0}/${payload.renal_panel_count || 0}`, detail: 'Cobertura hepática y renal disponible para vigilancia terapéutica.' },
+            ];
+            container.innerHTML = cards.map((card) => `
+                <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">${humanizeClinicalText(card.title)}</div>
+                    <div class="mt-2 text-xl font-bold text-white">${card.value}</div>
+                    <div class="mt-2 text-xs text-slate-400">${humanizeClinicalText(card.detail)}</div>
+                </div>
+            `).join('');
+            window.clinicalPresentation?.normalizeDocument(container);
+        }
+
         function renderDynamicCohortPanels() {
             const container = document.getElementById('dynamicCohortGrid');
             const cohorts = dashboardResearch?.dynamic_cohorts || [];
@@ -1235,6 +1321,32 @@
                     <div class="mt-2 text-xs text-slate-400">${humanizeClinicalText(cohort.description || 'Cohorte reusable del sistema')}</div>
                 </div>
             `).join('') : '<div class="text-sm text-slate-500">Sin cohortes dinámicas disponibles.</div>';
+            window.clinicalPresentation?.normalizeDocument(container);
+        }
+
+        function renderValidationPanels() {
+            const container = document.getElementById('validationRunGrid');
+            const payload = dashboardResearch?.longitudinal_validation || {};
+            if (!payload.available) {
+                container.innerHTML = '<div class="text-sm text-slate-500">Todavía no hay corridas de validación longitudinal registradas.</div>';
+                return;
+            }
+            const familyDetail = (payload.top_failing_scenario_families || []).map((item) => `${item[0]} (${item[1]})`).join(', ') || 'Sin familias fallando.';
+            const cards = [
+                { title: 'Trayectorias', value: payload.total_trajectories || 0, detail: payload.cohort_mode || 'validation run' },
+                { title: 'Concordancia guía', value: `${Number(payload.guideline_concordance_pct || 0).toFixed(1)}%`, detail: 'NCCN-first con provenance explícito.' },
+                { title: 'Prompts críticos', value: `${Number(payload.missing_input_prompt_accuracy || 0).toFixed(1)}%`, detail: 'Precisión de blocking inputs por escenario.' },
+                { title: 'Contradicciones UI', value: payload.ui_contradictions || 0, detail: payload.critical_failures ? `${payload.critical_failures} fallas críticas activas.` : 'Sin fallas críticas.' },
+                { title: 'Completitud longitudinal', value: `${Number(payload.data_accumulation_completeness_pct || 0).toFixed(1)}%`, detail: 'Persistencia de labs, agenda y decisión a lo largo del tiempo.' },
+                { title: 'Familias con fallas', value: payload.failed || 0, detail: familyDetail },
+            ];
+            container.innerHTML = cards.map((card) => `
+                <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">${humanizeClinicalText(card.title)}</div>
+                    <div class="mt-2 text-xl font-bold text-white">${card.value}</div>
+                    <div class="mt-2 text-xs text-slate-400">${humanizeClinicalText(card.detail)}</div>
+                </div>
+            `).join('');
             window.clinicalPresentation?.normalizeDocument(container);
         }
 

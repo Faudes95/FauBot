@@ -57,6 +57,7 @@ MANAGEMENT_TRACK_LABELS = {
     "post_rp": "Seguimiento post prostatectomía radical",
     "post_rt": "Seguimiento post radioterapia",
     "salvage": "Ruta de rescate",
+    "salvage_evaluation": "Evaluación temprana de rescate",
     "on_arpi": "Tratamiento activo con ARPI",
     "on_docetaxel": "Tratamiento activo con quimioterapia",
     "on_parp": "Tratamiento activo con PARP",
@@ -110,6 +111,15 @@ def _safe_float(value: Any) -> float | None:
         if value in (None, ""):
             return None
         return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_int(value: Any) -> int | None:
+    try:
+        if value in (None, ""):
+            return None
+        return int(float(value))
     except (TypeError, ValueError):
         return None
 
@@ -325,10 +335,18 @@ def resolve_track_anchor(
 
 
 def infer_management_track(patient: dict[str, Any], state: str, raw_assessment: dict[str, Any] | None = None) -> str:
+    from prostanet.domains.patient_tracking.reconciled_state import derive_post_prostatectomy_course
+
     payload = (raw_assessment or {}).get("input_snapshot", {}) if raw_assessment else {}
     treatment_text = _treatment_text(patient).lower()
     overlays = patient.get("care_overlays") or []
     latest_followup = _latest_by(patient.get("follow_ups", []), "visit_date")
+    truth_values = ((patient.get("longitudinal_truth_snapshot") or {}).get("field_values") or {})
+    documented_track = str(
+        truth_values.get("management_track")
+        or latest_followup.get("management_track")
+        or ""
+    ).strip()
     pain_score = _safe_float(latest_followup.get("pain_score"))
     if any("pali" in str(item.get("title", "")).lower() for item in overlays) or (pain_score is not None and pain_score >= 7):
         return "palliative_overlay"
@@ -337,17 +355,28 @@ def infer_management_track(patient: dict[str, Any], state: str, raw_assessment: 
     if state == "post_negative_biopsy_followup":
         return "rebiopsy_surveillance"
     if state == "localized_initial":
+        if documented_track in {"active_surveillance", "pre_surgery", "localized_decision"}:
+            return documented_track
         active_surveillance = patient.get("active_surveillance") or {}
         if str(active_surveillance.get("current_status", "")).lower() == "activo":
             return "active_surveillance"
         eligible = ((raw_assessment or {}).get("result_snapshot", {}) or {}).get("eligible_treatments", []) or []
         eligible_names = " ".join(str(item.get("name", "")) for item in eligible if isinstance(item, dict)).lower()
+        if any(token in eligible_names for token in ("radiot", "rt", "ebrt", "hormonal", "adt", "braqu")):
+            return "localized_decision"
         if "prostatectomy" in eligible_names or "cirug" in eligible_names:
             return "pre_surgery"
         return "localized_decision"
     if state == "post_prostatectomy":
+        course = derive_post_prostatectomy_course(patient)
+        if course == "persistent_psa":
+            return "salvage_evaluation"
+        if documented_track in {"post_rp", "salvage", "salvage_evaluation"}:
+            return documented_track
         return "post_rp"
     if state == "recurrence_bcr":
+        if documented_track in {"salvage", "salvage_evaluation", "post_rt"}:
+            return documented_track
         radiation = patient.get("radiation") or []
         if radiation and not patient.get("surgery"):
             return "post_rt"
@@ -664,15 +693,23 @@ def _build_visit_sections(state: str, management_track: str) -> list[dict[str, A
                 "subtitle": "Si hoy se revisó imagen, persístela de manera estructurada para volumen y distribución.",
                 "fields": [
                     _field("imaging_modality", "Modalidad revisada", "select", options=["", "PSMA-PET", "Gammagrama óseo", "TAC convencional"]),
-                    _field("psma_suv_max", "SUV max", "number"),
-                    _field("psma_suv_bucket", "Bucket SUV", "select", options=["", "<6", "6-9", "9-12", ">12"]),
-                    _field("psma_total_lesions", "Número total de lesiones PSMA", "number"),
-                    _field("psma_lesion_locations", "Ubicación de lesiones PSMA", "multi_select", options=COMMON_IMAGING_LOCATIONS),
-                    _field("psma_negative_dominant_lesions", "Lesiones dominantes PSMA negativas", "checkbox"),
-                    _field("bone_lesion_count", "Lesiones positivas en gammagrama", "number"),
-                    _field("bone_distribution", "Distribución ósea", "multi_select", options=COMMON_IMAGING_LOCATIONS),
-                    _field("ct_summary", "Resumen TAC", "select", options=["", "Sin lesiones sospechosas", "Ganglios sospechosos", "Metástasis"]),
-                    _field("ct_locations", "Ubicación de hallazgos TAC", "multi_select", options=COMMON_IMAGING_LOCATIONS),
+                    _field("psma_suv_max", "SUV max", "number", conditional_visibility={"imaging_modality": ["PSMA-PET"]}),
+                    _field("psma_radioligand", "Radioligando PSMA", "select", options=["", "68Ga-PSMA-11", "18F-DCFPyL", "18F-PSMA-1007", "Otro", "Desconocido"], conditional_visibility={"imaging_modality": ["PSMA-PET"]}),
+                    _field("psma_index_lesion_site", "Lesión índice PSMA", "text", conditional_visibility={"imaging_modality": ["PSMA-PET"]}),
+                    _field("psma_index_lesion_suvmax", "SUVmax lesión índice", "number", conditional_visibility={"imaging_modality": ["PSMA-PET"]}),
+                    _field("psma_uptake_pattern", "Patrón de captación", "select", options=["", "focal", "multifocal", "diseminado", "indeterminado"], conditional_visibility={"imaging_modality": ["PSMA-PET"]}),
+                    _field("psma_rads_score", "PSMA-RADS", "select", options=["", "1", "2", "3", "4", "5", "Desconocido"], conditional_visibility={"imaging_modality": ["PSMA-PET"]}),
+                    _field("psma_suv_bucket", "Bucket SUV", "select", options=["", "<6", "6-9", "9-12", ">12"], conditional_visibility={"imaging_modality": ["PSMA-PET"]}),
+                    _field("psma_total_lesions", "Número total de lesiones PSMA", "number", conditional_visibility={"imaging_modality": ["PSMA-PET"]}),
+                    _field("psma_lesion_locations", "Ubicación de lesiones PSMA", "multi_select", options=COMMON_IMAGING_LOCATIONS, conditional_visibility={"imaging_modality": ["PSMA-PET"]}),
+                    _field("psma_negative_dominant_lesions", "Lesiones dominantes PSMA negativas", "checkbox", conditional_visibility={"imaging_modality": ["PSMA-PET"]}),
+                    _field("conventional_stage_before_psma", "Stage convencional previo", "select", options=["", "No comparable", "M0", "M1a", "M1b", "M1c"], conditional_visibility={"imaging_modality": ["PSMA-PET"]}),
+                    _field("psma_stage_after_psma", "Stage posterior por PSMA", "select", options=["", "M0", "M1a", "M1b", "M1c"], conditional_visibility={"imaging_modality": ["PSMA-PET"]}),
+                    _field("psma_management_changed", "Cambio de conducta por PSMA", "checkbox", conditional_visibility={"imaging_modality": ["PSMA-PET"]}),
+                    _field("bone_lesion_count", "Lesiones positivas en gammagrama", "number", conditional_visibility={"imaging_modality": ["Gammagrama óseo"]}),
+                    _field("bone_distribution", "Distribución ósea", "multi_select", options=COMMON_IMAGING_LOCATIONS, conditional_visibility={"imaging_modality": ["Gammagrama óseo"]}),
+                    _field("ct_summary", "Resumen TAC", "select", options=["", "Sin lesiones sospechosas", "Ganglios sospechosos", "Metástasis"], conditional_visibility={"imaging_modality": ["TAC convencional"]}),
+                    _field("ct_locations", "Ubicación de hallazgos TAC", "multi_select", options=COMMON_IMAGING_LOCATIONS, conditional_visibility={"imaging_modality": ["TAC convencional"]}),
                 ],
             }
         )
@@ -1326,11 +1363,11 @@ def build_stage_protocol(state: str, management_track: str, patient: dict[str, A
             evidence_basis=["NCCN 2026", "EAU Follow-up 2026", "1.pdf"],
             comparator_basis=[],
         ).to_dict()
-    if management_track == "salvage":
+    if management_track in {"salvage", "salvage_evaluation"}:
         return StageProtocolDefinition(
             state=state,
             management_track=management_track,
-            title="Ruta de rescate",
+            title="Ruta de rescate" if management_track == "salvage" else "Evaluación temprana de rescate",
             cadence_summary="PSA ultrasensible, PSADT e imagen dirigida para definir ventana curativa o intensificación.",
             purpose="No perder oportunidad de rescate curativo y evitar intensificación prematura.",
             evidence_basis=["NCCN 2026", "EAU 2026 recurrencia", "FDA EMBARK"],
@@ -1372,7 +1409,12 @@ def _diagnostic_agenda(patient: dict[str, Any], state: str, track: str) -> list[
     latest_followup = _latest_by(patient.get("follow_ups", []), "visit_date")
     latest_mri = _latest_by(patient.get("mri_facts", []), "fact_date")
     latest_trigger = _latest_by(patient.get("biopsy_triggers", []), "trigger_date")
+    truth_values = ((patient.get("longitudinal_truth_snapshot") or {}).get("field_values") or {})
     reference = _parse_date(_first_nonempty(latest_followup.get("visit_date"), latest_trigger.get("trigger_date"), identity.get("diagnosis_date"))) or date.today()
+    current_psad = _safe_float(_first_nonempty(latest_followup.get("psad"), truth_values.get("psad"), (patient.get("baseline") or {}).get("psad"))) or 0.0
+    current_pirads = _safe_int(_first_nonempty(latest_followup.get("pirads_score"), truth_values.get("pirads_score"), latest_mri.get("pirads_score"), (patient.get("baseline") or {}).get("pirads_score"))) or 0
+    current_dre_suspicious = str(_first_nonempty(latest_followup.get("dre_suspicious"), truth_values.get("dre_suspicious"), (patient.get("baseline") or {}).get("dre_suspicious"))).strip().lower() in {"1", "true", "yes", "si", "sí"}
+    biopsy_trigger_still_active = current_pirads >= 4 or current_psad >= 0.15 or current_dre_suspicious
     items = [
         _agenda_item(
             f"{state}:{track}:psa_review",
@@ -1407,7 +1449,7 @@ def _diagnostic_agenda(patient: dict[str, Any], state: str, track: str) -> list[
                 generated_from_event="recommendation_generated",
             )
         )
-    if latest_trigger and not patient.get("biopsies"):
+    if latest_trigger and not patient.get("biopsies") and biopsy_trigger_still_active:
         trigger_date = _parse_date(latest_trigger.get("trigger_date")) or reference
         items.append(
             _agenda_item(
@@ -1555,21 +1597,37 @@ def _localized_agenda(patient: dict[str, Any], state: str, track: str) -> list[d
             ]
         )
     else:
-        items.append(
-            _agenda_item(
-                f"{state}:{track}:shared_decision",
-                "therapy_review",
-                "Revisar decisión local y datos faltantes",
-                state,
-                track,
-                base_date,
-                21,
-                summary="Cerrar datos anatómicos, patológicos y funcionales antes de fijar la trayectoria local.",
-                required_inputs=["prior_mpmri_pirads_score", "percent_pattern_4", "ipss_total"],
-                completion_rule={"note": "Documentar datos decisores faltantes"},
-                evidence_basis=["EAU 2026 localized", "NCCN 2026"],
-                generated_from_event="recommendation_generated",
-            )
+        items.extend(
+            [
+                _agenda_item(
+                    f"{state}:{track}:psa_local_decision",
+                    "psa",
+                    "PSA y staging para decisión local",
+                    state,
+                    track,
+                    base_date,
+                    21,
+                    summary="Reconfirmar PSA, extensión clínica e imagen antes de cerrar la trayectoria local definitiva.",
+                    required_inputs=["psa", "clinical_tstage"],
+                    completion_rule={"any_of": ["psa", "clinical_tstage"]},
+                    evidence_basis=["EAU 2026 localized", "NCCN 2026"],
+                    generated_from_event="recommendation_generated",
+                ),
+                _agenda_item(
+                    f"{state}:{track}:shared_decision",
+                    "therapy_review",
+                    "Revisar decisión local y datos faltantes",
+                    state,
+                    track,
+                    base_date,
+                    21,
+                    summary="Cerrar datos anatómicos, patológicos y funcionales antes de fijar la trayectoria local.",
+                    required_inputs=["prior_mpmri_pirads_score", "percent_pattern_4", "ipss_total"],
+                    completion_rule={"note": "Documentar datos decisores faltantes"},
+                    evidence_basis=["EAU 2026 localized", "NCCN 2026"],
+                    generated_from_event="recommendation_generated",
+                ),
+            ]
         )
     return items
 
@@ -1636,7 +1694,7 @@ def _postlocal_agenda(patient: dict[str, Any], state: str, track: str) -> list[d
                 generated_from_event="procedure_performed",
             )
         )
-    else:
+    elif track in {"salvage", "salvage_evaluation"}:
         items.extend(
             [
                 _agenda_item(
@@ -1667,6 +1725,25 @@ def _postlocal_agenda(patient: dict[str, Any], state: str, track: str) -> list[d
                     completion_rule={"requires_event_target": "imaging_studies"},
                     evidence_basis=["EAU 2026 recurrencia", "NCCN 2026"],
                     generated_from_event="recommendation_generated",
+                ),
+            ]
+        )
+    else:
+        items.extend(
+            [
+                _agenda_item(
+                    f"{state}:{track}:psa_serial",
+                    "psa",
+                    "PSA ultrasensible seriado",
+                    state,
+                    track,
+                    base_date,
+                    180,
+                    summary="La vigilancia postoperatoria estable sigue PSA ultrasensible seriado y recuperación funcional.",
+                    required_inputs=["psa"],
+                    completion_rule={"any_of": ["psa"]},
+                    evidence_basis=["EAU Follow-up 2026", "NCCN 2026"],
+                    generated_from_event="followup_visit_recorded",
                 ),
             ]
         )

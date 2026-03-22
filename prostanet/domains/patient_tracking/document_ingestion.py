@@ -18,6 +18,7 @@ from prostanet.shared.contracts import (
     VerifiedFact,
     VerifiedFactBundle,
 )
+from prostanet.domains.patient_tracking.psma_imaging.service import normalize_psma_imaging_payload
 
 
 DEFAULT_PATIENT_DOCUMENT_ROOT = Path(
@@ -140,9 +141,16 @@ def _manual_template(document_type: str) -> list[dict[str, Any]]:
             {"field_name": "study_date", "label": "Fecha del estudio", "fact_group": "imaging", "target_result_type": "imaging", "field_type": "date"},
             {"field_name": "study_type", "label": "Modalidad", "fact_group": "imaging", "target_result_type": "imaging", "field_type": "text"},
             {"field_name": "psma_result", "label": "Resultado PSMA", "fact_group": "imaging", "target_result_type": "imaging", "field_type": "text"},
+            {"field_name": "psma_radioligand", "label": "Radioligando PSMA", "fact_group": "imaging", "target_result_type": "imaging", "field_type": "text"},
             {"field_name": "psma_suv_max", "label": "SUV max", "fact_group": "imaging", "target_result_type": "imaging", "field_type": "number"},
+            {"field_name": "psma_index_lesion_site", "label": "Lesión índice", "fact_group": "imaging", "target_result_type": "imaging", "field_type": "text"},
+            {"field_name": "psma_uptake_pattern", "label": "Patrón de captación", "fact_group": "imaging", "target_result_type": "imaging", "field_type": "text"},
+            {"field_name": "psma_rads_score", "label": "PSMA-RADS", "fact_group": "imaging", "target_result_type": "imaging", "field_type": "text"},
             {"field_name": "lesion_locations", "label": "Ubicaciones de lesión (coma separada)", "fact_group": "imaging", "target_result_type": "imaging", "field_type": "textarea"},
             {"field_name": "psma_total_lesions", "label": "Número total de lesiones", "fact_group": "imaging", "target_result_type": "imaging", "field_type": "number"},
+            {"field_name": "conventional_stage_before_psma", "label": "Stage convencional previo", "fact_group": "imaging", "target_result_type": "imaging", "field_type": "text"},
+            {"field_name": "psma_stage_after_psma", "label": "Stage post-PSMA", "fact_group": "imaging", "target_result_type": "imaging", "field_type": "text"},
+            {"field_name": "psma_management_changed", "label": "Cambio de conducta por PSMA", "fact_group": "imaging", "target_result_type": "imaging", "field_type": "checkbox"},
         ],
         "genomic_report": [
             {"field_name": "test_date", "label": "Fecha del estudio", "fact_group": "genomic", "target_result_type": "genomic", "field_type": "date"},
@@ -440,12 +448,22 @@ def build_document_payload_from_facts(
             "study_type": study_type,
             "psma_result": fact_map.get("psma_result"),
             "psma_suv_max": suv,
+            "psma_radioligand": fact_map.get("psma_radioligand"),
+            "psma_index_lesion_site": fact_map.get("psma_index_lesion_site"),
+            "psma_uptake_pattern": fact_map.get("psma_uptake_pattern"),
+            "psma_rads_score": fact_map.get("psma_rads_score"),
+            "conventional_stage_before_psma": fact_map.get("conventional_stage_before_psma"),
+            "psma_stage_after_psma": fact_map.get("psma_stage_after_psma"),
+            "psma_management_changed": fact_map.get("psma_management_changed"),
             "bone_scan_result": fact_map.get("bone_scan_result"),
             "bone_lesion_count": _safe_int(fact_map.get("bone_lesion_count")),
             "findings": {key: value for key, value in findings.items() if _is_present(value)},
             "radiologist_notes": fact_map.get("radiologist_notes"),
         }
-        return result_type, {key: value for key, value in payload.items() if _is_present(value)}
+        cleaned = {key: value for key, value in payload.items() if _is_present(value)}
+        if "psma" in study_type.lower():
+            cleaned = normalize_psma_imaging_payload(cleaned)
+        return result_type, cleaned
 
     if result_type == "genomic":
         actionable = fact_map.get("actionable_findings") or []
@@ -672,6 +690,15 @@ def _extract_imaging_candidates(text: str, text_pages: list[dict[str, Any]], *, 
     if study_type == "PSMA-PET":
         positive = any(token in lowered for token in ("captación patológica", "psma positivo", "positivo", "avid"))
         candidates.append(_candidate(field_name="psma_result", fact_group="imaging", value="positivo" if positive else "negativo", target_result_type="imaging", confidence=0.72))
+        for ligand, label in (
+            ("68ga", "68Ga-PSMA-11"),
+            ("dcfpyl", "18F-DCFPyL"),
+            ("1007", "18F-PSMA-1007"),
+        ):
+            if ligand in lowered:
+                excerpt, page_ref = _find_excerpt(text_pages, ligand)
+                candidates.append(_candidate(field_name="psma_radioligand", fact_group="imaging", value=label, target_result_type="imaging", confidence=0.84, evidence_excerpt=excerpt, page_ref=page_ref))
+                break
         suv = _extract_number(text, [r"suv\s*max", r"\bsuv\b"])
         if suv is not None:
             excerpt, page_ref = _find_excerpt(text_pages, r"suv")
@@ -681,6 +708,26 @@ def _extract_imaging_candidates(text: str, text_pages: list[dict[str, Any]], *, 
         if locations:
             candidates.append(_candidate(field_name="lesion_locations", fact_group="imaging", value=locations, target_result_type="imaging", confidence=0.7))
             candidates.append(_candidate(field_name="psma_total_lesions", fact_group="imaging", value=len(locations), target_result_type="imaging", confidence=0.6, extraction_method="location_count"))
+            candidates.append(_candidate(field_name="psma_index_lesion_site", fact_group="imaging", value=locations[0], target_result_type="imaging", confidence=0.58, extraction_method="first_location"))
+        if any(token in lowered for token in ("psma-rads 5", "psma rads 5", "psma-rads-5")):
+            candidates.append(_candidate(field_name="psma_rads_score", fact_group="imaging", value="5", target_result_type="imaging", confidence=0.86))
+        elif any(token in lowered for token in ("psma-rads 4", "psma rads 4", "psma-rads-4")):
+            candidates.append(_candidate(field_name="psma_rads_score", fact_group="imaging", value="4", target_result_type="imaging", confidence=0.84))
+        elif any(token in lowered for token in ("psma-rads 3", "psma rads 3", "psma-rads-3")):
+            candidates.append(_candidate(field_name="psma_rads_score", fact_group="imaging", value="3", target_result_type="imaging", confidence=0.8))
+        if "disemin" in lowered or "widespread" in lowered:
+            candidates.append(_candidate(field_name="psma_uptake_pattern", fact_group="imaging", value="diseminado", target_result_type="imaging", confidence=0.78))
+        elif "oligo" in lowered or "multifocal" in lowered:
+            candidates.append(_candidate(field_name="psma_uptake_pattern", fact_group="imaging", value="multifocal", target_result_type="imaging", confidence=0.76))
+        elif any(token in lowered for token in ("local", "pelv", "focal")):
+            candidates.append(_candidate(field_name="psma_uptake_pattern", fact_group="imaging", value="focal", target_result_type="imaging", confidence=0.72))
+        if any(token in lowered for token in ("cambio de conducta", "changed management", "modificó manejo", "upstaging")):
+            candidates.append(_candidate(field_name="psma_management_changed", fact_group="imaging", value=True, target_result_type="imaging", confidence=0.66))
+        for stage in ("m0", "m1a", "m1b", "m1c"):
+            if stage in lowered:
+                excerpt, page_ref = _find_excerpt(text_pages, stage)
+                candidates.append(_candidate(field_name="psma_stage_after_psma", fact_group="imaging", value=stage.upper().replace("A", "a").replace("B", "b").replace("C", "c"), target_result_type="imaging", confidence=0.6, evidence_excerpt=excerpt, page_ref=page_ref))
+                break
     elif study_type == "Gammagrama":
         bone_count = _safe_int(_extract_number(text, [r"lesiones", r"focos"]))
         if bone_count is not None:

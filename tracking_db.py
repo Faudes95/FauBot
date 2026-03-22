@@ -7,6 +7,11 @@ from datetime import datetime, timedelta, date
 import logging
 from pathlib import Path
 
+from prostanet.domains.patient_tracking.psma_imaging import (
+    build_psma_decision_impact,
+    build_psma_structured_profile,
+    normalize_psma_imaging_payload,
+)
 from prostanet.domains.patient_tracking.therapy_catalog import normalize_regimen_code, regimen_label
 from prostanet.shared.metastatic_profile import build_metastatic_profile, derive_legacy_metastasis
 
@@ -1812,6 +1817,15 @@ def init_tracking_db():
             -- PSMA-PET specific
             psma_result TEXT,                -- 'negativo', 'local', 'ganglionar', 'oseo', 'visceral'
             psma_suv_max REAL,
+            psma_radioligand TEXT,
+            psma_index_lesion_site TEXT,
+            psma_index_lesion_suvmax REAL,
+            psma_uptake_pattern TEXT,
+            psma_rads_score TEXT,
+            conventional_stage_before_psma TEXT,
+            psma_stage_after_psma TEXT,
+            psma_upstaged_vs_conventional BOOLEAN,
+            psma_management_changed BOOLEAN,
             -- Bone scan specific
             bone_scan_result TEXT,            -- 'negativo', 'sospechoso', 'positivo_limitado', 'positivo_extenso'
             bone_lesion_count INTEGER,
@@ -1821,6 +1835,21 @@ def init_tracking_db():
             FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
         )
     ''')
+    for ddl in (
+        "ALTER TABLE imaging_studies ADD COLUMN psma_radioligand TEXT",
+        "ALTER TABLE imaging_studies ADD COLUMN psma_index_lesion_site TEXT",
+        "ALTER TABLE imaging_studies ADD COLUMN psma_index_lesion_suvmax REAL",
+        "ALTER TABLE imaging_studies ADD COLUMN psma_uptake_pattern TEXT",
+        "ALTER TABLE imaging_studies ADD COLUMN psma_rads_score TEXT",
+        "ALTER TABLE imaging_studies ADD COLUMN conventional_stage_before_psma TEXT",
+        "ALTER TABLE imaging_studies ADD COLUMN psma_stage_after_psma TEXT",
+        "ALTER TABLE imaging_studies ADD COLUMN psma_upstaged_vs_conventional BOOLEAN",
+        "ALTER TABLE imaging_studies ADD COLUMN psma_management_changed BOOLEAN",
+    ):
+        try:
+            c.execute(ddl)
+        except sqlite3.OperationalError:
+            pass
 
     c.execute('''
         CREATE TABLE IF NOT EXISTS mri_facts (
@@ -3406,6 +3435,135 @@ def init_tracking_db():
         '''
     )
 
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS decision_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_key TEXT NOT NULL UNIQUE,
+            patient_id INTEGER NOT NULL,
+            event_id INTEGER,
+            state TEXT,
+            management_track TEXT,
+            headline TEXT,
+            snapshot_json TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS guideline_plan_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_key TEXT NOT NULL UNIQUE,
+            patient_id INTEGER NOT NULL,
+            event_id INTEGER,
+            state TEXT,
+            management_track TEXT,
+            guideline_basis_json TEXT,
+            snapshot_json TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS state_transition_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_key TEXT NOT NULL UNIQUE,
+            patient_id INTEGER NOT NULL,
+            event_id INTEGER,
+            from_state TEXT,
+            to_state TEXT,
+            management_track TEXT,
+            reason TEXT,
+            snapshot_json TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS missing_input_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_key TEXT NOT NULL UNIQUE,
+            patient_id INTEGER NOT NULL,
+            event_id INTEGER,
+            state TEXT,
+            management_track TEXT,
+            blocking_inputs_json TEXT,
+            required_to_recalculate_json TEXT,
+            optional_context_inputs_json TEXT,
+            decision_domains_blocked_json TEXT,
+            rationale_json TEXT,
+            snapshot_json TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS validation_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL UNIQUE,
+            cohort_mode TEXT,
+            base_url TEXT,
+            total_trajectories INTEGER DEFAULT 0,
+            passed INTEGER DEFAULT 0,
+            failed INTEGER DEFAULT 0,
+            critical_failures INTEGER DEFAULT 0,
+            ui_contradictions INTEGER DEFAULT 0,
+            missing_input_prompt_accuracy REAL DEFAULT 0,
+            guideline_concordance_pct REAL DEFAULT 0,
+            data_accumulation_completeness_pct REAL DEFAULT 0,
+            top_failing_scenario_families_json TEXT,
+            report_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS validation_run_cases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL,
+            case_key TEXT NOT NULL,
+            scenario_id TEXT NOT NULL,
+            scenario_family TEXT NOT NULL,
+            patient_id INTEGER,
+            patient_nss TEXT,
+            case_status TEXT,
+            critical_failure INTEGER DEFAULT 0,
+            ui_contradictions_json TEXT,
+            expected_json TEXT,
+            actual_json TEXT,
+            assertions_json TEXT,
+            report_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(run_id, case_key)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS validation_visual_artifacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL,
+            case_key TEXT NOT NULL,
+            patient_id INTEGER,
+            artifact_type TEXT,
+            artifact_path TEXT,
+            artifact_text TEXT,
+            assertion_key TEXT,
+            status TEXT DEFAULT 'generated',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        '''
+    )
+
     conn.commit()
     conn.close()
     try:
@@ -3845,16 +4003,29 @@ def _build_imaging_payloads(data):
         )
     if _is_truthy(data.get("psma_pet_done")) or str(data.get("imaging_modality", "")) == "PSMA-PET":
         payloads.append(
-            {
-                "study_date": data.get("local_therapy_date") or datetime.now().strftime("%Y-%m-%d"),
-                "study_type": "PSMA-PET",
-                "psma_result": data.get("psma_pet_result") or ("positivo" if _is_truthy(data.get("psma_positive")) else "negativo"),
-                "findings": {
-                    "psma_positive": _is_truthy(data.get("psma_positive")),
+            normalize_psma_imaging_payload(
+                {
+                    "study_date": data.get("local_therapy_date") or datetime.now().strftime("%Y-%m-%d"),
+                    "study_type": "PSMA-PET",
+                    "psma_result": data.get("psma_pet_result") or ("positivo" if _is_truthy(data.get("psma_positive")) else "negativo"),
+                    "psma_suv_max": data.get("psma_suv_max"),
+                    "psma_radioligand": data.get("psma_radioligand"),
+                    "psma_index_lesion_site": data.get("psma_index_lesion_site"),
+                    "psma_index_lesion_suvmax": data.get("psma_index_lesion_suvmax"),
+                    "psma_uptake_pattern": data.get("psma_uptake_pattern"),
+                    "psma_rads_score": data.get("psma_rads_score"),
+                    "psma_total_lesions": data.get("psma_total_lesions"),
+                    "psma_lesion_locations": data.get("psma_lesion_locations"),
                     "psma_negative_dominant_lesions": _is_truthy(data.get("psma_negative_dominant_lesions")),
-                    "conventional_imaging_m0": _is_truthy(data.get("conventional_imaging_m0")),
-                },
-            }
+                    "conventional_stage_before_psma": data.get("conventional_stage_before_psma") or data.get("conventional_imaging_status"),
+                    "psma_stage_after_psma": data.get("psma_stage_after_psma"),
+                    "psma_upstaged_vs_conventional": data.get("psma_upstaged_vs_conventional"),
+                    "psma_management_changed": data.get("psma_management_changed"),
+                    "findings": {
+                        "conventional_imaging_m0": _is_truthy(data.get("conventional_imaging_m0")),
+                    },
+                }
+            )
         )
     if (
         str(data.get("imaging_modality", "")) == "Convencional"
@@ -4615,18 +4786,29 @@ def _build_imaging_payload_from_visit(data):
     findings = {}
     if modality == "PSMA-PET":
         findings = {
-            "lesion_locations": _normalize_list_value(data.get("psma_lesion_locations")),
-            "psma_total_lesions": _safe_int(data.get("psma_total_lesions"), 0),
             "psma_suv_bucket": data.get("psma_suv_bucket"),
-            "psma_negative_dominant_lesions": _is_truthy(data.get("psma_negative_dominant_lesions")),
         }
-        return {
-            "study_date": data.get("visit_date", datetime.now().strftime("%Y-%m-%d")),
-            "study_type": "PSMA-PET",
-            "psma_result": "Positivo" if findings["lesion_locations"] or _safe_float(data.get("psma_suv_max")) else "Negativo/indeterminado",
-            "psma_suv_max": _safe_float(data.get("psma_suv_max"), None),
-            "findings": findings,
-        }
+        return normalize_psma_imaging_payload(
+            {
+                "study_date": data.get("visit_date", datetime.now().strftime("%Y-%m-%d")),
+                "study_type": "PSMA-PET",
+                "psma_result": "Positivo" if _normalize_list_value(data.get("psma_lesion_locations")) or _safe_float(data.get("psma_suv_max")) else "Negativo/indeterminado",
+                "psma_suv_max": _safe_float(data.get("psma_suv_max"), None),
+                "psma_radioligand": data.get("psma_radioligand"),
+                "psma_index_lesion_site": data.get("psma_index_lesion_site"),
+                "psma_index_lesion_suvmax": _safe_float(data.get("psma_index_lesion_suvmax"), None),
+                "psma_uptake_pattern": data.get("psma_uptake_pattern"),
+                "psma_rads_score": data.get("psma_rads_score"),
+                "psma_total_lesions": _safe_int(data.get("psma_total_lesions"), 0),
+                "psma_lesion_locations": _normalize_list_value(data.get("psma_lesion_locations")),
+                "psma_negative_dominant_lesions": _is_truthy(data.get("psma_negative_dominant_lesions")),
+                "conventional_stage_before_psma": data.get("conventional_stage_before_psma") or data.get("conventional_imaging_status"),
+                "psma_stage_after_psma": data.get("psma_stage_after_psma"),
+                "psma_upstaged_vs_conventional": data.get("psma_upstaged_vs_conventional"),
+                "psma_management_changed": data.get("psma_management_changed"),
+                "findings": findings,
+            }
+        )
     if modality == "Gammagrama óseo":
         findings = {
             "distribution": _normalize_list_value(data.get("bone_distribution")),
@@ -5242,10 +5424,18 @@ def _mirror_biomarkers_to_longitudinal(cursor, patient_id, visit_date, data):
         ("TESTOSTERONA", "testosterone", "ng/dL"),
         ("HEMOGLOBINA", "hemoglobin", "g/dL"),
         ("CREATININA", "creatinine", "mg/dL"),
+        ("CISTATINA_C", "cystatin_c", "mg/L"),
         ("LDH", "ldh", "U/L"),
         ("ALP", "alp", "U/L"),
         ("BILIRRUBINA", "bilirubin", "mg/dL"),
+        ("AST", "ast", "U/L"),
+        ("ALT", "alt", "U/L"),
+        ("GGT", "ggt", "U/L"),
         ("GLUCOSA", "glucose", "mg/dL"),
+        ("HBA1C", "hba1c", "%"),
+        ("CALCIO", "calcium_level", "mg/dL"),
+        ("VITAMINA_D", "vitamin_d_level", "ng/mL"),
+        ("ALBUMINA", "albumin", "g/dL"),
     )
     sample_date = str(visit_date)[:10]
     for biomarker_type, field_name, unit in biomarker_specs:
@@ -5283,6 +5473,9 @@ def sync_scheduled_events(patient_record, state=None, management_track=None, hor
     from prostanet.domains.patient_tracking.copilot_alerts import build_copilot_alerts
     from prostanet.domains.patient_tracking.disease_course_outcomes import build_disease_course_bundle
     from prostanet.domains.patient_tracking.master_followup_plan import build_master_followup_plan
+    from prostanet.domains.patient_tracking.longitudinal_intelligence import (
+        resolve_followup_runtime_context,
+    )
     from prostanet.domains.patient_tracking.prognostic_impact import build_prognostic_impact_bundle
     from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
     from prostanet.domains.patient_tracking.risk_tools import build_risk_tools_panel
@@ -5320,7 +5513,16 @@ def sync_scheduled_events(patient_record, state=None, management_track=None, hor
     reconciliation = build_reconciled_state(patient_record, patient_record.get("latest_assessment"))
     state = state or reconciliation.get("reconciled_state") or (patient_record.get("latest_assessment") or {}).get("state") or (patient_record.get("prior_history") or {}).get("current_state") or "diagnostic_workup"
     management_track = management_track or reconciliation.get("reconciled_management_track") or infer_management_track(patient_record, state, patient_record.get("latest_assessment"))
-    anchor = _normalize_schedule_anchor(resolve_track_anchor(patient_record, state, management_track, patient_record.get("latest_assessment")))
+    followup_runtime = resolve_followup_runtime_context(
+        patient_record,
+        state=state,
+        management_track=management_track,
+        latest_assessment=patient_record.get("latest_assessment"),
+    )
+    schedule_state = str(followup_runtime.get("state") or state)
+    schedule_management_track = str(followup_runtime.get("management_track") or management_track)
+    schedule_override_reason = str(followup_runtime.get("override_reason") or "")
+    anchor = _normalize_schedule_anchor(resolve_track_anchor(patient_record, schedule_state, schedule_management_track, patient_record.get("latest_assessment")))
     anchor_date = anchor.get("anchor_date")
     if not anchor_date:
         return {
@@ -5354,12 +5556,12 @@ def sync_scheduled_events(patient_record, state=None, management_track=None, hor
 
     agenda_board = build_agenda_board(
         patient_record,
-        state=state,
-        management_track=management_track,
+        state=schedule_state,
+        management_track=schedule_management_track,
         raw_assessment=patient_record.get("latest_assessment"),
     )
     schedule_seed = [agenda_item_to_scheduled_event(item) for item in (agenda_board.get("items") or [])]
-    plan_key = f"{state}:{management_track}:{anchor_date}"
+    plan_key = f"{schedule_state}:{schedule_management_track}:{anchor_date}"
     for item in schedule_seed:
         ideal_due_at = str(item.get("ideal_due_at") or item.get("due_date") or "")[:10]
         scheduled_due_at = str(item.get("scheduled_due_at") or item.get("due_date") or ideal_due_at)[:10]
@@ -5378,10 +5580,15 @@ def sync_scheduled_events(patient_record, state=None, management_track=None, hor
             "supporting_evidence": reconciliation.get("supporting_evidence", {}),
         }
     )
+    if schedule_override_reason:
+        cadence_adjusted = [str(item) for item in list(orchestration_signals.get("cadence_adjusted_by") or []) if str(item).strip()]
+        if schedule_override_reason not in cadence_adjusted:
+            cadence_adjusted.append(schedule_override_reason)
+        orchestration_signals["cadence_adjusted_by"] = cadence_adjusted
     outcome_bundle = build_disease_course_bundle(
         patient_record,
-        state=state,
-        management_track=management_track,
+        state=schedule_state,
+        management_track=schedule_management_track,
         latest_assessment=patient_record.get("latest_assessment"),
     )
     risk_tools_bundle = build_risk_tools_panel(
@@ -5392,8 +5599,8 @@ def sync_scheduled_events(patient_record, state=None, management_track=None, hor
     )
     prognostic_bundle = build_prognostic_impact_bundle(
         patient=patient_record,
-        state=state,
-        management_track=management_track,
+        state=schedule_state,
+        management_track=schedule_management_track,
         raw_assessment=patient_record.get("latest_assessment"),
         risk_tools_bundle=risk_tools_bundle,
         current_trial_profile=outcome_bundle.get("current_trial_comparable_profile", {}),
@@ -5417,8 +5624,8 @@ def sync_scheduled_events(patient_record, state=None, management_track=None, hor
     )
     copilot_bundle = build_copilot_alerts(
         patient_record,
-        state=state,
-        management_track=management_track,
+        state=schedule_state,
+        management_track=schedule_management_track,
         signals=orchestration_signals,
         agenda_board=agenda_board,
         encounters=agenda_board.get("encounters", []),
@@ -5427,7 +5634,7 @@ def sync_scheduled_events(patient_record, state=None, management_track=None, hor
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
-    _upsert_scheduled_events(c, patient_record["identity"]["id"], management_track, schedule_seed)
+    _upsert_scheduled_events(c, patient_record["identity"]["id"], schedule_management_track, schedule_seed)
     conn.commit()
     c.execute(
         '''
@@ -5435,7 +5642,7 @@ def sync_scheduled_events(patient_record, state=None, management_track=None, hor
         WHERE patient_id = ? AND management_track = ?
         ORDER BY due_date ASC, id ASC
         ''',
-        (patient_record["identity"]["id"], management_track),
+        (patient_record["identity"]["id"], schedule_management_track),
     )
     persisted = _hydrate_scheduled_event_rows(c.fetchall())
     conn.close()
@@ -5495,8 +5702,8 @@ def sync_scheduled_events(patient_record, state=None, management_track=None, hor
     enriched_agenda_items.sort(key=lambda item: _schedule_sort_key(item))
     enriched_encounters = build_encounter_plans(
         enriched_agenda_items,
-        state=state,
-        management_track=management_track,
+        state=schedule_state,
+        management_track=schedule_management_track,
         protocol_trace=agenda_board.get("protocol_trace") or {},
     )
     enriched_encounters.sort(key=lambda item: _schedule_sort_key(item))
@@ -5511,8 +5718,8 @@ def sync_scheduled_events(patient_record, state=None, management_track=None, hor
     agenda_board["next_encounter"] = next_encounter
     master_followup_plan = build_master_followup_plan(
         patient_record,
-        state=state,
-        management_track=management_track,
+        state=schedule_state,
+        management_track=schedule_management_track,
         agenda_board=agenda_board,
         signals=orchestration_signals,
         copilot_alerts=copilot_bundle.get("alerts", []),
@@ -5523,6 +5730,9 @@ def sync_scheduled_events(patient_record, state=None, management_track=None, hor
     return {
         "state": state,
         "management_track": management_track,
+        "schedule_state": schedule_state,
+        "schedule_management_track": schedule_management_track,
+        "schedule_override_reason": schedule_override_reason,
         "anchor_date": anchor_date,
         "anchor_source": anchor.get("anchor_source", ""),
         "schedule": active_schedule,
@@ -6247,11 +6457,16 @@ def refresh_longitudinal_intelligence(nss_or_id, event_id=None, force_recompute=
         build_longitudinal_intelligence_bundle,
         build_recommendation_audit,
     )
+    from prostanet.domains.patient_tracking.decision_input_requirements_engine import (
+        build_decision_input_requirements,
+        detect_ui_contradiction_flags,
+    )
     from prostanet.domains.patient_tracking.disease_course_outcomes import build_disease_course_bundle
     from prostanet.domains.patient_tracking.live_benchmark import build_live_benchmark
     from prostanet.domains.patient_tracking.prognostic_impact import build_prognostic_impact_bundle
     from prostanet.domains.patient_tracking.psa_forecast import build_psa_forecast
     from prostanet.domains.patient_tracking.risk_tools import build_risk_tools_panel
+    from prostanet.domains.clinical_validation.repository import persist_patient_clinical_ledger
 
     if force_recompute:
         recompute_patient_care_plan(nss_or_id)
@@ -6315,14 +6530,43 @@ def refresh_longitudinal_intelligence(nss_or_id, event_id=None, force_recompute=
     )
     outcome_bundle["live_benchmark"] = live_benchmark_bundle
     outcome_bundle["benchmark_reliability"] = live_benchmark_bundle.get("reliability", {})
+    decision_input_requirements = bundle.get("decision_input_requirements") or build_decision_input_requirements(
+        refreshed,
+        effective_state=current_state,
+        effective_management_track=current_track,
+        latest_assessment=refreshed.get("latest_assessment"),
+        next_best_action=bundle.get("next_best_action", {}),
+    )
+    ui_contradiction_flags = detect_ui_contradiction_flags(
+        refreshed,
+        effective_state=current_state,
+        effective_management_track=current_track,
+        decision_trace=bundle.get("decision_recalculation_trace", {}),
+        schedule_bundle={
+            "schedule_state": refreshed.get("schedule_state") or current_state,
+            "schedule_management_track": refreshed.get("schedule_management_track") or current_track,
+            "schedule_override_reason": refreshed.get("schedule_override_reason") or "",
+            "schedule_primary_intent": (bundle.get("guideline_followup_plan") or {}).get("schedule_primary_intent", ""),
+            "action_schedule_consistency": (bundle.get("guideline_followup_plan") or {}).get("action_schedule_consistency"),
+        },
+        transition_resolution=bundle.get("transition_resolution", {}),
+        care_intent_contract=bundle.get("care_intent_contract", {}),
+    )
     latest_snapshot.update(
         {
             "explicit_state": bundle.get("signals", {}).get("explicit_state"),
+            "effective_state_final": current_state,
+            "effective_management_track_final": current_track,
+            "effective_state": current_state,
+            "effective_management_track": current_track,
             "reconciled_state": bundle.get("signals", {}).get("reconciled_state"),
             "reconciled_management_track": bundle.get("signals", {}).get("reconciled_management_track"),
             "state_conflict_flag": bundle.get("signals", {}).get("state_conflict_flag"),
             "state_conflict_reason": bundle.get("signals", {}).get("state_conflict_reason"),
             "supporting_evidence": bundle.get("signals", {}).get("supporting_evidence", {}),
+            "post_prostatectomy_course": bundle.get("signals", {}).get("post_prostatectomy_course", ""),
+            "transition_resolution": bundle.get("transition_resolution", {}),
+            "care_intent_contract": bundle.get("care_intent_contract", {}),
             "outcome_events_summary": outcome_bundle.get("outcome_events_summary", {}),
             "pending_adjudications": outcome_bundle.get("pending_adjudications", []),
             "current_response_state": outcome_bundle.get("current_response_state", {}),
@@ -6340,6 +6584,20 @@ def refresh_longitudinal_intelligence(nss_or_id, event_id=None, force_recompute=
             "forecast_reliability": psa_forecast_bundle.get("reliability", {}),
             "live_benchmark": live_benchmark_bundle,
             "benchmark_reliability": live_benchmark_bundle.get("reliability", {}),
+            "longitudinal_truth_snapshot": bundle.get("longitudinal_truth_snapshot", {}),
+            "decision_recalculation_trace": bundle.get("decision_recalculation_trace", {}),
+            "guideline_followup_plan": bundle.get("guideline_followup_plan", {}),
+            "laboratory_intelligence_profile": bundle.get("laboratory_intelligence_profile", {}),
+            "latest_clinically_decisive_visit": bundle.get("latest_clinically_decisive_visit", {}),
+            "blocking_inputs": decision_input_requirements.get("blocking_inputs", []),
+            "hard_blocking_inputs": decision_input_requirements.get("hard_blocking_inputs", []),
+            "decision_blocking_inputs": decision_input_requirements.get("decision_blocking_inputs", []),
+            "supportive_gaps": decision_input_requirements.get("supportive_gaps", []),
+            "required_to_recalculate": decision_input_requirements.get("required_to_recalculate", []),
+            "optional_context_inputs": decision_input_requirements.get("optional_context_inputs", []),
+            "decision_domains_blocked": decision_input_requirements.get("decision_domains_blocked", []),
+            "guideline_basis": bundle.get("guideline_followup_plan", {}).get("schedule_evidence_basis", []),
+            "ui_contradiction_flags": ui_contradiction_flags,
         }
     )
     if not latest_snapshot:
@@ -6354,9 +6612,20 @@ def refresh_longitudinal_intelligence(nss_or_id, event_id=None, force_recompute=
     _persist_trial_benchmark_snapshot(c, refreshed["identity"]["id"], outcome_bundle)
     conn.commit()
     conn.close()
+    persist_patient_clinical_ledger(
+        int(refreshed["identity"]["id"]),
+        decision_trace=bundle.get("decision_recalculation_trace", {}),
+        guideline_plan=bundle.get("guideline_followup_plan", {}),
+        signals=latest_snapshot,
+        missing_input_requirements=decision_input_requirements,
+        latest_clinically_decisive_visit=bundle.get("latest_clinically_decisive_visit", {}),
+        event_id=event_id,
+    )
     refreshed = get_patient_full_record(nss_or_id) or refreshed
     open_proposals = [
-        proposal for proposal in (refreshed.get("transition_proposals") or []) if proposal.get("proposal_status") == "open"
+        proposal for proposal in (refreshed.get("transition_proposals") or [])
+        if proposal.get("proposal_status") == "open"
+        and (bundle.get("transition_resolution") or {}).get("policy") == "manual_confirmation_required"
     ]
     recent_audit = (refreshed.get("recommendation_audit") or [])[:8]
     return {
@@ -6388,6 +6657,23 @@ def refresh_longitudinal_intelligence(nss_or_id, event_id=None, force_recompute=
         "forecast_reliability": psa_forecast_bundle.get("reliability", {}),
         "live_benchmark": live_benchmark_bundle,
         "benchmark_reliability": live_benchmark_bundle.get("reliability", {}),
+        "longitudinal_truth_snapshot": bundle.get("longitudinal_truth_snapshot", {}),
+        "decision_recalculation_trace": bundle.get("decision_recalculation_trace", {}),
+        "guideline_followup_plan": bundle.get("guideline_followup_plan", {}),
+        "transition_resolution": bundle.get("transition_resolution", {}),
+        "care_intent_contract": bundle.get("care_intent_contract", {}),
+        "laboratory_intelligence_profile": bundle.get("laboratory_intelligence_profile", {}),
+        "latest_clinically_decisive_visit": bundle.get("latest_clinically_decisive_visit", {}),
+        "blocking_inputs": decision_input_requirements.get("blocking_inputs", []),
+        "hard_blocking_inputs": decision_input_requirements.get("hard_blocking_inputs", []),
+        "decision_blocking_inputs": decision_input_requirements.get("decision_blocking_inputs", []),
+        "supportive_gaps": decision_input_requirements.get("supportive_gaps", []),
+        "required_to_recalculate": decision_input_requirements.get("required_to_recalculate", []),
+        "optional_context_inputs": decision_input_requirements.get("optional_context_inputs", []),
+        "decision_domains_blocked": decision_input_requirements.get("decision_domains_blocked", []),
+        "why_these_fields_now": decision_input_requirements.get("why_these_fields_now", []),
+        "guideline_basis": bundle.get("guideline_followup_plan", {}).get("schedule_evidence_basis", []),
+        "ui_contradiction_flags": ui_contradiction_flags,
     }
 
 
@@ -6545,6 +6831,20 @@ def get_patient_next_best_action(nss_or_id):
     if not bundle:
         return None
     return bundle.get("next_best_action", {})
+
+
+def get_patient_labs_intelligence(nss_or_id):
+    bundle = refresh_longitudinal_intelligence(nss_or_id, force_recompute=False)
+    if not bundle:
+        return None
+    return bundle.get("laboratory_intelligence_profile", {})
+
+
+def get_patient_decision_trace(nss_or_id):
+    bundle = refresh_longitudinal_intelligence(nss_or_id, force_recompute=False)
+    if not bundle:
+        return None
+    return bundle.get("decision_recalculation_trace", {})
 
 
 def _agenda_input_present(data, field_name):
@@ -7944,6 +8244,7 @@ def save_family_history(patient_id, relatives):
 def save_imaging_study(patient_id, data):
     """Registra un estudio de imagen."""
     try:
+        payload = normalize_psma_imaging_payload(data) if "psma" in str(data.get("study_type", "")).lower() else dict(data)
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute('''
@@ -7951,21 +8252,28 @@ def save_imaging_study(patient_id, data):
                 patient_id, study_date, study_type,
                 pirads_score, pirads_location, lesion_size_mm,
                 ece_suspicion, svi_suspicion, precise_score,
-                psma_result, psma_suv_max,
+                psma_result, psma_suv_max, psma_radioligand, psma_index_lesion_site,
+                psma_index_lesion_suvmax, psma_uptake_pattern, psma_rads_score,
+                conventional_stage_before_psma, psma_stage_after_psma,
+                psma_upstaged_vs_conventional, psma_management_changed,
                 bone_scan_result, bone_lesion_count,
                 findings_json, radiologist_notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
-            patient_id, data.get('study_date', datetime.now().strftime('%Y-%m-%d')),
-            data.get('study_type'),
-            data.get('pirads_score'), data.get('pirads_location'),
-            data.get('lesion_size_mm'),
-            _safe_int(data.get('ece_suspicion', 0), 0), _safe_int(data.get('svi_suspicion', 0), 0),
-            data.get('precise_score'),
-            data.get('psma_result'), data.get('psma_suv_max'),
-            data.get('bone_scan_result'), data.get('bone_lesion_count'),
-            json.dumps(data.get('findings', {})),
-            data.get('radiologist_notes')
+            patient_id, payload.get('study_date', datetime.now().strftime('%Y-%m-%d')),
+            payload.get('study_type'),
+            payload.get('pirads_score'), payload.get('pirads_location'),
+            payload.get('lesion_size_mm'),
+            _safe_int(payload.get('ece_suspicion', 0), 0), _safe_int(payload.get('svi_suspicion', 0), 0),
+            payload.get('precise_score'),
+            payload.get('psma_result'), payload.get('psma_suv_max'),
+            payload.get('psma_radioligand'), payload.get('psma_index_lesion_site'),
+            payload.get('psma_index_lesion_suvmax'), payload.get('psma_uptake_pattern'), payload.get('psma_rads_score'),
+            payload.get('conventional_stage_before_psma'), payload.get('psma_stage_after_psma'),
+            payload.get('psma_upstaged_vs_conventional'), payload.get('psma_management_changed'),
+            payload.get('bone_scan_result'), payload.get('bone_lesion_count'),
+            json.dumps(payload.get('findings', {})),
+            payload.get('radiologist_notes')
         ))
         conn.commit()
         conn.close()
@@ -8286,7 +8594,7 @@ def save_surgical_details(patient_id, data):
                 ece_pathological, svi_pathological, lni_pathological,
                 specimen_weight_grams, tumor_volume_pct, capra_s_score, surgical_approach,
                 continence_status, potency_status, pde5i_use, pads_per_day, recovery_notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''',
             (
                 patient_id,
@@ -9094,7 +9402,7 @@ def get_patient_full_record(nss_or_id):
                     )
             radiation_history = sorted(radiation_history, key=lambda item: str(item.get("rt_date") or item.get("rt_start_date") or ""))
 
-        return {
+        patient_record = {
             'identity': identity_dict,
             'baseline': baseline_dict,
             'demographics': dict(demographics) if demographics else {},
@@ -9166,6 +9474,121 @@ def get_patient_full_record(nss_or_id):
             'clavien_dindo_events': clavien_events,
             'functional_recovery_snapshots': functional_recovery,
         }
+        from prostanet.domains.patient_tracking.longitudinal_truth_service import build_longitudinal_truth_snapshot
+
+        longitudinal_truth_snapshot = build_longitudinal_truth_snapshot(
+            patient_record,
+            latest_assessment=latest_assessment,
+        )
+        patient_record["longitudinal_truth_snapshot"] = longitudinal_truth_snapshot
+        patient_record["superseded_inputs"] = list(longitudinal_truth_snapshot.get("superseded_inputs") or [])
+        patient_record["latest_clinically_decisive_visit"] = dict(
+            longitudinal_truth_snapshot.get("latest_clinically_decisive_visit") or {}
+        )
+        psma_structured_profile = build_psma_structured_profile(patient_record)
+        patient_record["psma_structured_profile"] = psma_structured_profile
+        patient_record["psma_decision_impact"] = build_psma_decision_impact(
+            psma_structured_profile,
+            state=str((_decorate_prior_history(prior_history) or {}).get("current_state") or ""),
+            management_track=str((_decorate_prior_history(prior_history) or {}).get("management_track") or ""),
+            patient=patient_record,
+        )
+        from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
+        from prostanet.domains.patient_tracking.followup_agenda import build_agenda_board
+        from prostanet.domains.patient_tracking.longitudinal_intelligence import resolve_followup_runtime_context
+        from prostanet.domains.patient_tracking.master_followup_plan import build_master_followup_plan
+        from prostanet.domains.patient_tracking.guideline_schedule_engine import build_guideline_followup_plan
+        from prostanet.domains.patient_tracking.followup_reconciliation_service import build_decision_recalculation_trace
+        from prostanet.domains.patient_tracking.laboratory_intelligence.service import build_laboratory_intelligence_profile
+        from prostanet.domains.patient_tracking.decision_input_requirements_engine import (
+            build_decision_input_requirements,
+            detect_ui_contradiction_flags,
+        )
+        from prostanet.domains.clinical_validation.repository import get_patient_ledger_histories
+
+        reconciliation = build_reconciled_state(patient_record, latest_assessment)
+        state = (
+            reconciliation.get("reconciled_state")
+            or (latest_assessment or {}).get("state")
+            or (_decorate_prior_history(prior_history) or {}).get("current_state")
+            or "diagnostic_workup"
+        )
+        management_track = reconciliation.get("reconciled_management_track") or "diagnostic_surveillance"
+        followup_runtime = resolve_followup_runtime_context(
+            patient_record,
+            state=state,
+            management_track=management_track,
+            latest_assessment=latest_assessment,
+            signals=dict(patient_record.get("latest_signal_snapshot") or {}),
+        )
+        effective_followup_state = str(followup_runtime.get("state") or state)
+        effective_followup_track = str(followup_runtime.get("management_track") or management_track)
+        patient_record["followup_runtime_context"] = dict(followup_runtime)
+        patient_record["schedule_state"] = effective_followup_state
+        patient_record["schedule_management_track"] = effective_followup_track
+        patient_record["schedule_override_reason"] = str(followup_runtime.get("override_reason") or "")
+        agenda_board = build_agenda_board(patient_record, effective_followup_state, effective_followup_track, latest_assessment)
+        guideline_followup_plan = build_guideline_followup_plan(
+            patient=patient_record,
+            state=effective_followup_state,
+            management_track=effective_followup_track,
+            agenda_board=agenda_board,
+            master_followup_plan=build_master_followup_plan(
+                patient_record,
+                state=effective_followup_state,
+                management_track=effective_followup_track,
+                agenda_board=agenda_board,
+                signals=dict(patient_record.get("latest_signal_snapshot") or {}),
+                copilot_alerts=patient_record.get("alerts") or [],
+                next_best_action=(patient_record.get("latest_signal_snapshot") or {}).get("next_best_action") or {},
+            ),
+            signals=dict(patient_record.get("latest_signal_snapshot") or {}),
+            care_intent_contract=(patient_record.get("latest_signal_snapshot") or {}).get("care_intent_contract") or {},
+        )
+        patient_record["guideline_followup_plan"] = guideline_followup_plan
+        patient_record["care_intent_contract"] = (patient_record.get("latest_signal_snapshot") or {}).get("care_intent_contract") or {}
+        patient_record["transition_resolution"] = (patient_record.get("latest_signal_snapshot") or {}).get("transition_resolution") or {}
+        patient_record["laboratory_intelligence_profile"] = build_laboratory_intelligence_profile(
+            patient_record,
+            state=effective_followup_state,
+            management_track=effective_followup_track,
+            latest_assessment=latest_assessment,
+        )
+        patient_record["decision_recalculation_trace"] = build_decision_recalculation_trace(
+            patient=patient_record,
+            state=state,
+            management_track=management_track,
+            latest_assessment=latest_assessment,
+            longitudinal_truth_snapshot=longitudinal_truth_snapshot,
+            next_best_action=(patient_record.get("latest_signal_snapshot") or {}).get("next_best_action") or {},
+            reconciliation=reconciliation,
+            transition_resolution=patient_record.get("transition_resolution") or {},
+            care_intent_contract=patient_record.get("care_intent_contract") or {},
+        )
+        patient_record["decision_input_requirements"] = build_decision_input_requirements(
+            patient_record,
+            effective_state=effective_followup_state,
+            effective_management_track=effective_followup_track,
+            latest_assessment=latest_assessment,
+            next_best_action=(patient_record.get("latest_signal_snapshot") or {}).get("next_best_action") or {},
+        )
+        patient_record["ui_contradiction_flags"] = detect_ui_contradiction_flags(
+            patient_record,
+            effective_state=effective_followup_state,
+            effective_management_track=effective_followup_track,
+            decision_trace=patient_record.get("decision_recalculation_trace") or {},
+            schedule_bundle={
+                "schedule_state": effective_followup_state,
+                "schedule_management_track": effective_followup_track,
+                "schedule_override_reason": patient_record.get("schedule_override_reason") or "",
+                "schedule_primary_intent": guideline_followup_plan.get("schedule_primary_intent", ""),
+                "action_schedule_consistency": guideline_followup_plan.get("action_schedule_consistency"),
+            },
+            transition_resolution=patient_record.get("transition_resolution") or {},
+            care_intent_contract=patient_record.get("care_intent_contract") or {},
+        )
+        patient_record.update(get_patient_ledger_histories(int(identity["id"])))
+        return patient_record
     except Exception as e:
         logger.error(f"Error fetching full patient record: {e}")
         return None

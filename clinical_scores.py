@@ -699,10 +699,53 @@ def calculate_capra_s(patient: dict[str, Any]) -> dict[str, Any]:
     Calcula el Score CAPRA-S (Post-Surgical).
     Cooperberg et al., J Urol 2011.
     """
-    psa = patient.get('psa', 0)
+    def _safe_float(value: Any) -> float | None:
+        if value in (None, ""):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _safe_int(value: Any) -> int | None:
+        if value in (None, ""):
+            return None
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return None
+
+    psa = _safe_float(patient.get('psa'))
+    if psa is None:
+        psa = _safe_float(patient.get('psa_current'))
+    if psa is None:
+        psa = _safe_float(patient.get('baseline_psa'))
+
     # Gleason Pathological
-    gp = patient.get('gleason_primary', 3)
-    gs = patient.get('gleason_secondary', 3)
+    gp = _safe_int(patient.get('pathology_gleason_primary'))
+    if gp is None:
+        gp = _safe_int(patient.get('gleason_primary'))
+    gs = _safe_int(patient.get('pathology_gleason_secondary'))
+    if gs is None:
+        gs = _safe_int(patient.get('gleason_secondary'))
+
+    # CAPRA-S should not score a patient without the minimum pathological inputs.
+    if psa is None or gp is None or gs is None:
+        missing = []
+        if psa is None:
+            missing.append('psa')
+        if gp is None:
+            missing.append('pathology_gleason_primary')
+        if gs is None:
+            missing.append('pathology_gleason_secondary')
+        return {
+            'score': None,
+            'risk_group': None,
+            'risk_text': 'No calculable',
+            'missing_inputs': missing,
+            'note': 'CAPRA-S requiere PSA y Gleason patológico completos; se omite hasta contar con esos datos.',
+        }
+
     gleason_total = gp + gs
     
     # Surgical Margins (0=Neg, 1=Pos)

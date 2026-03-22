@@ -698,6 +698,86 @@
                             </select>
                         </div>
                     </div>
+                    <div id="psmaAdvancedFields" class="mt-4 hidden rounded-xl border border-cyan-500/15 bg-cyan-950/10 p-4">
+                        <div class="text-xs uppercase tracking-[0.18em] text-cyan-300">PSMA-PET estructurado</div>
+                        <div class="mt-2 text-xs text-slate-400">Solo se solicita cuando la imagen predominante es PSMA-PET o cuando se documenta que sí fue realizado.</div>
+                        <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-medium mb-1">Radioligando PSMA</label>
+                                <select name="psma_radioligand" class="input-dark">
+                                    <option value="Desconocido">Desconocido</option>
+                                    <option value="68Ga-PSMA-11">68Ga-PSMA-11</option>
+                                    <option value="18F-DCFPyL">18F-DCFPyL</option>
+                                    <option value="18F-PSMA-1007">18F-PSMA-1007</option>
+                                    <option value="Otro">Otro</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium mb-1">Lesión índice PSMA</label>
+                                <input type="text" name="psma_index_lesion_site" class="input-dark" placeholder="Ganglio pélvico / hueso axial / hígado">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium mb-1">SUVmax de lesión índice</label>
+                                <input type="number" step="0.1" name="psma_index_lesion_suvmax" class="input-dark" placeholder="13.2">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium mb-1">Patrón de captación</label>
+                                <select name="psma_uptake_pattern" class="input-dark">
+                                    <option value="indeterminado">Indeterminado</option>
+                                    <option value="focal">Focal</option>
+                                    <option value="multifocal">Multifocal</option>
+                                    <option value="diseminado">Diseminado</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium mb-1">PSMA-RADS</label>
+                                <select name="psma_rads_score" class="input-dark">
+                                    <option value="Desconocido">Desconocido</option>
+                                    <option value="1">1</option>
+                                    <option value="2">2</option>
+                                    <option value="3">3</option>
+                                    <option value="4">4</option>
+                                    <option value="5">5</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium mb-1">Número total de lesiones PSMA</label>
+                                <input type="number" step="1" name="psma_total_lesions" class="input-dark" placeholder="2">
+                            </div>
+                            <div class="md:col-span-2">
+                                <label class="block text-xs font-medium mb-1">Ubicación de lesiones PSMA</label>
+                                <input type="text" name="psma_lesion_locations" class="input-dark" placeholder="Ganglios pélvicos, hueso axial, hígado">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium mb-1">Stage convencional previo</label>
+                                <select name="conventional_stage_before_psma" class="input-dark">
+                                    <option value="No comparable">No comparable</option>
+                                    <option value="M0">M0</option>
+                                    <option value="M1a">M1a</option>
+                                    <option value="M1b">M1b</option>
+                                    <option value="M1c">M1c</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium mb-1">Stage posterior por PSMA</label>
+                                <select name="psma_stage_after_psma" class="input-dark">
+                                    <option value="">Seleccionar</option>
+                                    <option value="M0">M0</option>
+                                    <option value="M1a">M1a</option>
+                                    <option value="M1b">M1b</option>
+                                    <option value="M1c">M1c</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium mb-1">Cambio de conducta por PSMA</label>
+                                <select name="psma_management_changed" class="input-dark">
+                                    <option value="">No documentado</option>
+                                    <option value="1">Sí</option>
+                                    <option value="0">No</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
                 </section>
 
                 <section class="pn-surface" data-intake-scope="advanced">
@@ -826,14 +906,14 @@
                                         <label class="block text-xs font-medium mb-1">Calidad de vida basal (0-100)</label>
                                         <input type="number" step="1" name="baseline_qol" class="input-dark">
                                     </div>
-                                    <div>
+                                    <div data-psma-core-field class="hidden">
                                         <label class="block text-xs font-medium mb-1">PSMA positivo</label>
                                         <select name="psma_positive" class="input-dark">
                                             <option value="0">No</option>
                                             <option value="1">Sí</option>
                                         </select>
                                     </div>
-                                    <div>
+                                    <div data-psma-core-field class="hidden">
                                         <label class="block text-xs font-medium mb-1">Lesiones dominantes PSMA-negativas</label>
                                         <select name="psma_negative_dominant_lesions" class="input-dark">
                                             <option value="0">No</option>
@@ -1788,10 +1868,24 @@
             }, 300);
         }
 
+        function updatePsmaStructuredVisibility() {
+            const modality = document.querySelector('[name="imaging_modality"]')?.value || '';
+            const psmaDone = document.querySelector('[name="psma_pet_done"]')?.value || '0';
+            const host = document.getElementById('psmaAdvancedFields');
+            const coreFields = document.querySelectorAll('[data-psma-core-field]');
+            if (!host) return;
+            const visible = psmaDone === '1' || modality === 'PSMA-PET';
+            host.classList.toggle('hidden', !visible);
+            coreFields.forEach((node) => node.classList.toggle('hidden', !visible));
+        }
+
         applyIntakeState('', '');
         renderScoreRequirements({});
         document.querySelector('[name="line_of_therapy_context"]')?.addEventListener('change', () => refreshTherapySchemeOptions(true));
+        document.querySelector('[name="imaging_modality"]')?.addEventListener('change', updatePsmaStructuredVisibility);
+        document.querySelector('[name="psma_pet_done"]')?.addEventListener('change', updatePsmaStructuredVisibility);
         refreshTherapySchemeOptions(false);
+        updatePsmaStructuredVisibility();
         loadAssessmentContext();
         window.clinicalPresentation?.normalizeDocument();
     </script>

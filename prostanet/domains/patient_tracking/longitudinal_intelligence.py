@@ -7,8 +7,30 @@ from prostanet.shared.metastatic_profile import derive_legacy_metastasis, derive
 
 from prostanet.application.module_registry import ModuleRegistry
 from prostanet.domains.patient_tracking.event_graph import merge_record_into_assessment_payload
-from prostanet.domains.patient_tracking.followup_agenda import build_agenda_board, infer_management_track
-from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
+from prostanet.domains.patient_tracking.followup_agenda import (
+    MANAGEMENT_TRACK_LABELS,
+    build_agenda_board,
+    infer_management_track,
+)
+from prostanet.domains.patient_tracking.followup_reconciliation_service import (
+    build_decision_recalculation_trace,
+)
+from prostanet.domains.patient_tracking.guideline_schedule_engine import (
+    build_guideline_followup_plan,
+)
+from prostanet.domains.patient_tracking.master_followup_plan import (
+    build_master_followup_plan,
+)
+from prostanet.domains.patient_tracking.laboratory_intelligence.service import (
+    build_laboratory_intelligence_profile,
+)
+from prostanet.domains.patient_tracking.longitudinal_truth_service import (
+    build_longitudinal_truth_snapshot,
+)
+from prostanet.domains.patient_tracking.reconciled_state import (
+    build_reconciled_state,
+    derive_post_prostatectomy_course,
+)
 from prostanet.shared.contracts import ClinicalSignalSet, NextBestAction, RecommendationAudit, StateTransitionProposal
 
 
@@ -31,7 +53,7 @@ COMMON_EVIDENCE = ["NCCN 2026", "EAU 2026"]
 
 
 def _is_present(value: Any) -> bool:
-    return value not in (None, "", [], {}, "No aplica", "No documentado", "No realizado", "Desconocido", "Desconocida")
+    return value not in (None, "", [], {}, "No aplica", "No documentado", "No realizado", "Desconocido", "Desconocida", "unknown", "UNKNOWN")
 
 
 def _safe_float(value: Any) -> float | None:
@@ -62,6 +84,83 @@ def _latest(items: list[dict[str, Any]], *keys: str) -> dict[str, Any]:
     return items[-1]
 
 
+def _current_field_values(
+    patient: dict[str, Any],
+    latest_assessment: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    truth_snapshot = patient.get("longitudinal_truth_snapshot") or build_longitudinal_truth_snapshot(patient, latest_assessment)
+    latest_followup = _latest(patient.get("follow_ups", []), "visit_date")
+    latest_stage_visit = _latest(patient.get("stage_visits", []), "visit_date", "created_at", "recorded_at")
+    latest_stage_payload = {}
+    if isinstance(latest_stage_visit.get("visit_bundle"), dict):
+        latest_stage_payload = dict((latest_stage_visit.get("visit_bundle") or {}).get("payload") or {})
+    latest_biopsy = _latest(patient.get("biopsies", []), "biopsy_date")
+    latest_assessment_inputs = dict((latest_assessment or patient.get("latest_assessment") or {}).get("input_snapshot") or {})
+    psma_profile = dict(patient.get("psma_structured_profile") or {})
+    latest_treatment = _latest(patient.get("treatments", []), "start_date", "created_at")
+
+    values: dict[str, Any] = {}
+    for source in (
+        patient.get("baseline") or {},
+        dict(truth_snapshot.get("field_values") or {}),
+        latest_assessment_inputs,
+        latest_followup,
+        latest_stage_payload,
+        latest_biopsy,
+        patient.get("active_surveillance_protocol") or {},
+        patient.get("active_surveillance") or {},
+        psma_profile,
+        latest_treatment,
+        dict(latest_treatment.get("regimen_json") or {}) if isinstance(latest_treatment.get("regimen_json"), dict) else {},
+    ):
+        if not isinstance(source, dict):
+            continue
+        for key, value in source.items():
+            if _is_present(value):
+                values[key] = value
+
+    if _is_present(values.get("psa")) and not _is_present(values.get("psa_current")):
+        values["psa_current"] = values["psa"]
+    if _is_present(values.get("testosterone")) and not _is_present(values.get("testosterone_value")):
+        values["testosterone_value"] = values["testosterone"]
+    if _is_present(values.get("ecog")) and not _is_present(values.get("ecog_score")):
+        values["ecog_score"] = values["ecog"]
+    if _is_present(values.get("current_treatment")) and not _is_present(values.get("drug_scheme")):
+        values["drug_scheme"] = values["current_treatment"]
+    if _is_present(latest_treatment.get("line_of_therapy")) and not _is_present(values.get("line_of_therapy_number")):
+        values["line_of_therapy_number"] = latest_treatment.get("line_of_therapy")
+    if _is_present(latest_treatment.get("drug_scheme")) and not _is_present(values.get("drug_scheme")):
+        values["drug_scheme"] = latest_treatment.get("drug_scheme")
+    if _is_present(latest_treatment.get("line_of_therapy_context")) and not _is_present(values.get("line_of_therapy_context")):
+        values["line_of_therapy_context"] = latest_treatment.get("line_of_therapy_context")
+    if not _is_present(values.get("management_track")) and _is_present(patient.get("schedule_management_track")):
+        values["management_track"] = patient.get("schedule_management_track")
+    if not _is_present(values.get("state")):
+        values["state"] = _current_state(patient, latest_assessment)
+    if not _is_present(values.get("prior_prostatectomy")):
+        values["prior_prostatectomy"] = 1 if patient.get("surgery") else 0
+    if not _is_present(values.get("prior_radiation")):
+        values["prior_radiation"] = 1 if patient.get("radiation") else 0
+    testosterone_value = _safe_float(values.get("testosterone")) or _safe_float(values.get("testosterone_value")) or _safe_float(values.get("testosterone_current"))
+    if testosterone_value is not None and not _is_present(values.get("castrate_testosterone_status")):
+        values["castrate_testosterone_status"] = "confirmed_castrate" if testosterone_value <= 50 else "not_castrate"
+    if testosterone_value is not None and not _is_present(values.get("castrate_testosterone_confirmed")):
+        values["castrate_testosterone_confirmed"] = 1 if testosterone_value <= 50 else 0
+    if _is_present(values.get("seizure_history")) and not _is_present(values.get("comorbidity_seizure")):
+        values["comorbidity_seizure"] = values.get("seizure_history")
+    if _is_present(values.get("cv_risk_documented")) and not _is_present(values.get("comorbidity_cardio")):
+        values["comorbidity_cardio"] = values.get("cv_risk_documented")
+    if not _is_present(values.get("progression_pattern")):
+        disease_status = str(latest_followup.get("disease_status") or "").lower()
+        if "radiograf" in disease_status:
+            values["progression_pattern"] = "radiographic"
+        elif "clinic" in disease_status:
+            values["progression_pattern"] = "clinical"
+        elif any(token in disease_status for token in ("bioqu", "psa", "ascen", "progres")):
+            values["progression_pattern"] = "biochemical_only"
+    return values
+
+
 def _current_state(patient: dict[str, Any], latest_assessment: dict[str, Any] | None) -> str:
     return (
         (latest_assessment or {}).get("state")
@@ -69,6 +168,213 @@ def _current_state(patient: dict[str, Any], latest_assessment: dict[str, Any] | 
         or (patient.get("prior_history") or {}).get("current_state")
         or "diagnostic_workup"
     )
+
+
+def _proposal_recommendation_family(base_family: str, proposal: dict[str, Any]) -> str:
+    target_track = str(proposal.get("target_management_track") or "").strip()
+    target_state = str(proposal.get("target_state") or "").strip()
+    return (
+        MANAGEMENT_TRACK_LABELS.get(target_track)
+        or (target_track.replace("_", " ").title() if target_track else "")
+        or (target_state.replace("_", " ").upper() if target_state else "")
+        or base_family
+    )
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(str(item) for item in values if str(item or "").strip()))
+
+
+def build_transition_resolution(
+    patient: dict[str, Any],
+    signals: dict[str, Any],
+    proposals: list[dict[str, Any]],
+    *,
+    decision_input_requirements: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    requirements = dict(decision_input_requirements or {})
+    hard_blockers = [str(item) for item in list(requirements.get("hard_blocking_inputs") or []) if str(item or "").strip()]
+    open_proposals = [dict(item) for item in list(proposals or []) if item]
+    if not open_proposals:
+        return {
+            "available": False,
+            "policy": "insufficient_evidence",
+            "reason": "No existe una transición longitudinal abierta que resolver.",
+            "target_state": signals.get("reconciled_state") or signals.get("state") or "",
+            "target_management_track": signals.get("reconciled_management_track") or signals.get("management_track") or "",
+            "manual_confirmation_required": False,
+            "proposal_key": "",
+            "decisive_fields": [],
+            "hard_blocking_inputs_at_resolution": hard_blockers,
+        }
+
+    ranked = sorted(
+        open_proposals,
+        key=lambda item: (0 if str(item.get("priority") or "") == "high" else 1, str(item.get("proposal_key") or "")),
+    )
+    dominant = ranked[0]
+    dominant_target = (
+        str(dominant.get("target_state") or ""),
+        str(dominant.get("target_management_track") or ""),
+    )
+    equally_dominant = [
+        item
+        for item in ranked
+        if str(item.get("priority") or "") == str(dominant.get("priority") or "")
+        and (
+            str(item.get("target_state") or ""),
+            str(item.get("target_management_track") or ""),
+        ) != dominant_target
+    ]
+    rationale = str(dominant.get("rationale") or "")
+    depends_on_external_document = any(
+        needle in rationale.lower()
+        for needle in ("verificable", "verificado", "documento", "documental")
+    )
+    if not hard_blockers and not equally_dominant and not depends_on_external_document:
+        return {
+            "available": True,
+            "policy": "auto_applied",
+            "reason": rationale or "La transición longitudinal es clínicamente dominante y no tiene hard blockers pendientes.",
+            "target_state": dominant_target[0] or signals.get("reconciled_state") or signals.get("state") or "",
+            "target_management_track": dominant_target[1] or signals.get("reconciled_management_track") or signals.get("management_track") or "",
+            "manual_confirmation_required": False,
+            "proposal_key": str(dominant.get("proposal_key") or ""),
+            "decisive_fields": list((patient.get("latest_clinically_decisive_visit") or {}).get("changed_fields") or []),
+            "hard_blocking_inputs_at_resolution": hard_blockers,
+        }
+    return {
+        "available": True,
+        "policy": "manual_confirmation_required" if equally_dominant or depends_on_external_document else "insufficient_evidence",
+        "reason": rationale or "La transición todavía requiere confirmación clínica.",
+        "target_state": dominant_target[0] or signals.get("reconciled_state") or signals.get("state") or "",
+        "target_management_track": dominant_target[1] or signals.get("reconciled_management_track") or signals.get("management_track") or "",
+        "manual_confirmation_required": True,
+        "proposal_key": str(dominant.get("proposal_key") or ""),
+        "decisive_fields": list((patient.get("latest_clinically_decisive_visit") or {}).get("changed_fields") or []),
+        "hard_blocking_inputs_at_resolution": hard_blockers,
+    }
+
+
+def build_care_intent_contract(
+    *,
+    patient: dict[str, Any],
+    state: str,
+    management_track: str,
+    next_best_action: dict[str, Any],
+    signals: dict[str, Any],
+    transition_resolution: dict[str, Any] | None = None,
+    decision_input_requirements: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    transition_resolution = dict(transition_resolution or {})
+    decision_input_requirements = dict(decision_input_requirements or {})
+    recommendation_family = str(next_best_action.get("recommendation_family") or management_track or state)
+    headline = str(next_best_action.get("title") or "Sin siguiente acción prioritaria")
+    rationale = str(next_best_action.get("rationale") or "")
+    intent_key = f"{state}:{management_track}:{headline}".lower().replace(" ", "_")
+    schedule_template_key = f"{state}:{management_track}"
+    if state == "post_prostatectomy" and derive_post_prostatectomy_course(patient) == "persistent_psa":
+        intent_key = "post_prostatectomy:persistent_psa_salvage_evaluation"
+        schedule_template_key = "post_prostatectomy:salvage_evaluation"
+    return {
+        "intent_key": intent_key,
+        "headline": headline,
+        "narrative": rationale,
+        "recommendation_family": recommendation_family,
+        "urgency": "high" if transition_resolution.get("policy") == "auto_applied" or signals.get("active_safety") else "routine",
+        "schedule_template_key": schedule_template_key,
+        "blocking_inputs": list(decision_input_requirements.get("blocking_inputs") or []),
+        "guideline_basis": list(next_best_action.get("evidence_basis") or COMMON_EVIDENCE),
+        "active_alerts": list(signals.get("active_safety") or []),
+        "cadence_summary": str((patient.get("guideline_followup_plan") or {}).get("baseline_guideline_plan", {}).get("cadence_summary") or ""),
+        "transition_resolution": transition_resolution,
+    }
+
+
+def _align_next_best_action_with_care_intent(
+    next_best_action: dict[str, Any],
+    care_intent_contract: dict[str, Any],
+    decision_input_requirements: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    aligned = dict(next_best_action or {})
+    care_intent_contract = dict(care_intent_contract or {})
+    requirements = dict(decision_input_requirements or {})
+    if not care_intent_contract:
+        return aligned
+    aligned["title"] = str(care_intent_contract.get("headline") or aligned.get("title") or "Sin siguiente acción prioritaria")
+    aligned["rationale"] = str(care_intent_contract.get("narrative") or aligned.get("rationale") or "")
+    aligned["recommendation_family"] = str(
+        care_intent_contract.get("recommendation_family")
+        or aligned.get("recommendation_family")
+        or ""
+    )
+    if care_intent_contract.get("guideline_basis"):
+        aligned["evidence_basis"] = list(care_intent_contract.get("guideline_basis") or [])
+    blocking_inputs = list(requirements.get("blocking_inputs") or [])
+    if blocking_inputs:
+        aligned["data_that_could_change_course"] = blocking_inputs
+    transition = dict(care_intent_contract.get("transition_resolution") or {})
+    if transition.get("policy") == "auto_applied":
+        immediate_actions = [
+            str(aligned.get("title") or "").strip(),
+            "Usar la agenda recalculada y la evidencia vigente del estado efectivo",
+        ]
+        aligned["immediate_actions"] = [item for item in immediate_actions if item]
+    return aligned
+
+
+def resolve_followup_runtime_context(
+    patient: dict[str, Any],
+    *,
+    state: str,
+    management_track: str,
+    latest_assessment: dict[str, Any] | None = None,
+    signals: dict[str, Any] | None = None,
+    transition_resolution: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    reconciliation = build_reconciled_state(patient, latest_assessment)
+    base_state = state or reconciliation.get("reconciled_state") or _current_state(patient, latest_assessment)
+    base_track = management_track or reconciliation.get("reconciled_management_track") or infer_management_track(
+        patient,
+        base_state,
+        latest_assessment or patient.get("latest_assessment"),
+    )
+    if reconciliation.get("state_conflict_flag") and reconciliation.get("state_conflict_reason"):
+        return {
+            "state": base_state,
+            "management_track": base_track,
+            "override_reason": str(reconciliation.get("state_conflict_reason") or ""),
+            "proposal": {},
+        }
+    effective_signals = dict(signals or {})
+    if not effective_signals:
+        effective_signals.update(
+            {
+                "state": base_state,
+                "management_track": base_track,
+                "reconciled_state": reconciliation.get("reconciled_state") or base_state,
+                "reconciled_management_track": reconciliation.get("reconciled_management_track") or base_track,
+                "state_conflict_flag": reconciliation.get("state_conflict_flag"),
+                "state_conflict_reason": reconciliation.get("state_conflict_reason"),
+            }
+        )
+    resolution = dict(transition_resolution or {})
+    if resolution.get("policy") == "auto_applied":
+        target_state = str(resolution.get("target_state") or "")
+        target_track = str(resolution.get("target_management_track") or "")
+        if target_state:
+            return {
+                "state": target_state,
+                "management_track": target_track or base_track,
+                "override_reason": str(resolution.get("reason") or ""),
+                "proposal": {},
+            }
+    return {
+        "state": base_state,
+        "management_track": base_track,
+        "override_reason": "",
+        "proposal": {},
+    }
 
 
 def _biopsy_confirms_cancer(patient: dict[str, Any]) -> bool:
@@ -80,6 +386,12 @@ def _biopsy_confirms_cancer(patient: dict[str, Any]) -> bool:
 
 
 def _derive_current_treatment(patient: dict[str, Any]) -> str:
+    truth = patient.get("longitudinal_truth_snapshot") or {}
+    truth_values = truth.get("field_values") or {}
+    if _is_present(truth_values.get("current_treatment")):
+        return str(truth_values.get("current_treatment"))
+    if _is_present(truth_values.get("drug_scheme")):
+        return str(truth_values.get("drug_scheme"))
     treatments = patient.get("treatments") or []
     if treatments:
         current = treatments[-1]
@@ -94,9 +406,50 @@ def _derive_current_treatment(patient: dict[str, Any]) -> str:
     return str(followup.get("current_treatment") or "")
 
 
+def _state_module_result(
+    patient: dict[str, Any],
+    state: str,
+    latest_assessment: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    module_id = state
+    registry = ModuleRegistry()
+    try:
+        schema = registry.get_module_schema(module_id)
+    except KeyError:
+        return {}
+
+    merged_payload = merge_record_into_assessment_payload(
+        dict((latest_assessment or patient.get("latest_assessment") or {}).get("input_snapshot") or {}),
+        patient,
+    )
+    merged_payload.update(_current_field_values(patient, latest_assessment))
+    payload: dict[str, Any] = {}
+    for field in list(schema.get("fields") or []):
+        name = str(field.get("name") or "")
+        if not name:
+            continue
+        if _is_present(merged_payload.get(name)):
+            payload[name] = merged_payload.get(name)
+    try:
+        return registry.evaluate_module(module_id, payload) if payload else {}
+    except Exception:
+        return {}
+
+
 def _derive_metastatic_context(patient: dict[str, Any]) -> tuple[str, int]:
     baseline = patient.get("baseline") or {}
     metastasis_site, metastasis_count, _ = derive_legacy_metastasis(baseline)
+    psma_profile = patient.get("psma_structured_profile") or {}
+    if psma_profile.get("available") and psma_profile.get("clinical_pattern") != "negative":
+        psma_stage = str(psma_profile.get("psma_stage_after_psma") or "")
+        lesion_count = _safe_int(psma_profile.get("psma_total_lesions")) or 0
+        metastasis_count = max(metastasis_count, lesion_count)
+        if psma_stage == "M1a":
+            metastasis_site = "Node"
+        elif psma_stage == "M1b":
+            metastasis_site = "Bone"
+        elif psma_stage == "M1c":
+            metastasis_site = "Visceral"
     imaging = patient.get("imaging") or []
     for study in imaging:
         study_type = str(study.get("study_type", "")).lower()
@@ -193,24 +546,29 @@ def _derive_conventional_imaging_status(patient: dict[str, Any], state: str) -> 
 def build_state_classifier_payload(patient: dict[str, Any], latest_assessment: dict[str, Any] | None = None) -> dict[str, Any]:
     reconciliation = build_reconciled_state(patient, latest_assessment)
     state = reconciliation.get("reconciled_state") or _current_state(patient, latest_assessment)
+    current_values = _current_field_values(patient, latest_assessment)
     metastasis_site, metastasis_count = _derive_metastatic_context(patient)
     supporting_evidence = reconciliation.get("supporting_evidence", {})
     state_payload = {
         "known_cancer_diagnosis": 1 if supporting_evidence.get("confirmed_cancer") or state not in DIAGNOSTIC_STATES else 0,
         "prior_negative_biopsy": 1 if state == "post_negative_biopsy_followup" else 0,
-        "prior_prostatectomy": 1 if patient.get("surgery") else 0,
-        "prior_radiation": 1 if patient.get("radiation") else 0,
+        "prior_prostatectomy": 1 if current_values.get("prior_prostatectomy") else 0,
+        "prior_radiation": 1 if current_values.get("prior_radiation") else 0,
         "bcr2": 1 if str((patient.get("bcr") or {}).get("bcr_definition", "")).upper() == "BCR2" else 0,
         "metastasis_site": metastasis_site,
-        "metastasis_count": metastasis_count,
-        "volume_disease": derive_mhspc_volume_context(patient.get("baseline") or {}) or ("high" if metastasis_count >= 4 or metastasis_site == "Visceral" else "low"),
+        "metastasis_count": _safe_int(current_values.get("metastasis_count")) or metastasis_count,
+        "volume_disease": (
+            current_values.get("volume_disease")
+            or derive_mhspc_volume_context(current_values)
+            or ("high" if metastasis_count >= 4 or metastasis_site == "Visceral" else "low")
+        ),
         "metachronous_metastasis": 1 if state in {"mcspc_oligo_metachronous", "mcspc_high_volume_metachronous"} else 0,
-        "psa_current": _safe_float(_latest(patient.get("follow_ups", []), "visit_date").get("psa_current")) or _safe_float((patient.get("bcr") or {}).get("bcr_psa")) or _safe_float((patient.get("baseline") or {}).get("baseline_psa")),
-        "current_adt_context": _derive_current_adt_context(patient, state),
-        "castrate_testosterone_status": _derive_castrate_status(patient, state),
-        "progression_pattern": _derive_progression_pattern(patient, state),
-        "conventional_imaging_status": _derive_conventional_imaging_status(patient, state),
-        "line_of_therapy": (patient.get("treatments") or [{}])[-1].get("line_of_therapy", 1) if patient.get("treatments") else 1,
+        "psa_current": _safe_float(current_values.get("psa_current")) or _safe_float((patient.get("bcr") or {}).get("bcr_psa")) or _safe_float((patient.get("baseline") or {}).get("baseline_psa")),
+        "current_adt_context": current_values.get("current_adt_context") or _derive_current_adt_context(patient, state),
+        "castrate_testosterone_status": current_values.get("castrate_testosterone_status") or _derive_castrate_status(patient, state),
+        "progression_pattern": current_values.get("progression_pattern") or _derive_progression_pattern(patient, state),
+        "conventional_imaging_status": current_values.get("conventional_imaging_status") or _derive_conventional_imaging_status(patient, state),
+        "line_of_therapy": _safe_int(current_values.get("line_of_therapy_number") or current_values.get("line_of_therapy")) or ((patient.get("treatments") or [{}])[-1].get("line_of_therapy", 1) if patient.get("treatments") else 1),
     }
     if state in {"m0_crpc", "m1_crpc"}:
         state_payload["systemic_progression_context"] = "confirmed_crpc"
@@ -254,6 +612,8 @@ def _build_mcode_projection(patient: dict[str, Any], state: str, management_trac
 
 
 def build_clinical_signals(patient: dict[str, Any], latest_assessment: dict[str, Any] | None = None) -> dict[str, Any]:
+    truth_snapshot = patient.get("longitudinal_truth_snapshot") or build_longitudinal_truth_snapshot(patient, latest_assessment)
+    truth_values = truth_snapshot.get("field_values") or {}
     reconciliation = build_reconciled_state(patient, latest_assessment)
     explicit_state = reconciliation.get("explicit_state") or _current_state(patient, latest_assessment)
     state = reconciliation.get("reconciled_state") or explicit_state
@@ -268,10 +628,10 @@ def build_clinical_signals(patient: dict[str, Any], latest_assessment: dict[str,
     awaiting_review = []
     active_safety = []
 
-    psa = _safe_float(latest_followup.get("psa_current")) or _safe_float(bcr.get("bcr_psa")) or _safe_float((patient.get("baseline") or {}).get("baseline_psa"))
-    testosterone = _safe_float(latest_followup.get("testosterone_current"))
-    ecog = _safe_int(latest_followup.get("ecog_current"))
-    pain = _safe_int(latest_followup.get("pain_score"))
+    psa = _safe_float(truth_values.get("psa")) or _safe_float(bcr.get("bcr_psa")) or _safe_float((patient.get("baseline") or {}).get("baseline_psa"))
+    testosterone = _safe_float(truth_values.get("testosterone"))
+    ecog = _safe_int(truth_values.get("ecog"))
+    pain = _safe_int(truth_values.get("pain"))
     latest_mri_quality = latest_mri.get("mpmri_quality")
     pirads = latest_mri.get("pirads_score") or latest_imaging.get("pirads_score")
     psadt = _safe_float(bcr.get("psadt_at_bcr")) or _safe_float((latest_assessment or {}).get("input_snapshot", {}).get("psadt_months"))
@@ -374,7 +734,7 @@ def build_clinical_signals(patient: dict[str, Any], latest_assessment: dict[str,
             active_safety.append("Estado funcional comprometido; ajustar intensidad terapéutica")
         if pain is not None and pain >= 7:
             active_safety.append("Dolor significativo; activar overlay paliativo concurrente")
-        if str(latest_followup.get("hepatic_risk_status") or latest_followup.get("hepatic_risk_factors") or "").strip():
+        if str(truth_values.get("hepatic_risk_status") or latest_followup.get("hepatic_risk_status") or latest_followup.get("hepatic_risk_factors") or "").strip():
             active_safety.append("Riesgo hepático activo")
         if str(latest_followup.get("cv_risk_status") or "").strip():
             active_safety.append("Riesgo cardiovascular activo")
@@ -386,6 +746,26 @@ def build_clinical_signals(patient: dict[str, Any], latest_assessment: dict[str,
             critical_missing.append("PSMA-PET válido para sostener elegibilidad a Lutecio-177")
         elif any("psma" in str(item.get("study_type", "")).lower() for item in (patient.get("imaging") or [])) and "imaging_report" not in verified_document_types:
             critical_missing.append("Informe PSMA-PET verificable")
+
+    lab_profile = build_laboratory_intelligence_profile(
+        patient,
+        state=state,
+        management_track=management_track,
+        latest_assessment=latest_assessment,
+    )
+    for alert in lab_profile.get("active_alerts", []):
+        detail = str(alert.get("title") or "")
+        if detail and detail not in active_safety:
+            active_safety.append(detail)
+        signals.append(
+            {
+                "key": f"lab_{alert.get('key')}",
+                "label": alert.get("title") or "Alerta de laboratorio",
+                "value": alert.get("triggering_value") or "",
+                "status": "warning" if str(alert.get("severity")) == "warning" else "critical" if str(alert.get("severity")) == "critical" else "informative",
+                "detail": alert.get("message") or "",
+            }
+        )
 
     ready_to_restage = bool(awaiting_review) or any(item.get("status") == "warning" for item in signals if item.get("key") in {"possible_bcr", "histologic_progression"})
     return ClinicalSignalSet(
@@ -405,6 +785,14 @@ def build_clinical_signals(patient: dict[str, Any], latest_assessment: dict[str,
         "state_conflict_flag": bool(reconciliation.get("state_conflict_flag")),
         "state_conflict_reason": reconciliation.get("state_conflict_reason", ""),
         "supporting_evidence": reconciliation.get("supporting_evidence", {}),
+        "longitudinal_truth_snapshot": truth_snapshot,
+        "latest_clinically_decisive_visit": truth_snapshot.get("latest_clinically_decisive_visit", {}),
+        "laboratory_intelligence_summary": {
+            "alert_count": len(lab_profile.get("active_alerts") or []),
+            "series_count": len(lab_profile.get("series") or []),
+            "coverage": lab_profile.get("coverage", {}),
+        },
+        "post_prostatectomy_course": derive_post_prostatectomy_course(patient),
     }
 
 
@@ -483,7 +871,8 @@ def build_state_transition_proposals(
             ).to_dict()
         )
 
-    if current_state == "post_prostatectomy" and psa is not None and psa >= 0.2:
+    post_prostatectomy_course = derive_post_prostatectomy_course(patient)
+    if current_state == "post_prostatectomy" and post_prostatectomy_course == "true_bcr":
         proposals.append(
             StateTransitionProposal(
                 proposal_key="post_prostatectomy:to_recurrence_bcr",
@@ -501,6 +890,11 @@ def build_state_transition_proposals(
 
     if classifier_target and classifier_target != current_state and not (
         current_state == "localized_initial" and classifier_target == "localized_initial"
+    ) and not (
+        current_state in POSTLOCAL_STATES and classifier_target == "localized_initial"
+    ) and not (
+        current_state in (MHSPC_STATES | {"m0_crpc", "m1_crpc"})
+        and classifier_target == "adt_progression_verification"
     ):
         rationale = registry.classify_state(classifier_payload).get("classification_reason") or "La nueva información cambia la etapa clínica probable."
         proposals.append(
@@ -537,6 +931,8 @@ def build_next_best_action(
     proposals: list[dict[str, Any]],
     latest_assessment: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    truth_snapshot = patient.get("longitudinal_truth_snapshot") or build_longitudinal_truth_snapshot(patient, latest_assessment)
+    truth_values = _current_field_values(patient, latest_assessment)
     state = signals.get("reconciled_state") or signals.get("state") or _current_state(patient, latest_assessment)
     management_track = signals.get("reconciled_management_track") or signals.get("management_track") or infer_management_track(patient, state, latest_assessment or patient.get("latest_assessment"))
     agenda = build_agenda_board(patient, state, management_track, latest_assessment or patient.get("latest_assessment"))
@@ -548,16 +944,135 @@ def build_next_best_action(
     if eligible:
         first = eligible[0]
         recommended_option = str(first.get("name") if isinstance(first, dict) else first)
-    recommendation_family = (result.get("decision_quality", {}) or {}).get("recommendation_family") or state
+    recommendation_family = (
+        (result.get("decision_quality", {}) or {}).get("recommendation_family")
+        or str(truth_values.get("current_treatment") or "")
+        or state
+    )
+    latest_inputs = dict((latest_assessment or patient.get("latest_assessment") or {}).get("input_snapshot") or {})
+    latest_biopsy = _latest(patient.get("biopsies", []), "biopsy_date")
+    psa = _safe_float(
+        truth_values.get("psa")
+        or latest_inputs.get("psa")
+        or latest_inputs.get("baseline_psa")
+        or _latest(patient.get("follow_ups", []), "visit_date").get("psa_current")
+        or (patient.get("baseline") or {}).get("baseline_psa")
+    )
+    clinical_tstage = str(
+        truth_values.get("clinical_tstage")
+        or latest_inputs.get("clinical_tstage")
+        or latest_biopsy.get("clinical_tstage")
+        or ""
+    ).upper()
+    isup_grade = _safe_int(
+        truth_values.get("isup_grade")
+        or latest_inputs.get("isup_grade")
+        or latest_biopsy.get("isup_grade")
+    ) or 0
+    num_cores_positive = _safe_int(
+        truth_values.get("num_cores_positive")
+        or latest_inputs.get("num_cores_positive")
+        or latest_biopsy.get("positive_cores")
+    ) or 0
+    max_core_involvement = _safe_float(
+        truth_values.get("max_core_involvement")
+        or latest_inputs.get("max_core_involvement")
+        or latest_biopsy.get("max_core_involvement")
+    ) or 0.0
+    psad = _safe_float(truth_values.get("psad") or latest_inputs.get("psad"))
+    pirads_score = _safe_int(truth_values.get("pirads_score") or truth_values.get("prior_mpmri_pirads_score") or latest_inputs.get("pirads_score") or latest_inputs.get("prior_mpmri_pirads_score")) or 0
+    family_history_positive = _safe_int(truth_values.get("family_history_positive") or latest_inputs.get("family_history_positive")) == 1
+    germline_risk_mutation = _safe_int(truth_values.get("germline_risk_mutation") or latest_inputs.get("germline_risk_mutation")) == 1
+    confirmatory_biopsy_done = truth_values.get("confirmatory_biopsy_done", latest_inputs.get("confirmatory_biopsy_done"))
+    mri_interval_months = _safe_float(truth_values.get("mri_interval_months", latest_inputs.get("mri_interval_months")))
+    upgrade_detected = _safe_int(truth_values.get("upgrade_detected", latest_inputs.get("upgrade_detected"))) == 1
+    psma_pattern = str(truth_values.get("psma_uptake_pattern") or "").strip().lower()
+    psma_stage_after = str(truth_values.get("psma_stage_after_psma") or "").strip().upper()
+    post_prostatectomy_course = derive_post_prostatectomy_course(patient)
+    family_lower = recommendation_family.lower()
+    has_high_risk_local_features = (
+        isup_grade >= 4
+        or (clinical_tstage.startswith("T3") or clinical_tstage.startswith("T4"))
+        or (psa is not None and psa >= 20)
+    )
+    has_unfavorable_local_features = (
+        isup_grade >= 3
+        or (clinical_tstage.startswith("T2") and clinical_tstage not in {"T1C", "T1A", "T1B"})
+        or (psa is not None and psa >= 10)
+        or num_cores_positive >= 4
+        or max_core_involvement >= 0.35
+    )
+
+    def _localized_title() -> tuple[str, str]:
+        if management_track == "active_surveillance" or "surveillance" in family_lower:
+            if upgrade_detected or isup_grade >= 2:
+                return (
+                    "Salir de vigilancia activa y definir tratamiento definitivo",
+                    "La reclasificación histológica ya no sostiene vigilancia activa segura y obliga a rediscutir tratamiento definitivo.",
+                )
+            if pirads_score >= 4:
+                return (
+                    "Programar biopsia dirigida y reevaluar continuidad de vigilancia activa",
+                    "Una nueva lesión MRI de mayor riesgo durante vigilancia activa exige confirmación histológica antes de sostener el mismo carril.",
+                )
+            if confirmatory_biopsy_done in {0, "0", False} or (mri_interval_months is not None and mri_interval_months >= 18):
+                return (
+                    "Programar biopsia confirmatoria y reevaluar continuidad de vigilancia activa",
+                    "La vigilancia activa requiere confirmación histológica y MRI seriada para sostener seguridad oncológica.",
+                )
+            return (
+                "Mantener vigilancia activa y vigilar triggers de reclasificación",
+                "El escenario actual sigue siendo compatible con vigilancia activa siempre que continúe la monitorización protocolizada.",
+            )
+        if "review" in family_lower or "uropat" in family_lower or "tumor board" in family_lower:
+            return (
+                "Priorizar revisión uropatológica y discusión multidisciplinaria",
+                "La histología variante o incierta puede cambiar la indicación terapéutica y requiere validación experta.",
+            )
+        if "rt" in family_lower or "radiot" in family_lower or "ebrt" in family_lower:
+            if "adt" in family_lower or has_high_risk_local_features:
+                return (
+                    "Priorizar radioterapia definitiva con intensificación hormonal contextual",
+                    "El riesgo localizado desfavorable/alto favorece tratamiento local intensificado y planificación oncológica estructurada.",
+                )
+            return (
+                "Priorizar radioterapia definitiva y planificación local",
+                "La enfermedad localizada actual favorece tratamiento con radioterapia frente a vigilancia simple.",
+            )
+        if has_high_risk_local_features:
+            return (
+                "Activar tratamiento local intensificado y discusión multimodal",
+                "Las características de alto riesgo hacen improbable una estrategia conservadora y requieren intensificación temprana.",
+            )
+        if has_unfavorable_local_features:
+            return (
+                "Definir tratamiento local definitivo y counseling funcional",
+                "La carga tumoral actual favorece tratamiento local definitivo más que vigilancia activa continuada.",
+            )
+        if management_track in {"pre_surgery", "localized_decision"}:
+            return (
+                "Definir tratamiento local definitivo y counseling funcional",
+                "La preferencia terapéutica longitudinal ya está orientada a tratamiento definitivo y debe cerrarse con planeación funcional.",
+            )
+        return (
+            "Mantener o redefinir la estrategia local según riesgo y función",
+            "La decisión local depende de patología, MRI, PROs y algoritmos contextuales.",
+        )
 
     if proposals:
         proposal = proposals[0]
+        recommendation_family = _proposal_recommendation_family(recommendation_family, proposal)
         actions = proposal.get("next_actions", [])[:]
         actions.extend(due_titles)
+        title = f"Confirmar transición a {proposal.get('target_state')}"
+        rationale = proposal.get("rationale") or "La nueva información longitudinal ya cambió la etapa clínica esperada."
+        target_state = str(proposal.get("target_state") or "")
+        if target_state == "recurrence_bcr":
+            title = "Activar salvage y reestadificación dirigida"
         return NextBestAction(
-            title=f"Confirmar transición a {proposal.get('target_state')}",
+            title=title,
             recommendation_family=recommendation_family,
-            rationale=proposal.get("rationale") or "La nueva información longitudinal ya cambió la etapa clínica esperada.",
+            rationale=rationale,
             immediate_actions=[item for item in actions if item][:3],
             data_that_could_change_course=(signals.get("critical_missing") or [])[:3],
             contraindication_modifiers=(signals.get("active_safety") or [])[:3],
@@ -565,17 +1080,81 @@ def build_next_best_action(
         ).to_dict()
 
     if state in DIAGNOSTIC_STATES:
-        title = "Completar confirmación histológica y cerrar la ruta diagnóstica"
-        rationale = "La etapa diagnóstica solo progresa con histología confirmada y MRI utilizable."
+        if (
+            any("pirads_high" == str(item.get("key") or "") for item in signals.get("signals", []))
+            or pirads_score >= 4
+            or (psad is not None and psad >= 0.15)
+            or family_history_positive
+            or germline_risk_mutation
+        ):
+            title = "Acelerar biopsia dirigida y confirmación histológica"
+            rationale = "La señal radiológica de alto riesgo ya justifica cierre diagnóstico rápido con histología."
+        else:
+            title = "Mantener seguimiento diagnóstico con PSA y MRI seriados"
+            rationale = "La etapa diagnóstica actual favorece vigilancia estrecha y repetición estructurada de PSA/MRI antes de escalar la invasividad."
     elif state == "localized_initial":
-        title = "Mantener o redefinir la estrategia local según riesgo y función"
-        rationale = "La decisión local depende de patología, MRI, PROs y algoritmos contextuales."
+        title, rationale = _localized_title()
     elif state in POSTLOCAL_STATES:
-        title = "Revisar ventana de rescate y control bioquímico"
-        rationale = "El seguimiento post tratamiento local exige PSA ultrasensible, PSADT e imagen solo si cambia la conducta."
+        if state == "post_prostatectomy" and post_prostatectomy_course == "persistent_psa":
+            title = "Iniciar evaluación temprana de salvage por PSA persistente"
+            rationale = "El PSA persistente posoperatorio obliga a recalcular PSADT, factibilidad local e imagen si cambia la conducta, sin forzar todavía una BCR verdadera."
+        elif state == "recurrence_bcr" or (state == "post_prostatectomy" and post_prostatectomy_course == "true_bcr"):
+            if psma_pattern == "diseminado" or psma_stage_after in {"M1B", "M1C"}:
+                title = "Redirigir a intensificación sistémica y staging avanzado"
+                rationale = "La PSMA estructurada ya sugiere enfermedad diseminada y reduce la prioridad de rescate local aislado."
+            else:
+                title = "Activar salvage y reestadificación dirigida"
+                rationale = "La recurrencia bioquímica posoperatoria exige definir ventana de rescate, PSADT e imagen dirigida sin demoras."
+        else:
+            title = "Mantener vigilancia post prostatectomía y control bioquímico"
+            rationale = "El seguimiento posoperatorio estable exige PSA ultrasensible seriado, revisión funcional y preservación de la ventana de rescate."
     else:
         title = "Reevaluar secuencia sistémica y seguridad activa"
         rationale = "La enfermedad avanzada debe balancear elegibilidad terapéutica, biomarcadores y toxicidad."
+        acute_safety_tokens = ("hep", "renal", "hipokal", "gluc", "bilir", "anemia", "testosterona > 50", "toxic")
+        safety_priority = any(
+            any(token in str(item or "").lower() for token in acute_safety_tokens)
+            for item in list(signals.get("active_safety") or [])
+        )
+        castrate_status = str(truth_values.get("castrate_testosterone_status") or "")
+        if state == "adt_progression_verification" and castrate_status == "not_castrate":
+            title = "Optimizar ADT y confirmar testosterona en rango de castración"
+            rationale = "La progresión no debe rotularse como CRPC mientras la testosterona siga por encima del umbral de castración."
+        if state == "adt_progression_verification" and str(truth_values.get("castrate_testosterone_status") or "") == "confirmed_castrate":
+            title = "Confirmar transición a CRPC y redefinir secuencia sistémica"
+            rationale = "La testosterona ya está en rango de castración; la conducta debe salir del carril de optimización de ADT y centrarse en progresión confirmada."
+        module_result = _state_module_result(patient, state, latest_assessment)
+        eligible_treatments = list(module_result.get("eligible_treatments") or [])
+        top_treatment = ""
+        if eligible_treatments:
+            first = eligible_treatments[0]
+            top_treatment = str(first.get("name") if isinstance(first, dict) else first)
+        module_family = str(((module_result.get("decision_quality") or {}).get("recommendation_family")) or top_treatment or recommendation_family)
+        line_of_therapy_number = _safe_int(truth_values.get("line_of_therapy_number") or truth_values.get("line_of_therapy") or latest_inputs.get("line_of_therapy_number"))
+        hrr_status = str(truth_values.get("hrr_status") or "").strip().lower()
+        brca2_status = str(truth_values.get("brca2_status") or "").strip().lower()
+        if state == "m0_crpc" and top_treatment and not safety_priority:
+            title = f"Priorizar {top_treatment}"
+            recommendation_family = module_family
+            rationale = "El nmCRPC longitudinal actual ya permite intensificación con el ARPI más consistente con riesgo y seguridad."
+        elif (
+            state == "m1_crpc"
+            and line_of_therapy_number in (None, 0, 1)
+            and hrr_status not in {"positivo", "positive", "pathogenic"}
+            and brca2_status not in {"positivo", "positive", "pathogenic"}
+            and not safety_priority
+        ):
+            title = "Priorizar Enzalutamide"
+            recommendation_family = "ARPI first-line"
+            rationale = "La m1CRPC temprana sin biomarcadores de precisión dominantes ni exposición ARPI documentada favorece iniciar una vía ARPI antes de rutas posteriores."
+        elif state == "m1_crpc" and top_treatment and not safety_priority:
+            title = f"Priorizar {top_treatment}"
+            recommendation_family = module_family
+            rationale = "La secuencia mCRPC debe seguir la elegibilidad terapéutica longitudinal, biomarcadores accionables y seguridad vigente."
+        elif state in MHSPC_STATES and top_treatment and not safety_priority:
+            title = f"Priorizar {top_treatment}"
+            recommendation_family = module_family
+            rationale = "El mHSPC actual ya tiene suficiente contexto longitudinal para elegir el backbone sistémico más competitivo."
 
     immediate_actions = due_titles + checkpoint_actions
     if not immediate_actions and signals.get("critical_missing"):
@@ -632,13 +1211,123 @@ def build_longitudinal_intelligence_bundle(
     patient: dict[str, Any],
     latest_assessment: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    truth_snapshot = patient.get("longitudinal_truth_snapshot") or build_longitudinal_truth_snapshot(patient, latest_assessment)
+    patient = dict(patient)
+    patient["longitudinal_truth_snapshot"] = truth_snapshot
     signals = build_clinical_signals(patient, latest_assessment)
     proposals = build_state_transition_proposals(patient, signals, latest_assessment)
-    next_best_action = build_next_best_action(patient, signals, proposals, latest_assessment)
+    from prostanet.domains.patient_tracking.decision_input_requirements_engine import build_decision_input_requirements
+
+    initial_requirements = build_decision_input_requirements(
+        patient,
+        effective_state=signals.get("reconciled_state") or signals.get("state") or "",
+        effective_management_track=signals.get("reconciled_management_track") or signals.get("management_track") or "",
+        latest_assessment=latest_assessment,
+        next_best_action={},
+    )
+    transition_resolution = build_transition_resolution(
+        patient,
+        signals,
+        proposals,
+        decision_input_requirements=initial_requirements,
+    )
+    followup_runtime = resolve_followup_runtime_context(
+        patient,
+        state=signals.get("reconciled_state") or signals.get("state") or _current_state(patient, latest_assessment),
+        management_track=signals.get("reconciled_management_track") or signals.get("management_track") or infer_management_track(
+            patient,
+            signals.get("reconciled_state") or signals.get("state") or "",
+            latest_assessment or patient.get("latest_assessment"),
+        ),
+        latest_assessment=latest_assessment,
+        signals=signals,
+        transition_resolution=transition_resolution,
+    )
+    plan_signals = dict(signals)
+    override_reason = str(followup_runtime.get("override_reason") or "").strip()
+    if override_reason:
+        cadence_adjusted = [str(item) for item in list(plan_signals.get("cadence_adjusted_by") or []) if str(item).strip()]
+        if override_reason not in cadence_adjusted:
+            cadence_adjusted.append(override_reason)
+        plan_signals["cadence_adjusted_by"] = cadence_adjusted
+    agenda_board = build_agenda_board(
+        patient,
+        followup_runtime.get("state") or signals.get("reconciled_state") or signals.get("state") or _current_state(patient, latest_assessment),
+        followup_runtime.get("management_track") or signals.get("reconciled_management_track") or signals.get("management_track") or infer_management_track(patient, signals.get("reconciled_state") or signals.get("state") or "", latest_assessment or patient.get("latest_assessment")),
+        latest_assessment or patient.get("latest_assessment"),
+    )
+    visible_proposals = proposals if transition_resolution.get("policy") != "auto_applied" else []
+    next_best_action = build_next_best_action(patient, signals, visible_proposals, latest_assessment)
+    decision_input_requirements = build_decision_input_requirements(
+        patient,
+        effective_state=followup_runtime.get("state") or signals.get("reconciled_state") or signals.get("state") or "",
+        effective_management_track=followup_runtime.get("management_track") or signals.get("reconciled_management_track") or signals.get("management_track") or "",
+        latest_assessment=latest_assessment,
+        next_best_action=next_best_action,
+    )
+    care_intent_contract = build_care_intent_contract(
+        patient=patient,
+        state=followup_runtime.get("state") or signals.get("reconciled_state") or signals.get("state") or "",
+        management_track=followup_runtime.get("management_track") or signals.get("reconciled_management_track") or signals.get("management_track") or "",
+        next_best_action=next_best_action,
+        signals=plan_signals,
+        transition_resolution=transition_resolution,
+        decision_input_requirements=decision_input_requirements,
+    )
+    next_best_action = _align_next_best_action_with_care_intent(
+        next_best_action,
+        care_intent_contract,
+        decision_input_requirements,
+    )
+    master_followup_plan = build_master_followup_plan(
+        patient,
+        state=followup_runtime.get("state") or signals.get("reconciled_state") or signals.get("state") or "",
+        management_track=followup_runtime.get("management_track") or signals.get("reconciled_management_track") or signals.get("management_track") or "",
+        agenda_board=agenda_board,
+        signals=plan_signals,
+        copilot_alerts=[],
+        next_best_action=next_best_action,
+    )
+    guideline_followup_plan = build_guideline_followup_plan(
+        patient=patient,
+        state=followup_runtime.get("state") or signals.get("reconciled_state") or signals.get("state") or "",
+        management_track=followup_runtime.get("management_track") or signals.get("reconciled_management_track") or signals.get("management_track") or "",
+        agenda_board=agenda_board,
+        master_followup_plan=master_followup_plan,
+        signals=plan_signals,
+        care_intent_contract=care_intent_contract,
+    )
+    laboratory_intelligence_profile = build_laboratory_intelligence_profile(
+        patient,
+        state=signals.get("reconciled_state") or signals.get("state") or "",
+        management_track=signals.get("reconciled_management_track") or signals.get("management_track") or "",
+        latest_assessment=latest_assessment,
+    )
+    decision_recalculation_trace = build_decision_recalculation_trace(
+        patient=patient,
+        state=signals.get("reconciled_state") or signals.get("state") or "",
+        management_track=signals.get("reconciled_management_track") or signals.get("management_track") or "",
+        latest_assessment=latest_assessment,
+        longitudinal_truth_snapshot=truth_snapshot,
+        next_best_action=next_best_action,
+        reconciliation=signals,
+        transition_resolution=transition_resolution,
+        care_intent_contract=care_intent_contract,
+    )
     return {
         "signals": signals,
         "transition_proposals": proposals,
+        "transition_resolution": transition_resolution,
         "next_best_action": next_best_action,
+        "care_intent_contract": care_intent_contract,
+        "decision_input_requirements": decision_input_requirements,
+        "longitudinal_truth_snapshot": truth_snapshot,
+        "decision_recalculation_trace": decision_recalculation_trace,
+        "guideline_followup_plan": guideline_followup_plan,
+        "laboratory_intelligence_profile": laboratory_intelligence_profile,
+        "latest_clinically_decisive_visit": truth_snapshot.get("latest_clinically_decisive_visit", {}),
+        "master_followup_plan": master_followup_plan,
+        "master_followup_summary": master_followup_plan.get("summary", {}),
         "reconciliation": {
             "reconciled_state": signals.get("reconciled_state") or signals.get("state"),
             "reconciled_management_track": signals.get("reconciled_management_track") or signals.get("management_track"),
