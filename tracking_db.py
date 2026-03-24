@@ -40,6 +40,28 @@ def get_db_path():
     return DB_PATH
 
 
+def _publish_clinical_event(
+    patient_id: int,
+    event_type: str,
+    event_data: dict | None = None,
+) -> None:
+    """
+    Publish a clinical event to the AI event bus.
+
+    Completely silent — any failure is swallowed. Only fires when
+    ENABLE_EVENT_BUS feature flag is ON (default OFF).
+    """
+    try:
+        from prostanet.shared.feature_flags import resolve_feature_flags
+        if not resolve_feature_flags().get("ENABLE_EVENT_BUS"):
+            return
+        from prostanet.agents.event_bus import get_event_bus
+        bus = get_event_bus()
+        bus.publish(event_type, {"patient_id": patient_id, **(event_data or {})})
+    except Exception:
+        pass  # Event bus is never-fail
+
+
 def _connect():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -91,6 +113,36 @@ def patient_exists(patient_id):
     except Exception as e:
         logger.error(f"Error checking patient existence: {e}")
         return False
+
+
+def resolve_patient_ref(patient_ref):
+    try:
+        conn = _connect()
+        cursor = conn.cursor()
+        identity = _resolve_identity_row(cursor, patient_ref)
+        conn.close()
+        if not identity:
+            return None
+        return {
+            "patient_id": int(identity["id"]),
+            "nss": str(identity["nss"] or "").strip(),
+            "identity": dict(identity),
+            "patient_ref": str(patient_ref),
+        }
+    except Exception as exc:
+        logger.error(f"Error resolving patient reference {patient_ref}: {exc}")
+        return None
+
+
+def patient_exists_ref(patient_ref):
+    return resolve_patient_ref(patient_ref) is not None
+
+
+def get_patient_full_record_by_ref(patient_ref):
+    resolved = resolve_patient_ref(patient_ref)
+    if not resolved:
+        return None
+    return get_patient_full_record(resolved["patient_id"])
 
 
 def delete_patient_profile(nss_or_id):
@@ -3564,13 +3616,129 @@ def init_tracking_db():
         '''
     )
 
+    # ── AI Engine Tables ──
+
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS ai_predictions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            model_id TEXT NOT NULL,
+            model_version TEXT NOT NULL,
+            prediction_type TEXT NOT NULL,
+            input_hash TEXT NOT NULL,
+            prediction_json TEXT NOT NULL,
+            confidence_score REAL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+        '''
+    )
+
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS agent_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            agent_id TEXT NOT NULL,
+            trigger_event TEXT NOT NULL,
+            trigger_data_json TEXT,
+            output_json TEXT NOT NULL,
+            confidence_score REAL,
+            qa_validation_json TEXT,
+            execution_time_ms INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+        '''
+    )
+
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS ai_model_registry (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            model_id TEXT NOT NULL,
+            model_version TEXT NOT NULL,
+            model_type TEXT NOT NULL,
+            artifact_path TEXT NOT NULL,
+            training_data_hash TEXT,
+            metrics_json TEXT,
+            is_active BOOLEAN DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(model_id, model_version)
+        )
+        '''
+    )
+
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS training_data_provenance (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            model_id TEXT NOT NULL,
+            model_version TEXT NOT NULL,
+            data_source TEXT NOT NULL,
+            patient_count INTEGER,
+            feature_count INTEGER,
+            consent_evidence_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS crpc_copilot_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            trigger_event TEXT NOT NULL,
+            effective_state TEXT NOT NULL,
+            runtime_mode TEXT NOT NULL,
+            bundle_json TEXT NOT NULL,
+            qa_json TEXT,
+            final_presented_recommendation_json TEXT,
+            concordance_label TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE INDEX IF NOT EXISTS idx_crpc_copilot_snapshots_patient_created
+        ON crpc_copilot_snapshots (patient_id, created_at DESC, id DESC)
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS post_rp_salvage_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            trigger_event TEXT NOT NULL,
+            post_prostatectomy_course TEXT NOT NULL,
+            effective_state TEXT NOT NULL,
+            runtime_mode TEXT NOT NULL,
+            bundle_json TEXT NOT NULL,
+            qa_json TEXT,
+            final_presented_recommendation_json TEXT,
+            concordance_label TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+        '''
+    )
+    c.execute(
+        '''
+        CREATE INDEX IF NOT EXISTS idx_post_rp_salvage_snapshots_patient_created
+        ON post_rp_salvage_snapshots (patient_id, created_at DESC, id DESC)
+        '''
+    )
+
     conn.commit()
     conn.close()
     try:
         _backfill_normalized_tracking_domains()
     except Exception as exc:
         logger.warning("Normalized domain backfill skipped: %s", exc)
-    logger.info("Tracking DB initialized (v4 — Copiloto Clínico + Scheduling + RECIST/PCWG3).")
+    logger.info("Tracking DB initialized (v5 — AI Engine + Agents + Recalculation).")
 
 
 def _backfill_normalized_tracking_domains():
@@ -6378,6 +6546,54 @@ def _persist_trial_benchmark_snapshot(cursor, patient_id, bundle):
     )
 
 
+def _persist_crpc_copilot_snapshot(cursor, patient_id, bundle, trigger_event):
+    if not bundle or not bundle.get("enabled") or not bundle.get("available"):
+        return
+    cursor.execute(
+        """
+        INSERT INTO crpc_copilot_snapshots (
+            patient_id, trigger_event, effective_state, runtime_mode,
+            bundle_json, qa_json, final_presented_recommendation_json,
+            concordance_label, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """,
+        (
+            patient_id,
+            trigger_event or "longitudinal_refresh",
+            bundle.get("effective_state") or bundle.get("state_family") or "",
+            bundle.get("runtime_mode") or "shadow",
+            _json_blob(bundle),
+            _json_blob(bundle.get("qa_validation") or {}),
+            _json_blob(bundle.get("final_presented_recommendation") or {}),
+            (bundle.get("ai_advisory_overlay") or {}).get("concordance_label", ""),
+        ),
+    )
+
+
+def _persist_post_rp_salvage_snapshot(cursor, patient_id, bundle, trigger_event):
+    if not bundle or not bundle.get("enabled") or not bundle.get("available"):
+        return
+    cursor.execute(
+        """
+        INSERT INTO post_rp_salvage_snapshots (
+            patient_id, trigger_event, post_prostatectomy_course, effective_state, runtime_mode,
+            bundle_json, qa_json, final_presented_recommendation_json, concordance_label, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """,
+        (
+            patient_id,
+            trigger_event or "longitudinal_refresh",
+            bundle.get("post_prostatectomy_course") or "",
+            bundle.get("effective_state") or bundle.get("state_family") or "",
+            bundle.get("runtime_mode") or "shadow",
+            _json_blob(bundle),
+            _json_blob(bundle.get("qa_validation") or {}),
+            _json_blob(bundle.get("final_presented_recommendation") or {}),
+            (bundle.get("ai_advisory_overlay") or {}).get("concordance_label", ""),
+        ),
+    )
+
+
 def _build_copilot_orchestration(patient_record, signals=None):
     from prostanet.domains.patient_tracking.copilot_alerts import build_copilot_alerts
     from prostanet.domains.patient_tracking.followup_agenda import enrich_agenda_board_with_encounters
@@ -6461,6 +6677,12 @@ def refresh_longitudinal_intelligence(nss_or_id, event_id=None, force_recompute=
         build_decision_input_requirements,
         detect_ui_contradiction_flags,
     )
+    from prostanet.domains.patient_tracking.crpc_copilot_service import (
+        build_crpc_copilot_bundle,
+    )
+    from prostanet.domains.patient_tracking.post_rp_salvage_copilot_service import (
+        build_post_rp_salvage_bundle,
+    )
     from prostanet.domains.patient_tracking.disease_course_outcomes import build_disease_course_bundle
     from prostanet.domains.patient_tracking.live_benchmark import build_live_benchmark
     from prostanet.domains.patient_tracking.prognostic_impact import build_prognostic_impact_bundle
@@ -6537,6 +6759,35 @@ def refresh_longitudinal_intelligence(nss_or_id, event_id=None, force_recompute=
         latest_assessment=refreshed.get("latest_assessment"),
         next_best_action=bundle.get("next_best_action", {}),
     )
+    trigger_event = "manual_recalculation" if force_recompute else "event_refresh" if event_id is not None else "longitudinal_refresh"
+    crpc_copilot_bundle = build_crpc_copilot_bundle(
+        refreshed,
+        effective_state=current_state,
+        effective_management_track=current_track,
+        latest_assessment=refreshed.get("latest_assessment"),
+        longitudinal_bundle=bundle,
+        decision_input_requirements=decision_input_requirements,
+        trigger_event=trigger_event,
+    )
+    post_rp_salvage_bundle = build_post_rp_salvage_bundle(
+        refreshed,
+        effective_state=current_state,
+        effective_management_track=current_track,
+        latest_assessment=refreshed.get("latest_assessment"),
+        longitudinal_bundle=bundle,
+        decision_input_requirements=decision_input_requirements,
+        trigger_event=trigger_event,
+    )
+    qa_passed = (
+        (post_rp_salvage_bundle.get("qa_validation") or {}).get("approved")
+        if post_rp_salvage_bundle.get("available")
+        else (crpc_copilot_bundle.get("qa_validation") or {}).get("approved")
+    )
+    sequence_summary = (
+        post_rp_salvage_bundle.get("sequence_candidates", [])
+        if post_rp_salvage_bundle.get("available")
+        else crpc_copilot_bundle.get("sequence_summary", [])
+    )
     ui_contradiction_flags = detect_ui_contradiction_flags(
         refreshed,
         effective_state=current_state,
@@ -6552,13 +6803,25 @@ def refresh_longitudinal_intelligence(nss_or_id, event_id=None, force_recompute=
         transition_resolution=bundle.get("transition_resolution", {}),
         care_intent_contract=bundle.get("care_intent_contract", {}),
     )
+    active_copilot_bundle = post_rp_salvage_bundle if post_rp_salvage_bundle.get("available") else crpc_copilot_bundle if crpc_copilot_bundle.get("available") else {}
+    published_state = active_copilot_bundle.get("effective_state") or current_state
+    published_track = active_copilot_bundle.get("effective_management_track") or current_track
+    published_recommendation = dict(active_copilot_bundle.get("final_presented_recommendation") or active_copilot_bundle.get("rule_based_recommendation") or {})
+    if published_recommendation:
+        latest_snapshot["next_best_action"] = {
+            "title": str(published_recommendation.get("recommended_action") or ""),
+            "rationale": str(published_recommendation.get("rationale") or ""),
+            "recommendation_family": str(published_recommendation.get("recommendation_family") or ""),
+            "evidence_basis": list(active_copilot_bundle.get("guideline_basis") or []),
+            "source": str(published_recommendation.get("source") or "rule_based_primary"),
+        }
     latest_snapshot.update(
         {
             "explicit_state": bundle.get("signals", {}).get("explicit_state"),
-            "effective_state_final": current_state,
-            "effective_management_track_final": current_track,
-            "effective_state": current_state,
-            "effective_management_track": current_track,
+            "effective_state_final": published_state,
+            "effective_management_track_final": published_track,
+            "effective_state": published_state,
+            "effective_management_track": published_track,
             "reconciled_state": bundle.get("signals", {}).get("reconciled_state"),
             "reconciled_management_track": bundle.get("signals", {}).get("reconciled_management_track"),
             "state_conflict_flag": bundle.get("signals", {}).get("state_conflict_flag"),
@@ -6598,6 +6861,16 @@ def refresh_longitudinal_intelligence(nss_or_id, event_id=None, force_recompute=
             "decision_domains_blocked": decision_input_requirements.get("decision_domains_blocked", []),
             "guideline_basis": bundle.get("guideline_followup_plan", {}).get("schedule_evidence_basis", []),
             "ui_contradiction_flags": ui_contradiction_flags,
+            "crpc_copilot_bundle": crpc_copilot_bundle,
+            "crpc_copilot_status": crpc_copilot_bundle.get("status", "not_applicable"),
+            "post_rp_salvage_bundle": post_rp_salvage_bundle,
+            "post_rp_copilot_status": post_rp_salvage_bundle.get("status", "not_applicable"),
+            "salvage_window_status": post_rp_salvage_bundle.get("salvage_window_status", ""),
+            "salvage_window_reason": post_rp_salvage_bundle.get("salvage_window_reason", ""),
+            "qa_passed": qa_passed,
+            "sequence_summary": sequence_summary,
+            "crpc_schedule_overlay": crpc_copilot_bundle.get("crpc_schedule_overlay", {}),
+            "post_rp_schedule_overlay": post_rp_salvage_bundle.get("post_rp_schedule_overlay", {}),
         }
     )
     if not latest_snapshot:
@@ -6610,6 +6883,9 @@ def refresh_longitudinal_intelligence(nss_or_id, event_id=None, force_recompute=
     _persist_outcome_events(c, refreshed["identity"]["id"], outcome_bundle.get("outcome_events", []))
     _persist_adjudication_snapshot(c, refreshed["identity"]["id"], outcome_bundle)
     _persist_trial_benchmark_snapshot(c, refreshed["identity"]["id"], outcome_bundle)
+    if event_id is not None or force_recompute:
+        _persist_crpc_copilot_snapshot(c, refreshed["identity"]["id"], crpc_copilot_bundle, trigger_event)
+        _persist_post_rp_salvage_snapshot(c, refreshed["identity"]["id"], post_rp_salvage_bundle, trigger_event)
     conn.commit()
     conn.close()
     persist_patient_clinical_ledger(
@@ -6664,6 +6940,16 @@ def refresh_longitudinal_intelligence(nss_or_id, event_id=None, force_recompute=
         "care_intent_contract": bundle.get("care_intent_contract", {}),
         "laboratory_intelligence_profile": bundle.get("laboratory_intelligence_profile", {}),
         "latest_clinically_decisive_visit": bundle.get("latest_clinically_decisive_visit", {}),
+        "crpc_copilot_bundle": crpc_copilot_bundle,
+        "crpc_copilot_status": crpc_copilot_bundle.get("status", "not_applicable"),
+        "post_rp_salvage_bundle": post_rp_salvage_bundle,
+        "post_rp_copilot_status": post_rp_salvage_bundle.get("status", "not_applicable"),
+        "salvage_window_status": post_rp_salvage_bundle.get("salvage_window_status", ""),
+        "salvage_window_reason": post_rp_salvage_bundle.get("salvage_window_reason", ""),
+        "qa_passed": qa_passed,
+        "sequence_summary": sequence_summary,
+        "crpc_schedule_overlay": crpc_copilot_bundle.get("crpc_schedule_overlay", {}),
+        "post_rp_schedule_overlay": post_rp_salvage_bundle.get("post_rp_schedule_overlay", {}),
         "blocking_inputs": decision_input_requirements.get("blocking_inputs", []),
         "hard_blocking_inputs": decision_input_requirements.get("hard_blocking_inputs", []),
         "decision_blocking_inputs": decision_input_requirements.get("decision_blocking_inputs", []),
@@ -6780,6 +7066,247 @@ def get_patient_signals(nss_or_id):
     if not bundle:
         return None
     return bundle.get("signals", {})
+
+
+def get_patient_crpc_copilot(nss_or_id):
+    bundle = refresh_longitudinal_intelligence(nss_or_id, force_recompute=False)
+    if not bundle:
+        return None
+    return bundle.get("crpc_copilot_bundle", {})
+
+
+def get_patient_post_rp_salvage(nss_or_id):
+    bundle = refresh_longitudinal_intelligence(nss_or_id, force_recompute=False)
+    if not bundle:
+        return None
+    return bundle.get("post_rp_salvage_bundle", {})
+
+
+def get_crpc_copilot_dashboard_summary():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT s.*
+        FROM crpc_copilot_snapshots s
+        JOIN (
+            SELECT patient_id, MAX(id) AS latest_id
+            FROM crpc_copilot_snapshots
+            GROUP BY patient_id
+        ) latest ON latest.latest_id = s.id
+        ORDER BY s.created_at DESC, s.id DESC
+        """
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    if not rows:
+        return {
+            "available": False,
+            "total_patients": 0,
+            "shadow_rule_concordance_pct": 0.0,
+            "strict_concordance_pct": 0.0,
+            "qa_pass_pct": 0.0,
+            "blocked_by_missing_data_pct": 0.0,
+            "blocked_by_safety_pct": 0.0,
+            "top_failure_families": [],
+            "runtime_modes": {},
+            "state_distribution": {},
+            "recent_cases": [],
+            "latest_created_at": "",
+        }
+
+    def _blob_to_obj(value, default):
+        if not value:
+            return default
+        try:
+            return json.loads(value)
+        except Exception:
+            return default
+
+    total = len(rows)
+    aligned = 0
+    strict = 0
+    qa_pass = 0
+    blocked_missing = 0
+    blocked_safety = 0
+    runtime_modes: dict[str, int] = {}
+    state_distribution: dict[str, int] = {}
+    failure_families: dict[str, int] = {}
+    recent_cases: list[dict[str, Any]] = []
+
+    for row in rows:
+        bundle = _blob_to_obj(row["bundle_json"], {})
+        qa = _blob_to_obj(row["qa_json"], {})
+        overlay = dict(bundle.get("ai_advisory_overlay") or {})
+        blocking_inputs = list(bundle.get("blocking_inputs") or [])
+        safety_gates = list(bundle.get("safety_gates") or [])
+        concordance = str(row["concordance_label"] or overlay.get("concordance_label") or "")
+        runtime_mode = str(row["runtime_mode"] or bundle.get("runtime_mode") or "shadow")
+        state = str(row["effective_state"] or bundle.get("effective_state") or bundle.get("state_family") or "")
+
+        runtime_modes[runtime_mode] = runtime_modes.get(runtime_mode, 0) + 1
+        state_distribution[state] = state_distribution.get(state, 0) + 1
+        if concordance in {"concordant", "adjacent"}:
+            aligned += 1
+        if concordance == "concordant":
+            strict += 1
+        if bool(qa.get("approved")):
+            qa_pass += 1
+        if any(group.get("required_fields") for group in blocking_inputs):
+            blocked_missing += 1
+        blocked_gate_rows = [gate for gate in safety_gates if str(gate.get("status") or "").lower() == "blocked"]
+        if blocked_gate_rows:
+            blocked_safety += 1
+        for gate in blocked_gate_rows:
+            family = str(gate.get("failure_family") or "").strip()
+            if family:
+                failure_families[family] = failure_families.get(family, 0) + 1
+
+        recent_cases.append(
+            {
+                "patient_id": int(row["patient_id"]),
+                "effective_state": state,
+                "runtime_mode": runtime_mode,
+                "status": str(bundle.get("status") or ""),
+                "concordance_label": concordance or "rule_only",
+                "qa_passed": bool(qa.get("approved")),
+            }
+        )
+
+    return {
+        "available": True,
+        "total_patients": total,
+        "shadow_rule_concordance_pct": round((aligned / total) * 100, 1),
+        "strict_concordance_pct": round((strict / total) * 100, 1),
+        "qa_pass_pct": round((qa_pass / total) * 100, 1),
+        "blocked_by_missing_data_pct": round((blocked_missing / total) * 100, 1),
+        "blocked_by_safety_pct": round((blocked_safety / total) * 100, 1),
+        "top_failure_families": sorted(
+            failure_families.items(),
+            key=lambda item: (-item[1], item[0]),
+        )[:6],
+        "runtime_modes": runtime_modes,
+        "state_distribution": state_distribution,
+        "recent_cases": recent_cases[:5],
+        "latest_created_at": rows[0]["created_at"] or "",
+    }
+
+
+def get_post_rp_salvage_dashboard_summary():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT s.*
+        FROM post_rp_salvage_snapshots s
+        JOIN (
+            SELECT patient_id, MAX(id) AS latest_id
+            FROM post_rp_salvage_snapshots
+            GROUP BY patient_id
+        ) latest ON latest.latest_id = s.id
+        ORDER BY s.created_at DESC, s.id DESC
+        """
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    if not rows:
+        return {
+            "available": False,
+            "total_patients": 0,
+            "shadow_rule_concordance_pct": 0.0,
+            "qa_pass_pct": 0.0,
+            "blocked_by_missing_data_pct": 0.0,
+            "salvage_window_open_pct": 0.0,
+            "redirect_systemic_pct": 0.0,
+            "top_failure_families": [],
+            "runtime_modes": {},
+            "course_distribution": {},
+            "salvage_window_distribution": {},
+            "recent_cases": [],
+            "latest_created_at": "",
+        }
+
+    def _blob_to_obj(value, default):
+        if not value:
+            return default
+        try:
+            return json.loads(value)
+        except Exception:
+            return default
+
+    total = len(rows)
+    aligned = 0
+    qa_pass = 0
+    blocked_missing = 0
+    salvage_open = 0
+    redirect_systemic = 0
+    runtime_modes: dict[str, int] = {}
+    course_distribution: dict[str, int] = {}
+    salvage_window_distribution: dict[str, int] = {}
+    failure_families: dict[str, int] = {}
+    recent_cases: list[dict[str, Any]] = []
+
+    for row in rows:
+        bundle = _blob_to_obj(row["bundle_json"], {})
+        qa = _blob_to_obj(row["qa_json"], {})
+        overlay = dict(bundle.get("ai_advisory_overlay") or {})
+        blocking_inputs = list(bundle.get("blocking_inputs") or [])
+        safety_gates = list(bundle.get("safety_gates") or [])
+        concordance = str(row["concordance_label"] or overlay.get("concordance_label") or "")
+        runtime_mode = str(row["runtime_mode"] or bundle.get("runtime_mode") or "shadow")
+        course = str(row["post_prostatectomy_course"] or bundle.get("post_prostatectomy_course") or "")
+        window_status = str(bundle.get("salvage_window_status") or "")
+
+        runtime_modes[runtime_mode] = runtime_modes.get(runtime_mode, 0) + 1
+        course_distribution[course] = course_distribution.get(course, 0) + 1
+        salvage_window_distribution[window_status] = salvage_window_distribution.get(window_status, 0) + 1
+        if concordance in {"concordant", "adjacent"}:
+            aligned += 1
+        if bool(qa.get("approved")):
+            qa_pass += 1
+        if any(group.get("required_fields") for group in blocking_inputs):
+            blocked_missing += 1
+        if window_status in {"open", "open_pending_restaging"}:
+            salvage_open += 1
+        if window_status == "redirect_systemic":
+            redirect_systemic += 1
+        for gate in safety_gates:
+            family = str(gate.get("failure_family") or "").strip()
+            if gate.get("status") == "blocked" and family:
+                failure_families[family] = failure_families.get(family, 0) + 1
+
+        recent_cases.append(
+            {
+                "patient_id": int(row["patient_id"]),
+                "effective_state": str(row["effective_state"] or bundle.get("effective_state") or ""),
+                "post_prostatectomy_course": course,
+                "salvage_window_status": window_status,
+                "runtime_mode": runtime_mode,
+                "concordance_label": concordance or "rule_only",
+                "qa_passed": bool(qa.get("approved")),
+            }
+        )
+
+    return {
+        "available": True,
+        "total_patients": total,
+        "shadow_rule_concordance_pct": round((aligned / total) * 100, 1),
+        "qa_pass_pct": round((qa_pass / total) * 100, 1),
+        "blocked_by_missing_data_pct": round((blocked_missing / total) * 100, 1),
+        "salvage_window_open_pct": round((salvage_open / total) * 100, 1),
+        "redirect_systemic_pct": round((redirect_systemic / total) * 100, 1),
+        "top_failure_families": sorted(
+            failure_families.items(),
+            key=lambda item: (-item[1], item[0]),
+        )[:6],
+        "runtime_modes": runtime_modes,
+        "course_distribution": course_distribution,
+        "salvage_window_distribution": salvage_window_distribution,
+        "recent_cases": recent_cases[:5],
+        "latest_created_at": rows[0]["created_at"] or "",
+    }
 
 
 def get_patient_outcomes(nss_or_id):
@@ -8084,6 +8611,15 @@ def save_stage_visit_bundle(patient_id, data):
         agenda = refresh_followup_agenda(refreshed)
         sync_scheduled_events(refreshed, state=state, management_track=management_track)
 
+        # ── AI Event Bus — publish visit_recorded ──
+        _publish_clinical_event(patient_id, "visit_recorded", {
+            "visit_date": visit_date,
+            "state": state,
+            "followup_id": followup_id,
+            "psa": data.get("psa"),
+            "ecog": data.get("ecog"),
+        })
+
         return True, {
             "followup_id": followup_id,
             "visit_record_id": visit_record_id,
@@ -8277,6 +8813,11 @@ def save_imaging_study(patient_id, data):
         ))
         conn.commit()
         conn.close()
+        # ── AI Event Bus — publish imaging_completed ──
+        _publish_clinical_event(int(patient_id), "imaging_completed", {
+            "study_type": payload.get("study_type"),
+            "study_date": payload.get("study_date"),
+        })
         return True
     except Exception as e:
         logger.error(f"Error saving imaging study: {e}")
@@ -8764,6 +9305,13 @@ def save_bcr(patient_id, data):
         ))
         conn.commit()
         conn.close()
+        # ── AI Event Bus — publish bcr_detected ──
+        if _safe_int(data.get('bcr_detected', 0), 0):
+            _publish_clinical_event(int(patient_id), "bcr_detected", {
+                "bcr_date": data.get("bcr_date"),
+                "bcr_psa": data.get("bcr_psa"),
+                "psadt_at_bcr": data.get("psadt_at_bcr"),
+            })
         return True
     except Exception as e:
         logger.error(f"Error saving BCR: {e}")

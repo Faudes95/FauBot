@@ -86,20 +86,37 @@ class M1CrpcService:
             missing_inputs.append("castrate_testosterone_confirmed")
             not_recommended.append("Do not intensify or relabel as mCRPC until castrate-range testosterone is documented.")
         else:
+            if nccn["line_context"] == "first_line_mcrpc" and not nccn["prior_arpi"]:
+                if not nccn["prior_enza_class"]:
+                    treatments.append(
+                        {
+                            "name": "Enzalutamide",
+                            "priority": "preferred",
+                            "notes": "Ruta estándar de primera línea mCRPC antes de reciclar clases o saltar directamente a inmunoterapia por biomarcadores aislados.",
+                        }
+                    )
+                if not nccn["prior_abiraterone"]:
+                    treatments.append(
+                        {
+                            "name": "Acetato de Abiraterona",
+                            "priority": "eligible",
+                            "notes": "Alternativa estándar de primera línea mCRPC cuando no existe contraindicación hepática relevante.",
+                        }
+                    )
             if nccn["line_context"] == "first_line_mcrpc" and nccn["hrr_positive"] and biomarker_traceable and not nccn["prior_enza_class"]:
                 treatments.append(
                     {
                         "name": "Talazoparib + Enzalutamide",
-                        "priority": "eligible",
-                        "notes": "Use only in HRR-mutated first-line mCRPC with a traceable biomarker and without prior exhaustion of the enzalutamide class.",
+                        "priority": "selected_candidate",
+                        "notes": "Ruta de precisión first-line válida cuando el biomarcador HRR es trazable, pero no debe sobreponerse automáticamente a la secuencia estándar ARPI en esta v1 clínica.",
                     }
                 )
             if nccn["line_context"] == "first_line_mcrpc" and nccn["brca_pathway"] and biomarker_traceable and not nccn["prior_abiraterone"]:
                 treatments.append(
                     {
                         "name": "Niraparib + Abiraterone",
-                        "priority": "eligible",
-                        "notes": f"BRCA-guided first-line mCRPC path with traceable molecular evidence ({hrr_gene}).",
+                        "priority": "selected_candidate",
+                        "notes": f"Ruta BRCA de primera línea con biomarcador trazable ({hrr_gene}); se muestra como overlay de precisión y no como sustituto automático de la secuencia estándar ARPI.",
                     }
                 )
             if biomarker_traceable and nccn["prior_arpi"]:

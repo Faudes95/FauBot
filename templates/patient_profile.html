@@ -243,12 +243,17 @@
     {% set data_provenance = profile.data_provenance if profile else [] %}
     {% set clinical_signals = profile.clinical_signals if profile else {} %}
     {% set next_best_action = profile.next_best_action if profile else {} %}
+    {% set decision_vm = profile.profile_decision_view_model if profile and profile.profile_decision_view_model is defined else {} %}
+    {% set profile_decision_consistency = profile.profile_decision_consistency if profile and profile.profile_decision_consistency is defined else {} %}
+    {% set identity_summary = profile.identity_summary if profile and profile.identity_summary is defined else {} %}
     {% set transition_proposals = profile.transition_proposals if profile else [] %}
     {% set transition_resolution = profile.transition_resolution if profile else {} %}
     {% set care_intent_contract = profile.care_intent_contract if profile else {} %}
     {% set longitudinal_truth_snapshot = profile.longitudinal_truth_snapshot if profile else {} %}
     {% set decision_recalculation_trace = profile.decision_recalculation_trace if profile else {} %}
     {% set guideline_followup_plan = profile.guideline_followup_plan if profile else {} %}
+    {% set crpc_copilot = profile.crpc_copilot_bundle if profile and profile.crpc_copilot_bundle is defined else {} %}
+    {% set post_rp_copilot = profile.post_rp_salvage_bundle if profile and profile.post_rp_salvage_bundle is defined else {} %}
     {% set laboratory_intelligence_profile = profile.laboratory_intelligence_profile if profile else {} %}
     {% set latest_clinically_decisive_visit = profile.latest_clinically_decisive_visit if profile else {} %}
     {% set recommendation_audit = profile.recommendation_audit if profile else [] %}
@@ -308,7 +313,7 @@
                     <div class="flex flex-wrap gap-4 text-sm text-slate-400 mt-1">
                         <span>Edad: <b class="text-slate-200">{{ patient.identity.age }} años</b></span>
                         <span>Fecha de diagnóstico: <b class="text-slate-200">{{ patient.identity.diagnosis_date }}</b></span>
-                        <span>Antígeno prostático específico basal: <b class="text-blue-400">{{ patient.baseline.baseline_psa }} ng/mL</b></span>
+                        <span>Antígeno prostático específico basal: <b class="text-blue-400">{{ identity_summary.baseline_psa_display if identity_summary else 'No disponible' }}</b></span>
                         {% if patient.demographics.seguridad_social %}
                         <span>Seguridad social: <b class="text-slate-200">{{ patient.demographics.seguridad_social }}</b></span>
                         {% endif %}
@@ -352,7 +357,7 @@
                 </div>
                 <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
                     <div class="text-xs uppercase tracking-wider text-slate-500">Decisión clínica hoy</div>
-                    <div class="mt-2 text-sm text-slate-200">{{ clinical_compass.primary_clinical_question }}</div>
+                    <div class="mt-2 text-sm text-slate-200">{{ decision_vm.headline if decision_vm else clinical_compass.primary_clinical_question }}</div>
                 </div>
                 <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
                     <div class="text-xs uppercase tracking-wider text-slate-500">Estado de manejo</div>
@@ -361,9 +366,9 @@
                 </div>
                 <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
                     <div class="text-xs uppercase tracking-wider text-slate-500">Último dato decisor</div>
-                    <div class="mt-2 text-sm font-semibold text-white">{{ clinical_compass.last_decisive_data.label }}</div>
-                    <div class="mt-1 text-xs text-slate-400">{{ clinical_compass.last_decisive_data.value }}</div>
-                    <div class="mt-1 text-[11px] text-slate-500">{{ clinical_compass.last_decisive_data.date }}</div>
+                    <div class="mt-2 text-sm font-semibold text-white">{{ decision_vm.last_decisive_data.label if decision_vm else clinical_compass.last_decisive_data.label }}</div>
+                    <div class="mt-1 text-xs text-slate-400">{{ decision_vm.last_decisive_data.value if decision_vm else clinical_compass.last_decisive_data.value }}</div>
+                    <div class="mt-1 text-[11px] text-slate-500">{{ decision_vm.last_decisive_data.date if decision_vm else clinical_compass.last_decisive_data.date }}</div>
                 </div>
             </div>
             {% if clinical_compass.official_diagnosis_status != 'complete' and clinical_compass.official_diagnosis_missing_fields %}
@@ -380,17 +385,21 @@
             {% endif %}
 
             <!-- Alertas Activas -->
-            {% if patient.alerts %}
+            {% set header_alerts = profile.patient_alerts if profile and profile.patient_alerts is defined else patient.alerts %}
+            {% if header_alerts %}
             <div class="mt-4 space-y-2">
-                {% for alert in patient.alerts %}
+                {% for alert in header_alerts %}
                 <div data-alert="{{ alert.id }}" class="flex items-center gap-3 px-4 py-2 rounded-lg border
                     {{ 'bg-red-900/20 border-red-500/30' if alert.severity == 'critical' else 'bg-yellow-900/20 border-yellow-500/30' if alert.severity == 'warning' else 'bg-blue-900/20 border-blue-500/30' }}">
                     <span class="{{ 'text-red-400 alert-pulse' if alert.severity == 'critical' else 'text-yellow-400' if alert.severity == 'warning' else 'text-blue-400' }} text-lg">
                         {{ '🚨' if alert.severity == 'critical' else '⚠️' if alert.severity == 'warning' else 'ℹ️' }}
                     </span>
                     <div class="flex-1">
-                        <span class="font-medium text-white text-sm">{{ alert.title }}</span>
-                        <span class="text-xs text-slate-400 ml-2">{{ alert.description }}</span>
+                        <span class="font-medium text-white text-sm">{{ alert.display_title or alert.title }}</span>
+                        {% set header_alert_description = alert.display_description if alert.display_description is defined else alert.description %}
+                        {% if header_alert_description %}
+                        <span class="text-xs text-slate-400 ml-2">{{ header_alert_description }}</span>
+                        {% endif %}
                     </div>
                     <span class="text-xs text-slate-500">{{ alert.alert_date }}</span>
                     <button onclick="acknowledgeAlert({{ alert.id }}, this)" class="pn-btn pn-btn-secondary px-2 py-1 text-xs whitespace-nowrap">Vista</button>
@@ -522,17 +531,19 @@
         <section class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
             <div class="pn-surface">
                 <div class="text-xs uppercase tracking-wider text-slate-500">Curso de enfermedad</div>
-                <div class="mt-2 text-sm font-semibold text-white">{{ current_course_status or 'Sin estado adjudicado aún.' }}</div>
-                {% if current_response_state.label %}
-                <div class="mt-2 text-xs text-cyan-200">Respuesta actual: {{ current_response_state.label }}</div>
+                <div class="mt-2 text-sm font-semibold text-white">{{ profile.current_course_status_display or current_course_status or 'Sin estado adjudicado aún.' }}</div>
+                {% set response_label = current_response_state.display_label or current_response_state.label %}
+                {% set course_display = (profile.current_course_status_display or current_course_status or '')|lower %}
+                {% if response_label and ('respuesta actual' not in course_display) %}
+                <div class="mt-2 text-xs text-cyan-200">Respuesta actual: {{ response_label }}</div>
                 {% endif %}
             </div>
             <div class="pn-surface">
                 <div class="text-xs uppercase tracking-wider text-slate-500">Último evento adjudicado</div>
-                <div class="mt-2 text-sm font-semibold text-white">{{ last_adjudicated_event.summary if last_adjudicated_event else 'Sin evento adjudicado visible' }}</div>
+                <div class="mt-2 text-sm font-semibold text-white">{{ last_adjudicated_event.display_summary if last_adjudicated_event else 'Sin evento adjudicado visible' }}</div>
                 <div class="mt-2 text-xs text-slate-400">
                     {{ last_adjudicated_event.event_date if last_adjudicated_event and last_adjudicated_event.event_date else '' }}
-                    {% if last_adjudicated_event and last_adjudicated_event.axis %} · {{ last_adjudicated_event.axis }}{% endif %}
+                    {% if last_adjudicated_event and (last_adjudicated_event.display_axis or last_adjudicated_event.axis) %} · {{ last_adjudicated_event.display_axis or last_adjudicated_event.axis }}{% endif %}
                 </div>
             </div>
             <div class="pn-surface">
@@ -547,9 +558,9 @@
             </div>
             <div class="pn-surface">
                 <div class="text-xs uppercase tracking-wider text-slate-500">Perfil trial-like actual</div>
-                <div class="mt-2 text-sm font-semibold text-white">{{ current_trial_comparable_profile.benchmark_family if current_trial_comparable_profile else 'Sin familia comparable priorizada' }}</div>
+                <div class="mt-2 text-sm font-semibold text-white">{{ current_trial_comparable_profile.display_benchmark_family if current_trial_comparable_profile else 'Sin familia comparable priorizada' }}</div>
                 <div class="mt-2 text-xs text-slate-400">
-                    {{ current_trial_comparable_profile.eligibility_status if current_trial_comparable_profile else '' }}
+                    {{ current_trial_comparable_profile.display_eligibility_status if current_trial_comparable_profile else '' }}
                     {% if current_trial_comparable_profile and current_trial_comparable_profile.matched_trials %}
                     · {{ current_trial_comparable_profile.matched_trials | join(', ') }}
                     {% endif %}
@@ -558,11 +569,26 @@
                 <div class="mt-3 text-xs uppercase tracking-wider text-slate-500">Backbone del estudio aplicable</div>
                 <div class="mt-1 text-sm text-cyan-200">{{ current_trial_comparable_profile.recommended_trial_backbone_label }}</div>
                 <div class="mt-2 text-xs text-slate-400">{{ current_trial_comparable_profile.recommended_trial_backbone_note }}</div>
+                {% if current_trial_comparable_profile.recommended_component_drugs %}
+                <div class="mt-3 text-xs uppercase tracking-wider text-slate-500">Componentes, dosis y procedencia</div>
+                <ul class="mt-2 space-y-2 text-xs text-slate-300">
+                    {% for component in current_trial_comparable_profile.recommended_component_drugs %}
+                    <li class="rounded-xl border border-slate-700/80 bg-slate-950/40 px-3 py-2">
+                        <div class="font-semibold text-white">{{ component.drug_name }}</div>
+                        <div class="mt-1">{{ component.dose }}{% if component.route %} · {{ component.route }}{% endif %}{% if component.schedule %} · {{ component.schedule }}{% endif %}</div>
+                        <div class="mt-1 text-slate-400">
+                            {% if component.imss_key %}Clave IMSS: {{ component.imss_key }} · {% endif %}
+                            {{ 'Documento institucional' if component.metadata_source == 'institutional_ingested_document' else 'Catálogo actual' }}
+                        </div>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
                 {% endif %}
                 {% if backbone_alignment and backbone_alignment.alignment_status %}
                 <div class="mt-3 flex flex-wrap items-center gap-2">
                     <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border {{ 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200' if backbone_alignment.alignment_status == 'aligned' else 'border-cyan-500/20 bg-cyan-500/10 text-cyan-200' if backbone_alignment.alignment_status == 'adjacent' else 'border-amber-500/20 bg-amber-500/10 text-amber-200' if backbone_alignment.alignment_status == 'divergent' else 'border-slate-700 bg-slate-950/60 text-slate-300' }}">
-                        {{ backbone_alignment.alignment_status }}
+                        {{ backbone_alignment.display_alignment_status or backbone_alignment.alignment_status }}
                     </span>
                     {% if backbone_alignment.current_regimen_label %}
                     <span class="text-xs text-slate-400">Esquema actual: {{ backbone_alignment.current_regimen_label }}</span>
@@ -616,7 +642,7 @@
                         {% endfor %}
                     </ul>
                     {% if triplet_decision.missing_inputs %}
-                    <div class="mt-3 text-xs text-amber-200">Faltan datos: {{ triplet_decision.missing_inputs | join(', ') }}</div>
+                    <div class="mt-3 text-xs text-amber-200">Faltan datos: {{ (triplet_decision.display_missing_inputs or triplet_decision.missing_inputs) | join(', ') }}</div>
                     {% endif %}
                 </div>
             </div>
@@ -664,7 +690,7 @@
                 <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
                     <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Cohorte similar</div>
                     <div class="mt-3 text-sm font-semibold text-white">n = {{ benchmark_reliability.cohort_size if benchmark_reliability else live_benchmark.cohort_size or 0 }}</div>
-                    <div class="mt-1 text-xs text-slate-400">Tier: {{ benchmark_reliability.cohort_tier if benchmark_reliability else live_benchmark.cohort_tier or 'none' }}</div>
+                    <div class="mt-1 text-xs text-slate-400">Tier: {{ benchmark_reliability.display_cohort_tier if benchmark_reliability else live_benchmark.cohort_tier or 'No disponible' }}</div>
                     {% if live_benchmark.curve and live_benchmark.curve.median_survival is not none %}
                     <div class="mt-3 text-xs text-slate-300">Mediana observada: {{ live_benchmark.curve.median_survival }} meses</div>
                     {% endif %}
@@ -685,7 +711,7 @@
                     <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Lectura clínica</div>
                     <div class="mt-3 text-sm text-slate-300">{{ live_benchmark.narrative or 'Sin lectura clínica adicional.' }}</div>
                     {% if benchmark_reliability and benchmark_reliability.confidence_label %}
-                    <div class="mt-3 text-xs text-slate-400">Confiabilidad: {{ benchmark_reliability.confidence_label }}</div>
+                    <div class="mt-3 text-xs text-slate-400">Confiabilidad: {{ benchmark_reliability.display_confidence_label or benchmark_reliability.confidence_label }}</div>
                     {% endif %}
                 </div>
             </div>
@@ -783,7 +809,7 @@
                         {% endif %}
                         <div class="mt-3 flex flex-wrap items-center gap-2">
                             <span class="px-2 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border {{ 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200' if backbone_alignment.alignment_status == 'aligned' else 'border-cyan-500/20 bg-cyan-500/10 text-cyan-200' if backbone_alignment.alignment_status == 'adjacent' else 'border-amber-500/20 bg-amber-500/10 text-amber-200' if backbone_alignment.alignment_status == 'divergent' else 'border-slate-700 bg-slate-950/60 text-slate-300' }}">
-                                {{ backbone_alignment.alignment_status or 'unknown' }}
+                                {{ backbone_alignment.display_alignment_status or backbone_alignment.alignment_status or 'unknown' }}
                             </span>
                             {% if backbone_alignment.matched_trials %}
                             <span class="text-xs text-slate-400">{{ backbone_alignment.matched_trials | join(', ') }}</span>
@@ -868,14 +894,14 @@
                             </div>
                             <div class="pm-focus-card">
                                 <h3>Decisión hoy</h3>
-                                <p class="mt-3 text-sm font-semibold text-white" data-testid="intent-headline">{{ care_intent_contract.headline or clinical_compass.primary_clinical_question or next_best_action.title or 'Sin decisión prioritaria estructurada' }}</p>
-                                <p class="mt-2 text-sm text-slate-300" data-testid="next-best-action-rationale">{{ care_intent_contract.narrative or next_best_action.rationale or clinical_compass.recommended_direction or 'El copiloto no ha emitido una dirección adicional.' }}</p>
+                                <p class="mt-3 text-sm font-semibold text-white" data-testid="intent-headline">{{ decision_vm.headline if decision_vm else (care_intent_contract.headline or clinical_compass.primary_clinical_question or next_best_action.title or 'Sin decisión prioritaria estructurada') }}</p>
+                                <p class="mt-2 text-sm text-slate-300" data-testid="next-best-action-rationale">{{ decision_vm.narrative if decision_vm else (care_intent_contract.narrative or next_best_action.rationale or clinical_compass.recommended_direction or 'El copiloto no ha emitido una dirección adicional.') }}</p>
                             </div>
                             <div class="pm-focus-card">
                                 <h3>Último dato decisor</h3>
-                                <p class="mt-3 text-sm font-semibold text-white">{{ clinical_compass.last_decisive_data.label if clinical_compass.last_decisive_data else 'Sin dato decisor principal' }}</p>
-                                <p class="mt-2 text-sm text-slate-300">{{ clinical_compass.last_decisive_data.value if clinical_compass.last_decisive_data else 'Completar captura estructurada.' }}</p>
-                                <p class="mt-2 text-xs text-slate-500">{{ clinical_compass.last_decisive_data.date if clinical_compass.last_decisive_data else '' }}</p>
+                                <p class="mt-3 text-sm font-semibold text-white">{{ decision_vm.last_decisive_data.label if decision_vm else (clinical_compass.last_decisive_data.label if clinical_compass.last_decisive_data else 'Sin dato decisor principal') }}</p>
+                                <p class="mt-2 text-sm text-slate-300">{{ decision_vm.last_decisive_data.value if decision_vm else (clinical_compass.last_decisive_data.value if clinical_compass.last_decisive_data else 'Completar captura estructurada.') }}</p>
+                                <p class="mt-2 text-xs text-slate-500">{{ decision_vm.last_decisive_data.date if decision_vm else (clinical_compass.last_decisive_data.date if clinical_compass.last_decisive_data else '') }}</p>
                             </div>
                             <div class="pm-focus-card">
                                 <h3>Seguridad activa</h3>
@@ -935,7 +961,7 @@
                                 <h3>Captura obligada</h3>
                                 <ul>
                                     {% for action in missing_input_actions[:4] %}
-                                    <li>{{ action.title }}</li>
+                                    <li>{{ action.display_label or action.title }}</li>
                                     {% else %}
                                     <li>Sin tareas de captura obligada abiertas.</li>
                                     {% endfor %}
@@ -1071,6 +1097,172 @@
         </section>
         {% endif %}
 
+        {% if crpc_copilot and crpc_copilot.show_card %}
+        <section id="profile-crpc-copilot" class="pn-surface border border-fuchsia-700/30 bg-fuchsia-950/10" data-testid="crpc-copilot-card">
+            <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
+                <div>
+                    <div class="text-xs uppercase tracking-[0.2em] text-fuchsia-300">Copiloto CRPC</div>
+                    <h2 class="mt-2 text-lg font-bold text-white">Recalculo longitudinal para progresión bajo ADT, M0-CRPC y M1-CRPC</h2>
+                    <p class="mt-2 text-sm text-slate-300">{{ (crpc_copilot.why_changed_today or [])|join(' ') or 'Sin cambio longitudinal CRPC visible todavía.' }}</p>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 xl:max-w-sm">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Modo / estado</div>
+                    <div class="mt-2 text-sm font-semibold text-white" data-testid="crpc-runtime-mode">{{ crpc_copilot.runtime_mode or 'shadow' }}</div>
+                    <p class="mt-2 text-sm text-slate-300">{{ crpc_copilot.state_family or clinical_signals.effective_state_final or clinical_compass.current_stage_label }}</p>
+                    <div class="mt-3 text-xs text-slate-400">QA: {{ 'aprobado' if crpc_copilot.qa_validation and crpc_copilot.qa_validation.approved else 'pendiente / bloqueado' }}</div>
+                    <div class="mt-1 text-xs text-slate-400">Concordancia: {{ crpc_copilot.ai_advisory_overlay.concordance_label if crpc_copilot.ai_advisory_overlay else 'rule_only' }}</div>
+                </div>
+            </div>
+            <div class="mt-5 grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <div class="rounded-xl border border-emerald-500/20 bg-emerald-950/10 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Decisión primaria NCCN/EAU</div>
+                    <div class="mt-2 text-base font-semibold text-white" data-testid="crpc-primary-action">{{ crpc_copilot.rule_based_recommendation.recommended_action or 'Sin recomendación primaria estructurada' }}</div>
+                    <p class="mt-2 text-sm text-slate-300">{{ crpc_copilot.rule_based_recommendation.rationale or 'La capa rule-based sigue siendo la fuente primaria de verdad clínica.' }}</p>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in crpc_copilot.rule_based_recommendation.guideline_basis or [] %}
+                        <li>{{ item }}</li>
+                        {% else %}
+                        <li>Sin provenance adicional visible.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <div class="rounded-xl border border-fuchsia-500/20 bg-fuchsia-950/20 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Overlay asesor AI</div>
+                    <div class="mt-2 text-base font-semibold text-white" data-testid="crpc-overlay-action">{{ crpc_copilot.ai_advisory_overlay.recommended_action or 'Sin overlay elegible todavía' }}</div>
+                    <p class="mt-2 text-sm text-slate-300">
+                        {% if crpc_copilot.runtime_mode == 'shadow' %}
+                        Shadow mode: el overlay se calcula, audita y compara, pero no reemplaza la decisión primaria.
+                        {% else %}
+                        Advisory mode: solo puede mostrarse como recomendación final si pasa QA y no existen blockers duros.
+                        {% endif %}
+                    </p>
+                    <div class="mt-3 text-xs text-slate-400">Estado overlay: {{ crpc_copilot.ai_advisory_overlay.status or crpc_copilot.status or 'shadow' }}</div>
+                    <div class="mt-1 text-xs text-slate-400">Confianza compuesta: {{ crpc_copilot.confidence.composite_score if crpc_copilot.confidence else 0 }}/100</div>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in crpc_copilot.ai_advisory_overlay.shadow_reasons or [] %}
+                        <li>{{ item }}</li>
+                        {% else %}
+                        <li>Sin caveats adicionales.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+            <div class="mt-5 grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Secuencia priorizada</div>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in crpc_copilot.sequence_candidates or [] %}
+                        <li>{{ item.drug_label }}{% if item.blocked %} · Bloqueado por {{ (item.blocked_by or [])|join(', ') }}{% endif %}</li>
+                        {% else %}
+                        <li>Sin candidatos secuenciados todavía.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Safety gates</div>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in crpc_copilot.safety_gates or [] %}
+                        <li>{{ item.label }}: {{ item.status }}{% if item.rationale %} · {{ item.rationale }}{% endif %}</li>
+                        {% else %}
+                        <li>Sin bloqueos de seguridad estructurados.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Datos que cambian conducta hoy</div>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in crpc_copilot.blocking_inputs or [] %}
+                        <li>{{ item.group_label }}{% if item.required_fields %} · Requiere {{ (item.required_fields or [])|join(', ') }}{% endif %}</li>
+                        {% else %}
+                        <li>Sin blockers CRPC visibles.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+        </section>
+        {% endif %}
+
+        {% if post_rp_copilot and post_rp_copilot.show_card %}
+        <section id="profile-post-rp-copilot" class="pn-surface border border-cyan-700/30 bg-cyan-950/10" data-testid="post-rp-copilot-card">
+            <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
+                <div>
+                    <div class="text-xs uppercase tracking-[0.2em] text-cyan-300">Copiloto post-RP</div>
+                    <h2 class="mt-2 text-lg font-bold text-white">Recalculo longitudinal para PSA persistente, BCR verdadera y ventana de salvage</h2>
+                    <p class="mt-2 text-sm text-slate-300">{{ (post_rp_copilot.why_changed_today or [])|join(' ') or 'Sin cambio longitudinal post-RP visible todavía.' }}</p>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 xl:max-w-sm">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Curso / ventana</div>
+                    <div class="mt-2 text-sm font-semibold text-white" data-testid="post-rp-course">{{ post_rp_copilot.post_prostatectomy_course or 'no definido' }}</div>
+                    <p class="mt-2 text-sm text-slate-300">{{ post_rp_copilot.salvage_window_status or 'closed' }}</p>
+                    <div class="mt-3 text-xs text-slate-400">QA: {{ 'aprobado' if post_rp_copilot.qa_validation and post_rp_copilot.qa_validation.approved else 'pendiente / bloqueado' }}</div>
+                    <div class="mt-1 text-xs text-slate-400">Concordancia: {{ post_rp_copilot.ai_advisory_overlay.concordance_label if post_rp_copilot.ai_advisory_overlay else 'rule_only' }}</div>
+                </div>
+            </div>
+            <div class="mt-5 grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <div class="rounded-xl border border-emerald-500/20 bg-emerald-950/10 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Decisión primaria NCCN/EAU</div>
+                    <div class="mt-2 text-base font-semibold text-white" data-testid="post-rp-primary-action">{{ post_rp_copilot.rule_based_recommendation.recommended_action or 'Sin recomendación primaria estructurada' }}</div>
+                    <p class="mt-2 text-sm text-slate-300">{{ post_rp_copilot.rule_based_recommendation.rationale or 'La capa rule-based sigue siendo la fuente primaria de verdad clínica.' }}</p>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in post_rp_copilot.rule_based_recommendation.guideline_basis or [] %}
+                        <li>{{ item }}</li>
+                        {% else %}
+                        <li>Sin provenance adicional visible.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <div class="rounded-xl border border-cyan-500/20 bg-cyan-950/20 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Overlay asesor AI</div>
+                    <div class="mt-2 text-base font-semibold text-white" data-testid="post-rp-overlay-action">{{ post_rp_copilot.ai_advisory_overlay.recommended_action or 'Sin overlay elegible todavía' }}</div>
+                    <p class="mt-2 text-sm text-slate-300">
+                        {% if post_rp_copilot.runtime_mode == 'shadow' %}
+                        Shadow mode: el overlay se calcula, audita y compara, pero no reemplaza la decisión primaria.
+                        {% else %}
+                        Advisory mode: solo puede mostrarse como recomendación final si pasa QA y no existen blockers duros.
+                        {% endif %}
+                    </p>
+                    <div class="mt-3 text-xs text-slate-400">Estado overlay: {{ post_rp_copilot.ai_advisory_overlay.status or post_rp_copilot.status or 'shadow' }}</div>
+                    <div class="mt-1 text-xs text-slate-400">Confianza compuesta: {{ post_rp_copilot.confidence.composite_score if post_rp_copilot.confidence else 0 }}/100</div>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in post_rp_copilot.ai_advisory_overlay.shadow_reasons or [] %}
+                        <li>{{ item }}</li>
+                        {% else %}
+                        <li>Sin caveats adicionales.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+            <div class="mt-5 grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Ventana de salvage</div>
+                    <div class="mt-2 text-base font-semibold text-white" data-testid="post-rp-window">{{ post_rp_copilot.salvage_window_status or 'closed' }}</div>
+                    <p class="mt-2 text-sm text-slate-300">{{ post_rp_copilot.salvage_window_reason or 'Sin razonamiento adicional visible.' }}</p>
+                    <div class="mt-3 text-xs text-slate-400">Ruta local: {{ post_rp_copilot.local_salvage_pathway.recommended_path or 'No dominante' }}</div>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Safety gates</div>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in post_rp_copilot.safety_gates or [] %}
+                        <li>{{ item.label }}: {{ item.status }}{% if item.rationale %} · {{ item.rationale }}{% endif %}</li>
+                        {% else %}
+                        <li>Sin bloqueos de seguridad estructurados.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Datos que cambian conducta</div>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in post_rp_copilot.blocking_inputs or [] %}
+                        <li>{{ item.group_label }}{% if item.required_fields %} · Requiere {{ (item.required_fields or [])|join(', ') }}{% endif %}</li>
+                        {% else %}
+                        <li>Sin blockers post-RP visibles.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+        </section>
+        {% endif %}
+
         {% if missing_input_actions %}
         <section class="pn-surface border border-amber-500/30 bg-amber-950/10">
             <div class="flex items-start justify-between gap-4 mb-4">
@@ -1084,18 +1276,18 @@
                 <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
                     <div class="flex items-start justify-between gap-3">
                         <div>
-                            <div class="text-sm font-semibold text-white">{{ action.title }}</div>
-                            <div class="mt-1 text-xs text-slate-500 uppercase tracking-wider">{{ action.capture_target }}</div>
+                            <div class="text-sm font-semibold text-white">{{ action.display_label or action.title }}</div>
+                            <div class="mt-1 text-xs text-slate-500 uppercase tracking-wider">{{ action.display_group or action.display_capture_target or 'Captura clínica' }}</div>
                         </div>
                         <button type="button" class="pn-btn pn-btn-primary px-3 py-2 text-xs" onclick='openVisitModal({{ action.agenda_id if action.agenda_id else "null" }}, {{ action|tojson|safe }})'>
-                            {{ action.action_label }}
+                            {{ action.display_cta or action.action_label }}
                         </button>
                     </div>
-                    <p class="mt-2 text-sm text-slate-300">{{ action.rationale }}</p>
-                    <div class="mt-2 text-xs text-slate-500">Impacta: {{ action.decision_affected or 'decisión clínica' }} · módulo {{ action.module_owner or 'copilot' }}</div>
+                    <p class="mt-2 text-sm text-slate-300">{{ action.display_why_now or action.rationale }}</p>
+                    <div class="mt-2 text-xs text-cyan-200">{{ action.display_impact or 'Si se completa hoy, puede recalcular la decisión clínica.' }}</div>
                     <div class="mt-3 text-xs uppercase tracking-wider text-slate-500">Variables a completar</div>
                     <ul class="mt-2 space-y-2 text-sm text-slate-300 list-disc pl-5">
-                        {% for field in action.fields %}
+                        {% for field in action.display_fields_summary or action.fields %}
                         <li>{{ field }}</li>
                         {% endfor %}
                     </ul>
@@ -1112,7 +1304,7 @@
                     <div class="text-xs uppercase tracking-[0.2em] text-emerald-300">Brújula clínica actual</div>
                     <div class="sr-only">Síntesis clínica vigente · Última evaluación clínica modular</div>
                     <h2 class="mt-2 text-2xl font-bold text-white">{{ clinical_compass.official_diagnosis or clinical_compass.current_diagnosis }}</h2>
-                    <p class="mt-2 text-sm text-slate-300">{{ clinical_compass.recommended_direction or assessment_nccn.get('resumen_del_caso') or assessment_report.get('summary') }}</p>
+                    <p class="mt-2 text-sm text-slate-300">{{ decision_vm.narrative if decision_vm else (clinical_compass.recommended_direction or assessment_nccn.get('resumen_del_caso') or assessment_report.get('summary')) }}</p>
                     <div class="mt-4 flex flex-wrap gap-2">
                         <span class="px-2.5 py-1 rounded-full text-[11px] uppercase tracking-[0.18em] border border-cyan-500/20 bg-cyan-500/10 text-cyan-200">{{ clinical_compass.current_stage_label }}</span>
                         {% if clinical_compass.operational_module_label and clinical_compass.operational_module_label != clinical_compass.current_stage_label %}
@@ -1136,16 +1328,21 @@
                 </div>
                 <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 xl:max-w-sm">
                     <div class="text-xs uppercase tracking-wider text-slate-500">Dirección clínica recomendada</div>
-                    <div class="mt-2 text-sm font-semibold text-white">{{ clinical_compass.recommendation_family or clinical_compass.current_stage_label or assessment_nccn.get('titulo_clinico') or assessment_nccn.get('label') }}</div>
-                    <p class="mt-2 text-sm text-slate-300">{{ clinical_compass.recommended_direction }}</p>
+                    <div class="mt-2 text-sm font-semibold text-white">{{ decision_vm.recommendation_family if decision_vm else (clinical_compass.recommendation_family or clinical_compass.current_stage_label or assessment_nccn.get('titulo_clinico') or assessment_nccn.get('label')) }}</div>
+                    <p class="mt-2 text-sm text-slate-300">{{ decision_vm.narrative if decision_vm else clinical_compass.recommended_direction }}</p>
                     <div class="mt-3 text-xs text-slate-500 uppercase tracking-wider">Familia recomendada</div>
-                    <p class="mt-1 text-sm text-cyan-200">{{ clinical_compass.recommendation_family }}</p>
+                    <p class="mt-1 text-sm text-cyan-200">{{ decision_vm.recommendation_family if decision_vm else clinical_compass.recommendation_family }}</p>
+                    {% if profile_decision_consistency and not profile_decision_consistency.is_consistent %}
+                    <div class="mt-3 rounded-lg border border-amber-500/20 bg-amber-950/20 px-3 py-2 text-xs text-amber-200">
+                        La vista está priorizando la intención clínica reconciliada vigente sobre narrativas históricas del assessment basal.
+                    </div>
+                    {% endif %}
                 </div>
             </div>
             <div class="mt-5 grid grid-cols-1 lg:grid-cols-3 gap-4">
                 <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
                     <div class="text-xs uppercase tracking-wider text-slate-500">Qué decisión clínica se está tomando hoy</div>
-                    <p class="mt-2 text-sm text-white">{{ clinical_compass.primary_clinical_question }}</p>
+                    <p class="mt-2 text-sm text-white">{{ decision_vm.headline if decision_vm else clinical_compass.primary_clinical_question }}</p>
                     <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
                         {% for item in clinical_compass.why_this_now %}
                         <li>{{ item }}</li>
@@ -1237,13 +1434,13 @@
                         {{ latest_clinically_decisive_visit.visit_date or decision_recalculation_trace.latest_clinically_decisive_visit.visit_date or 'Sin visita decisiva documentada' }}
                     </div>
                     <div class="mt-2 text-xs text-slate-400">
-                        {{ latest_clinically_decisive_visit.source_type or decision_recalculation_trace.latest_clinically_decisive_visit.source_type or 'assessment' }}
-                        · {{ decision_recalculation_trace.visibility_status or 'contextual' }}
+                        {{ latest_clinically_decisive_visit.display_source_type or decision_recalculation_trace.latest_clinically_decisive_visit.display_source_type or 'Assessment modular' }}
+                        · {{ decision_recalculation_trace.display_visibility_status or 'Contextual' }}
                     </div>
                     {% if latest_clinically_decisive_visit.changed_fields or latest_clinically_decisive_visit.fields_changed or decision_recalculation_trace.superseded_inputs %}
                     <div class="mt-3 text-xs text-slate-400">
                         Campos decisivos:
-                        {{ (latest_clinically_decisive_visit.changed_fields or latest_clinically_decisive_visit.fields_changed or [])|join(', ') if (latest_clinically_decisive_visit.changed_fields or latest_clinically_decisive_visit.fields_changed) else (decision_recalculation_trace.superseded_inputs[:3] | map(attribute='field_name') | join(', ')) }}
+                        {{ (latest_clinically_decisive_visit.display_changed_fields or [])|join(', ') if latest_clinically_decisive_visit.display_changed_fields else (decision_recalculation_trace.display_changed_fields or [])|join(', ') }}
                     </div>
                     {% endif %}
                 </div>
@@ -1478,7 +1675,7 @@
                     {% if panel.missing_inputs %}
                     <div class="mt-4 rounded-xl border border-amber-500/20 bg-amber-950/10 p-3">
                         <div class="text-xs uppercase tracking-wider text-slate-500">Faltan inputs que cambian conducta</div>
-                        <div class="mt-2 text-sm text-amber-200">{{ panel.missing_inputs|join(', ') }}</div>
+                        <div class="mt-2 text-sm text-amber-200">{{ (panel.display_missing_inputs or panel.missing_inputs)|join(', ') }}</div>
                     </div>
                     {% endif %}
                     {% if panel.bullets %}
@@ -1541,7 +1738,7 @@
                         <div class="text-xs uppercase tracking-wider text-slate-500">Datos usados / faltantes</div>
                         {% if tool.inputs_used %}
                         <ul class="mt-2 space-y-2 text-sm text-slate-300 list-disc pl-5">
-                            {% for item in tool.inputs_used %}
+                            {% for item in tool.display_inputs_used or tool.inputs_used %}
                             <li>{{ item }}</li>
                             {% endfor %}
                         </ul>
@@ -1550,7 +1747,7 @@
                         {% endif %}
                         {% if tool.missing_inputs %}
                         <div class="mt-3 text-xs uppercase tracking-wider text-amber-200">Faltan</div>
-                        <div class="mt-2 text-sm text-amber-100">{{ tool.missing_inputs|join(', ') }}</div>
+                        <div class="mt-2 text-sm text-amber-100">{{ (tool.display_missing_inputs or tool.missing_inputs)|join(', ') }}</div>
                         {% endif %}
                     </div>
                     <div class="mt-3 text-xs text-slate-400">
@@ -1694,7 +1891,7 @@
                         <div class="rounded-xl border border-slate-700/80 bg-slate-950/40 p-3">
                             <div class="text-xs uppercase tracking-wider text-slate-500">Inputs usados</div>
                             <ul class="mt-2 space-y-1 text-sm text-slate-300 list-disc pl-5">
-                                {% for item in algorithm.inputs_used %}
+                                {% for item in algorithm.display_inputs_used or algorithm.inputs_used %}
                                 <li>{{ item }}</li>
                                 {% endfor %}
                             </ul>
@@ -1704,7 +1901,7 @@
                         <div class="rounded-xl border border-amber-500/20 bg-amber-950/10 p-3">
                             <div class="text-xs uppercase tracking-wider text-slate-500">Inputs faltantes</div>
                             <ul class="mt-2 space-y-1 text-sm text-amber-200 list-disc pl-5">
-                                {% for item in algorithm.missing_inputs %}
+                                {% for item in algorithm.display_missing_inputs or algorithm.missing_inputs %}
                                 <li>{{ item }}</li>
                                 {% endfor %}
                             </ul>
@@ -2177,10 +2374,10 @@
                             <div class="mt-3 space-y-3">
                                 {% for item in data_provenance %}
                                 <div class="rounded-lg border border-slate-700/80 bg-slate-950/40 p-3">
-                                    <div class="text-sm font-medium text-white">{{ item.field_name }}</div>
-                                    <div class="mt-1 text-xs text-slate-400">{{ item.source_type }} · {{ item.source_date or item.created_at }}</div>
+                                    <div class="text-sm font-medium text-white">{{ item.display_field_name or item.field_name }}</div>
+                                    <div class="mt-1 text-xs text-slate-400">{{ item.display_source_type or item.source_type }} · {{ item.source_date or item.created_at }}</div>
                                     {% if item.value is not none %}
-                                    <div class="mt-2 text-xs text-slate-300">{{ item.value }}</div>
+                                    <div class="mt-2 text-xs text-slate-300">{{ item.display_value or item.value }}</div>
                                     {% endif %}
                                 </div>
                                 {% else %}
@@ -2309,16 +2506,16 @@
                             </div>
                         </div>
                         <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
-                            <div class="text-xs uppercase tracking-wider text-slate-500">Facts verificados recientes</div>
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Datos verificados recientes</div>
                             <div class="mt-3 space-y-2">
                                 {% for fact in document_board.verified_today or [] %}
                                 <div class="rounded-lg border border-slate-700/80 bg-slate-950/40 p-3">
-                                    <div class="text-sm font-medium text-white">{{ fact.field_name }}</div>
-                                    <div class="mt-1 text-xs text-slate-400">{{ fact.fact_group }} · {{ fact.source_date or fact.created_at }}</div>
-                                    <div class="mt-2 text-xs text-slate-300">{{ fact.value }}</div>
+                                    <div class="text-sm font-medium text-white">{{ fact.display_field_name or fact.field_name }}</div>
+                                    <div class="mt-1 text-xs text-slate-400">{{ fact.display_fact_group or fact.fact_group }} · {{ fact.source_date or fact.created_at }}</div>
+                                    <div class="mt-2 text-xs text-slate-300">{{ fact.display_value or fact.value }}</div>
                                 </div>
                                 {% else %}
-                                <div class="text-sm text-slate-300">Sin facts verificados recientes.</div>
+                                <div class="text-sm text-slate-300">Sin datos verificados recientes.</div>
                                 {% endfor %}
                             </div>
                         </div>
@@ -2548,7 +2745,7 @@
             <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
                 <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4 xl:col-span-2">
                     <div class="text-xs uppercase tracking-wider text-slate-500">Observación longitudinal de PSA</div>
-                    <div class="mt-2 text-sm text-slate-300">Fuente principal: {{ psa_observability.source or 'missing' }}</div>
+                    <div class="mt-2 text-sm text-slate-300">Fuente principal: {{ psa_observability.display_source or psa_observability.source or 'No disponible' }}</div>
                     <div class="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-3">
                         <div class="rounded-lg border border-slate-700/80 bg-slate-950/40 p-3">
                             <div class="text-xs text-slate-500 uppercase">Actual</div>
@@ -2599,7 +2796,7 @@
                     </p>
                 </div>
                 <span class="px-3 py-2 rounded-full text-[11px] uppercase tracking-[0.18em] border {{ 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200' if forecast_reliability.confidence_label == 'high' else 'border-cyan-500/20 bg-cyan-500/10 text-cyan-200' if forecast_reliability.confidence_label == 'medium' else 'border-amber-500/20 bg-amber-500/10 text-amber-200' if forecast_reliability.confidence_label == 'low' else 'border-slate-700 bg-slate-950/60 text-slate-300' }}">
-                    {{ forecast_reliability.confidence_label or psa_forecast.status }}
+                    {{ forecast_reliability.display_confidence_label or forecast_reliability.confidence_label or psa_forecast.status_label or 'No disponible' }}
                 </span>
             </div>
             <div class="mt-5 grid grid-cols-1 xl:grid-cols-4 gap-4">
@@ -3305,9 +3502,9 @@
                 <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                     {% for item in data_provenance %}
                     <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
-                        <div class="text-sm font-semibold text-white">{{ item.field_name }}</div>
-                        <div class="mt-1 text-xs text-slate-400">{{ item.source_type }} · {{ item.source_date or item.created_at }}</div>
-                        <div class="mt-2 text-xs text-slate-300">{{ item.value }}</div>
+                        <div class="text-sm font-semibold text-white">{{ item.display_field_name or item.field_name }}</div>
+                        <div class="mt-1 text-xs text-slate-400">{{ item.display_source_type or item.source_type }} · {{ item.source_date or item.created_at }}</div>
+                        <div class="mt-2 text-xs text-slate-300">{{ item.display_value or item.value }}</div>
                     </div>
                     {% endfor %}
                 </div>
@@ -3412,19 +3609,22 @@
                         {% if alert.severity == 'critical' %}!!{% elif alert.severity == 'warning' %}!{% else %}i{% endif %}
                     </span>
                     <div class="flex-1">
-                        <div class="font-medium text-white text-sm">{{ alert.title }}</div>
-                        <div class="text-xs text-slate-300 mt-1">{{ alert.message }}</div>
-                        {% if alert.recommended_action %}
-                        <div class="text-xs text-cyan-400 mt-1">{{ alert.recommended_action }}</div>
+                        <div class="font-medium text-white text-sm">{{ alert.display_title or alert.title }}</div>
+                        {% set copilot_alert_message = alert.display_message if alert.display_message is defined else alert.message %}
+                        {% if copilot_alert_message %}
+                        <div class="text-xs text-slate-300 mt-1">{{ copilot_alert_message }}</div>
                         {% endif %}
-                        {% if alert.guideline_reference %}
-                        <div class="text-[11px] text-slate-500 mt-1">{{ alert.guideline_reference }}</div>
+                        {% if alert.display_recommended_action or alert.recommended_action %}
+                        <div class="text-xs text-cyan-400 mt-1">{{ alert.display_recommended_action or alert.recommended_action }}</div>
                         {% endif %}
-                        {% if alert.fields_to_capture %}
-                        <div class="mt-2 text-[11px] text-slate-400">Captura esperada: {{ alert.fields_to_capture|join(', ') }}</div>
+                        {% if alert.display_guideline_reference or alert.guideline_reference %}
+                        <div class="text-[11px] text-slate-500 mt-1">{{ alert.display_guideline_reference or alert.guideline_reference }}</div>
+                        {% endif %}
+                        {% if alert.display_fields_to_capture or alert.fields_to_capture %}
+                        <div class="mt-2 text-[11px] text-slate-400">Completar para recalcular: {{ (alert.display_fields_to_capture or alert.fields_to_capture)|join(', ') }}</div>
                         {% endif %}
                         {% if alert.linked_encounter_keys %}
-                        <div class="mt-2 text-[11px] text-cyan-200">Encounter vinculado: {{ alert.linked_encounter_keys|join(', ') }}</div>
+                        <div class="mt-2 text-[11px] text-cyan-200">Contexto vinculado: {{ alert.linked_encounter_keys|join(', ') }}</div>
                         {% endif %}
                     </div>
                     <div class="text-right shrink-0 space-y-2">
@@ -3568,7 +3768,7 @@
                     {% else %}
                     <div class="text-sm font-semibold text-amber-200">Incompleto</div>
                     <div class="mt-2 text-sm text-slate-300">{{ cci.what_score_means }}</div>
-                    <div class="mt-2 text-xs text-slate-400">Faltan: {{ cci.missing_inputs|join(', ') }}</div>
+                    <div class="mt-2 text-xs text-slate-400">Faltan: {{ (cci.display_missing_inputs or cci.missing_inputs)|join(', ') }}</div>
                     {% endif %}
                 </div>
                 {% endif %}
@@ -3589,7 +3789,7 @@
                     {% else %}
                     <div class="text-sm font-semibold text-amber-200">Incompleto</div>
                     <div class="mt-2 text-sm text-slate-300">{{ g8.what_score_means }}</div>
-                    <div class="mt-2 text-xs text-slate-400">Faltan: {{ g8.missing_inputs|join(', ') }}</div>
+                    <div class="mt-2 text-xs text-slate-400">Faltan: {{ (g8.display_missing_inputs or g8.missing_inputs)|join(', ') }}</div>
                     {% endif %}
                 </div>
                 {% endif %}
@@ -3707,11 +3907,12 @@
             <summary class="flex items-center justify-between gap-3">
                 <div>
                     <h2 class="text-lg font-bold text-white">Fitness Terapéutica</h2>
-                    <p class="mt-1 text-sm text-slate-400">Función orgánica, fragilidad y aptitud para intensificación.
-                    {% if tfit.fit_score %}
-                    <span class="ml-2 px-2 py-0.5 rounded-full text-xs font-bold {{ 'bg-green-600' if tfit.fit_score.category == 'Fit' else ('bg-amber-600' if tfit.fit_score.category == 'Vulnerable' else 'bg-red-600') }} text-white">{{ tfit.fit_score.category }}</span>
-                    {% endif %}
-                    </p>
+                    <div class="mt-1 flex flex-wrap items-center gap-2">
+                        <p class="text-sm text-slate-400">Función orgánica, fragilidad y aptitud para intensificación.</p>
+                        {% if tfit.fit_score %}
+                        <span class="px-2 py-0.5 rounded-full text-xs font-bold {{ 'bg-green-600' if tfit.fit_score.category == 'Fit' else ('bg-amber-600' if tfit.fit_score.category == 'Vulnerable' else 'bg-red-600') }} text-white">{{ tfit.fit_score.category_label or tfit.fit_score.category }}</span>
+                        {% endif %}
+                    </div>
                 </div>
             </summary>
             <div class="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -3756,12 +3957,12 @@
                 <div class="rounded-lg p-3 border {{ 'border-red-700 bg-red-900/30' if tfit.frailty.status in ['Frail', 'Incomplete'] else ('border-amber-700 bg-amber-900/30' if tfit.frailty.status == 'Pre-frail' else 'border-green-700 bg-green-900/30') }}">
                     <div class="flex items-center justify-between mb-1">
                         <span class="text-sm font-semibold text-white">Fragilidad (Fried)</span>
-                        <span class="text-lg font-bold {{ 'text-red-400' if tfit.frailty.status in ['Frail', 'Incomplete'] else ('text-amber-400' if tfit.frailty.status == 'Pre-frail' else 'text-green-400') }}">{{ tfit.frailty.status }}</span>
+                        <span class="text-lg font-bold {{ 'text-red-400' if tfit.frailty.status in ['Frail', 'Incomplete'] else ('text-amber-400' if tfit.frailty.status == 'Pre-frail' else 'text-green-400') }}">{{ tfit.frailty.status_label or tfit.frailty.status }}</span>
                     </div>
                     {% if tfit.frailty.is_complete %}
                     <p class="text-xs text-slate-400">{{ tfit.frailty.criteria_met }}/{{ tfit.frailty.max_criteria }} criterios</p>
                     {% else %}
-                    <p class="text-xs text-slate-400">Faltan: {{ tfit.frailty.missing_inputs|join(', ') }}</p>
+                    <p class="text-xs text-slate-400">Faltan: {{ (tfit.frailty.display_missing_inputs or tfit.frailty.missing_inputs)|join(', ') }}</p>
                     {% endif %}
                     {% if tfit.frailty.clinical_actions %}
                     <div class="mt-2">
@@ -3800,13 +4001,13 @@
                 <div class="rounded-lg p-3 border {{ 'border-red-700 bg-red-900/30' if tfit.fit_score.category in ['Frail', 'Incomplete'] else ('border-amber-700 bg-amber-900/30' if tfit.fit_score.category == 'Vulnerable' else 'border-green-700 bg-green-900/30') }} md:col-span-2">
                     <div class="flex items-center justify-between mb-2">
                         <span class="text-sm font-semibold text-white">Treatment Fit Score</span>
-                        <span class="px-3 py-1 rounded-full text-sm font-bold {{ 'bg-green-600' if tfit.fit_score.category == 'Fit' else ('bg-amber-600' if tfit.fit_score.category == 'Vulnerable' else 'bg-red-600') }} text-white">{{ tfit.fit_score.category }}{% if tfit.fit_score.penalty_score is not none %} (penalty: {{ tfit.fit_score.penalty_score }}){% endif %}</span>
+                        <span class="px-3 py-1 rounded-full text-sm font-bold {{ 'bg-green-600' if tfit.fit_score.category == 'Fit' else ('bg-amber-600' if tfit.fit_score.category == 'Vulnerable' else 'bg-red-600') }} text-white">{{ tfit.fit_score.category_label or tfit.fit_score.category }}{% if tfit.fit_score.penalty_score is not none %} (penalty: {{ tfit.fit_score.penalty_score }}){% endif %}</span>
                     </div>
                     {% if tfit.fit_score.recommended_intensity %}
                     <p class="mt-2 text-xs text-cyan-300 font-medium">{{ tfit.fit_score.recommended_intensity }}</p>
                     {% endif %}
                     {% if not tfit.fit_score.is_complete %}
-                    <p class="mt-2 text-xs text-slate-400">Faltan: {{ tfit.fit_score.missing_inputs|join(', ') }}</p>
+                    <p class="mt-2 text-xs text-slate-400">Faltan: {{ (tfit.fit_score.display_missing_inputs or tfit.fit_score.missing_inputs)|join(', ') }}</p>
                     {% endif %}
                 </div>
                 {% endif %}
@@ -5445,6 +5646,7 @@
             [
                 'profile-executive-summary',
                 'profile-next-best-action',
+                'profile-crpc-copilot',
                 'profile-decision-trace',
                 'profile-labs-intelligence',
                 'profile-agenda',

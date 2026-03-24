@@ -11,6 +11,9 @@ from prostanet.domains.patient_tracking.mhspc_evidence import (
     build_triplet_decision,
     build_visible_mhspc_trial_matches,
 )
+from prostanet.domains.patient_tracking.mhspc_regimen_selector import (
+    select_mhspc_frontline_regimens,
+)
 from prostanet.shared.contracts import evaluation_result
 from prostanet.shared.recommendation_enrichment import enrich_evaluation_result
 
@@ -41,20 +44,12 @@ class McspcOligoMetachronousService:
             payload,
             triplet_decision=triplet_decision,
         )
-        treatments = []
+        selector_bundle = select_mhspc_frontline_regimens(self.module_id, payload)
+        treatments = list(selector_bundle.get("eligible_treatments") or [])
         if nccn["mdt_candidate"]:
             treatments.append({"name": "Metastasis-directed therapy", "priority": "selected_candidate", "notes": "Limited metachronous burden supports MDT discussion in tumor board."})
         if nccn["prefer_akeega"]:
             treatments.append({"name": "ADT + Niraparib + Abiraterone", "priority": "preferred", "notes": "Ruta de precisión para BRCA2 trazable en enfermedad sensible a la castración."})
-        daro_priority = "preferred" if nccn["prefer_darolutamide"] else "eligible"
-        treatments.append({"name": "ADT + Darolutamida", "priority": daro_priority, "notes": "Backbone tipo ARANOTE visible cuando se evita sobreextrapolar tripletes o se privilegia seguridad relativa."})
-        if nccn["prefer_enzalutamide"]:
-            treatments.append({"name": "ADT + Enzalutamida", "priority": "preferred", "notes": self._note_for(legacy, "Enzalutamida")})
-        if nccn["prefer_abiraterone"]:
-            treatments.append({"name": "ADT + Abiraterona", "priority": "eligible", "notes": self._note_for(legacy, "Abiraterona")})
-        if nccn["rezvilutamide_candidate"]:
-            treatments.append({"name": "ADT + Rezvilutamida", "priority": "eligible", "notes": "Opción soportada por EAU 2026 cuando se selecciona doblete hormonal."})
-        treatments.append({"name": "ADT + Apalutamida", "priority": "eligible", "notes": self._note_for(legacy, "Apalutamida")})
         if str(payload.get("metastasis_site", "Bone")) == "Bone":
             treatments.append({"name": "Calcio + vitamina D", "priority": "selected_candidate", "notes": "Bundle basal de salud ósea."})
             if not nccn["bone_protection_started"]:
@@ -88,12 +83,20 @@ class McspcOligoMetachronousService:
             report_sections={
                 "summary": "Metachronous oligometastatic hormone-sensitive pathway.",
                 "triplet_decision": triplet_decision,
+                "frontline_regimen_rankings": selector_bundle["frontline_regimen_rankings"],
             },
         )
         result["triplet_decision"] = triplet_decision
         result["triplet_decision_card"] = triplet_decision
         result["visible_trial_matches"] = visible_trial_matches
         result["hidden_cross_scenario_trial_count"] = hidden_trial_count
+        result["preferred_frontline_regimen"] = selector_bundle["preferred_regimen"]
+        result["frontline_regimen_rankings"] = selector_bundle["frontline_regimen_rankings"]
+        result["frontline_regimen_rejections"] = selector_bundle["frontline_regimen_rejections"]
+        result["pivotal_trial_fit"] = selector_bundle["pivotal_trial_fit"]
+        result["drug_component_metadata"] = selector_bundle["drug_component_metadata"]
+        result["patient_specific_modifiers"] = selector_bundle["patient_specific_modifiers"]
+        result["eligibility_gates"] = selector_bundle["eligibility_gates"]
         return enrich_evaluation_result(
             result,
             clinical_title="Ruta priorizada de enfermedad oligometastásica metacrónica",

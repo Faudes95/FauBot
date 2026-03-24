@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 import tracking_db
 
 from prostanet.application.module_registry import ModuleRegistry
@@ -10,6 +10,7 @@ from prostanet.domains.clinical_validation import (
     DEFAULT_BASE_URL as VALIDATION_DEFAULT_BASE_URL,
     list_trajectory_summaries,
     run_longitudinal_validation,
+    run_vertical_verification,
 )
 from prostanet.domains.clinical_validation.repository import (
     get_validation_case,
@@ -123,6 +124,13 @@ def _serialize_alerts(alerts):
         else:
             serialized.append({"value": alert})
     return serialized
+
+
+def _resolve_patient_api_ref(patient_ref: str):
+    resolved = tracking_db.resolve_patient_ref(patient_ref)
+    if not resolved:
+        return None, (jsonify({"success": False, "error": "Paciente no encontrado."}), 404)
+    return resolved, None
 
 
 @modular_api.route("/api/state-classifier", methods=["POST"])
@@ -328,6 +336,24 @@ def validation_run_report(run_id: str) -> tuple:
     return jsonify({"success": True, "report": payload})
 
 
+@modular_api.route("/api/validation/vertical-audit", methods=["POST"])
+def validation_vertical_audit() -> tuple:
+    try:
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            data = {}
+        report = run_vertical_verification(
+            app=current_app._get_current_object(),
+            base_url=str(data.get("base_url") or VALIDATION_DEFAULT_BASE_URL),
+            visual_mode=str(data.get("visual_mode") or "textual"),
+            live_limit_per_vertical=int(data.get("live_limit_per_vertical") or 2),
+            seed_live_samples_when_missing=bool(safe_bool(data.get("seed_live_samples_when_missing"), default=False)),
+        )
+        return jsonify({"success": True, "report": report})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
 @modular_api.route("/api/patients/<nss>/state-timeline", methods=["GET"])
 def patient_state_timeline(nss: str) -> tuple:
     from tracking_db import get_patient_state_timeline
@@ -365,13 +391,17 @@ def recompute_patient_care_plan_route(nss: str) -> tuple:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-@modular_api.route("/api/patients/<int:patient_id>/schedule", methods=["GET"])
-def patient_schedule(patient_id: int) -> tuple:
+@modular_api.route("/api/patients/<patient_ref>/schedule", methods=["GET"])
+def patient_schedule(patient_ref: str) -> tuple:
     """Genera el calendario de seguimiento programado para el paciente."""
     import tracking_db
     from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
 
     try:
+        resolved, error = _resolve_patient_api_ref(patient_ref)
+        if error:
+            return error
+        patient_id = resolved["patient_id"]
         patient = tracking_db.get_patient_full_record(patient_id)
         if not patient:
             return jsonify({"success": False, "error": "Paciente no encontrado."}), 404
@@ -389,12 +419,25 @@ def patient_schedule(patient_id: int) -> tuple:
         )
         patient = tracking_db.get_patient_full_record(patient_id) or patient
         longitudinal_bundle = tracking_db.refresh_longitudinal_intelligence(patient_id, force_recompute=False) or {}
+        latest_result_snapshot = dict((patient.get("latest_assessment") or {}).get("result_snapshot") or {})
         guideline_followup_plan = longitudinal_bundle.get("guideline_followup_plan") or patient.get("guideline_followup_plan", {})
         care_intent_contract = longitudinal_bundle.get("care_intent_contract") or patient.get("care_intent_contract", {})
         transition_resolution = longitudinal_bundle.get("transition_resolution") or patient.get("transition_resolution", {})
         decision_trace = longitudinal_bundle.get("decision_recalculation_trace") or patient.get("decision_recalculation_trace", {})
         latest_decisive_visit = longitudinal_bundle.get("latest_clinically_decisive_visit") or patient.get("latest_clinically_decisive_visit", {})
         decision_input_requirements = longitudinal_bundle.get("decision_input_requirements") or patient.get("decision_input_requirements", {})
+        crpc_copilot_bundle = longitudinal_bundle.get("crpc_copilot_bundle") or {}
+        post_rp_salvage_bundle = longitudinal_bundle.get("post_rp_salvage_bundle") or {}
+        qa_passed = (
+            (post_rp_salvage_bundle.get("qa_validation") or {}).get("approved")
+            if post_rp_salvage_bundle.get("available")
+            else (crpc_copilot_bundle.get("qa_validation") or {}).get("approved")
+        )
+        sequence_summary = (
+            post_rp_salvage_bundle.get("sequence_candidates", [])
+            if post_rp_salvage_bundle.get("available")
+            else crpc_copilot_bundle.get("sequence_summary", [])
+        )
 
         return jsonify({
             "success": True,
@@ -427,6 +470,14 @@ def patient_schedule(patient_id: int) -> tuple:
             "schedule_primary_intent": guideline_followup_plan.get("schedule_primary_intent", ""),
             "care_intent_key": guideline_followup_plan.get("care_intent_key", ""),
             "action_schedule_consistency": guideline_followup_plan.get("action_schedule_consistency", True),
+            "crpc_copilot_status": crpc_copilot_bundle.get("status", "not_applicable"),
+            "post_rp_copilot_status": post_rp_salvage_bundle.get("status", "not_applicable"),
+            "salvage_window_status": post_rp_salvage_bundle.get("salvage_window_status", ""),
+            "salvage_window_reason": post_rp_salvage_bundle.get("salvage_window_reason", ""),
+            "qa_passed": qa_passed,
+            "sequence_summary": sequence_summary,
+            "crpc_schedule_overlay": crpc_copilot_bundle.get("crpc_schedule_overlay", {}),
+            "post_rp_schedule_overlay": post_rp_salvage_bundle.get("post_rp_schedule_overlay", {}),
             "blocking_inputs": decision_input_requirements.get("blocking_inputs", []),
             "hard_blocking_inputs": decision_input_requirements.get("hard_blocking_inputs", []),
             "decision_blocking_inputs": decision_input_requirements.get("decision_blocking_inputs", []),
@@ -453,7 +504,12 @@ def patient_schedule(patient_id: int) -> tuple:
             "last_adjudicated_event": schedule_bundle.get("last_adjudicated_event", {}),
             "trial_comparable_endpoints": schedule_bundle.get("trial_comparable_endpoints", []),
             "current_trial_comparable_profile": schedule_bundle.get("current_trial_comparable_profile", {}),
+            "preferred_frontline_regimen": latest_result_snapshot.get("preferred_frontline_regimen", {}),
+            "frontline_regimen_rankings": latest_result_snapshot.get("frontline_regimen_rankings", []),
+            "drug_component_metadata": latest_result_snapshot.get("drug_component_metadata", {}),
             "total_events": len(schedule_bundle.get("scheduled_items", schedule_bundle.get("schedule", []))),
+            "resolved_patient_id": patient_id,
+            "resolved_patient_ref": resolved.get("nss") or resolved.get("patient_ref") or str(patient_ref),
         })
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500
@@ -1477,5 +1533,1107 @@ def response_visualization(patient_id: int) -> tuple:
         )
 
         return jsonify({"success": True, "visualization": bundle.to_dict()})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# AI Engine Endpoints — all gated by feature flags (default OFF)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _build_ai_registry():
+    from prostanet.ai.inference.model_registry import ModelRegistry
+
+    reg = ModelRegistry()
+    reg.load_all_available()
+    return reg
+
+
+def _build_rule_based_recommendation(record: dict[str, Any]) -> dict[str, Any]:
+    latest_assessment = record.get("latest_assessment", {}) or {}
+    result_snapshot = dict(latest_assessment.get("result_snapshot") or {})
+    return {
+        "source": "rule_based_primary",
+        "state": record.get("reconciled_state") or latest_assessment.get("state") or "",
+        "module_id": latest_assessment.get("module_id", ""),
+        "management_track": (
+            record.get("reconciled_management_track")
+            or latest_assessment.get("management_track")
+            or ""
+        ),
+        "guideline_basis": (
+            (record.get("guideline_followup_plan") or {}).get("schedule_evidence_basis")
+            or latest_assessment.get("guideline_versions")
+            or {}
+        ),
+        "preferred_frontline_regimen": result_snapshot.get("preferred_frontline_regimen", {}),
+        "frontline_regimen_rankings": result_snapshot.get("frontline_regimen_rankings", []),
+        "drug_component_metadata": result_snapshot.get("drug_component_metadata", {}),
+        "note": "La lógica rule-based NCCN/EAU permanece como fuente primaria de verdad clínica.",
+    }
+
+
+def _build_crpc_copilot_payload(patient_id: int) -> dict[str, Any]:
+    longitudinal_bundle = tracking_db.refresh_longitudinal_intelligence(patient_id, force_recompute=False) or {}
+    return dict(longitudinal_bundle.get("crpc_copilot_bundle") or {})
+
+
+def _build_post_rp_salvage_payload(patient_id: int) -> dict[str, Any]:
+    longitudinal_bundle = tracking_db.refresh_longitudinal_intelligence(patient_id, force_recompute=False) or {}
+    return dict(longitudinal_bundle.get("post_rp_salvage_bundle") or {})
+
+
+def _serialize_agent_objects(items: list[Any]) -> list[dict[str, Any]]:
+    from dataclasses import asdict, is_dataclass
+
+    serialized: list[dict[str, Any]] = []
+    for item in items:
+        if is_dataclass(item):
+            serialized.append(asdict(item))
+        elif isinstance(item, dict):
+            serialized.append(item)
+    return serialized
+
+
+def _validate_cda_output(cda_output: dict[str, Any] | None, record: dict[str, Any]) -> dict[str, Any] | None:
+    if not cda_output:
+        return None
+    try:
+        from prostanet.agents.contracts import AgentOutput, AgentRecommendation
+        from prostanet.agents.quality_assurance_agent import QualityAssuranceAgent
+
+        recommendations = [
+            AgentRecommendation(
+                action=item.get("action", ""),
+                category=item.get("category", ""),
+                priority=item.get("priority", "standard"),
+                evidence_basis=item.get("evidence_basis", []),
+            )
+            for item in (cda_output.get("recommendations") or [])
+            if isinstance(item, dict)
+        ]
+        agent_output = AgentOutput(
+            agent_id=cda_output.get("agent_id", "clinical_decision_agent"),
+            patient_id=cda_output.get("patient_id", 0),
+            recommendations=recommendations,
+        )
+        return QualityAssuranceAgent().validate(agent_output, record).to_dict()
+    except Exception:
+        return None
+
+
+@modular_api.route("/api/ai/predict/state-transition/<int:patient_id>", methods=["POST"])
+def ai_predict_state_transition(patient_id):
+    """Predict next clinical state and time to transition."""
+    try:
+        from prostanet.ai.inference.prediction_service import PredictionService
+
+        reg = _build_ai_registry()
+        service = PredictionService(model_registry=reg)
+
+        record = tracking_db.get_patient_full_record(patient_id)
+        if not record:
+            return jsonify({"success": False, "error": "Paciente no encontrado"}), 404
+
+        model_status = reg.get_metadata("state_transition")
+        result = service.predict_state_transition(patient_id, record)
+        if result is None:
+            return jsonify({
+                "success": False,
+                "error": "Modelo no disponible o flag desactivado",
+                "advisory_api": True,
+                "rule_based_source_of_truth": True,
+                "model_status": model_status,
+            }), 503
+
+        return jsonify({
+            "success": True,
+            "advisory_api": True,
+            "rule_based_source_of_truth": True,
+            "prediction": result,
+            "model_status": model_status,
+        })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/ai/predict/treatment-response/<int:patient_id>", methods=["POST"])
+def ai_predict_treatment_response(patient_id):
+    """Predict treatment response for a specific regimen."""
+    try:
+        from prostanet.ai.inference.prediction_service import PredictionService
+
+        data = request.get_json(silent=True) or {}
+        regimen_id = data.get("regimen_id", 0)
+
+        reg = _build_ai_registry()
+        service = PredictionService(model_registry=reg)
+
+        record = tracking_db.get_patient_full_record(patient_id)
+        if not record:
+            return jsonify({"success": False, "error": "Paciente no encontrado"}), 404
+
+        model_status = reg.get_metadata("treatment_response")
+        result = service.predict_treatment_response(patient_id, record, regimen_id=regimen_id)
+        if result is None:
+            return jsonify({
+                "success": False,
+                "error": "Modelo no disponible o flag desactivado",
+                "advisory_api": True,
+                "rule_based_source_of_truth": True,
+                "model_status": model_status,
+            }), 503
+
+        return jsonify({
+            "success": True,
+            "advisory_api": True,
+            "rule_based_source_of_truth": True,
+            "prediction": result,
+            "model_status": model_status,
+        })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/ai/predict/survival/<int:patient_id>", methods=["POST"])
+def ai_predict_survival(patient_id):
+    """Predict personalized survival curves."""
+    try:
+        from prostanet.ai.inference.prediction_service import PredictionService
+
+        reg = _build_ai_registry()
+        service = PredictionService(model_registry=reg)
+
+        record = tracking_db.get_patient_full_record(patient_id)
+        if not record:
+            return jsonify({"success": False, "error": "Paciente no encontrado"}), 404
+
+        model_status = reg.get_metadata("deep_surv")
+        result = service.predict_survival(patient_id, record)
+        if result is None:
+            return jsonify({
+                "success": False,
+                "error": "Modelo no disponible o flag desactivado",
+                "advisory_api": True,
+                "rule_based_source_of_truth": True,
+                "model_status": model_status,
+            }), 503
+
+        return jsonify({
+            "success": True,
+            "advisory_api": True,
+            "rule_based_source_of_truth": True,
+            "prediction": result,
+            "model_status": model_status,
+        })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/ai/predict/anomaly/<int:patient_id>", methods=["POST"])
+def ai_predict_anomaly(patient_id):
+    """Detect anomalies in temporal lab series."""
+    try:
+        from prostanet.ai.inference.prediction_service import PredictionService
+
+        reg = _build_ai_registry()
+        service = PredictionService(model_registry=reg)
+
+        record = tracking_db.get_patient_full_record(patient_id)
+        if not record:
+            return jsonify({"success": False, "error": "Paciente no encontrado"}), 404
+
+        model_status = reg.get_metadata("anomaly_detector")
+        result = service.predict_anomalies(patient_id, record)
+        if result is None:
+            return jsonify({
+                "success": False,
+                "error": "Modelo no disponible o flag desactivado",
+                "advisory_api": True,
+                "rule_based_source_of_truth": True,
+                "model_status": model_status,
+            }), 503
+
+        return jsonify({
+            "success": True,
+            "advisory_api": True,
+            "rule_based_source_of_truth": True,
+            "prediction": result,
+            "model_status": model_status,
+        })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/agents/run/<agent_id>/<int:patient_id>", methods=["POST"])
+def run_agent(agent_id, patient_id):
+    """Run a specific agent for a patient."""
+    try:
+        from prostanet.agents.contracts import AgentInput
+        from datetime import UTC, datetime
+        from prostanet.ai.config import get_ai_config
+
+        record = tracking_db.get_patient_full_record(patient_id)
+        if not record:
+            return jsonify({"success": False, "error": "Paciente no encontrado"}), 404
+
+        data = request.get_json(silent=True) or {}
+        trigger_event = data.get("trigger_event", "manual")
+
+        agent_input = AgentInput(
+            patient_id=patient_id,
+            record=record,
+            trigger_event=trigger_event,
+            trigger_data=data.get("trigger_data", {}),
+            timestamp=datetime.now(UTC).isoformat(),
+        )
+
+        reg = _build_ai_registry()
+        agent = _instantiate_agent(agent_id, model_registry=reg)
+        if not agent:
+            return jsonify({"success": False, "error": f"Agente '{agent_id}' no encontrado"}), 404
+
+        from dataclasses import asdict
+        output = agent.evaluate_safe(agent_input)
+        return jsonify({
+            "success": True,
+            "runtime_mode": get_ai_config().runtime_mode,
+            "rule_based_source_of_truth": True,
+            "advisory_api": True,
+            "output": asdict(output),
+        })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/agents/audit/<int:patient_id>")
+def agent_audit(patient_id):
+    """Retrieve agent audit trail for a patient."""
+    try:
+        from prostanet.engine.audit_log import AuditLogger
+        limit = request.args.get("limit", 50, type=int)
+        audit = AuditLogger()
+        entries = audit.get_patient_audit(patient_id, limit=limit)
+        return jsonify({"success": True, "entries": entries})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/agents/recommendation/<int:patient_id>/latest")
+def latest_recommendation(patient_id):
+    """Get the latest CDA recommendation for a patient."""
+    try:
+        from prostanet.engine.audit_log import AuditLogger
+        audit = AuditLogger()
+        rec = audit.get_latest_recommendation(patient_id)
+        if not rec:
+            return jsonify({"success": False, "error": "No hay recomendaciones"}), 404
+        return jsonify({"success": True, "recommendation": rec})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/ai/progression-dashboard/<patient_ref>")
+def ai_progression_dashboard(patient_ref):
+    """
+    Complete disease progression dashboard for longitudinal visualization.
+
+    Returns a unified payload with:
+      - PSA time series (observed + trend)
+      - State timeline with durations
+      - Survival curves (if AI model available)
+      - Treatment history + response
+      - Risk factor heatmap
+      - Natural history summary
+      - Upcoming milestone alerts
+    """
+    try:
+        resolved, error = _resolve_patient_api_ref(patient_ref)
+        if error:
+            return error
+        patient_id = resolved["patient_id"]
+        record = tracking_db.get_patient_full_record(patient_id)
+        if not record:
+            return jsonify({"success": False, "error": "Paciente no encontrado"}), 404
+
+        # Natural history
+        from prostanet.domains.patient_tracking.natural_history_tracker import (
+            analyze_natural_history, NaturalHistoryTracker,
+        )
+        history = analyze_natural_history(record)
+
+        # PSA time series for chart
+        follow_ups = record.get("follow_ups", []) or []
+        psa_series = [
+            {
+                "date": fu.get("visit_date"),
+                "psa": fu.get("psa_current"),
+                "testosterone": fu.get("testosterone_current"),
+                "ecog": fu.get("ecog_current") or fu.get("ecog"),
+            }
+            for fu in sorted(follow_ups, key=lambda x: x.get("visit_date", ""))
+            if fu.get("psa_current") is not None
+        ]
+
+        # State timeline for Gantt-style chart
+        state_timeline = record.get("state_timeline", []) or []
+
+        # Treatment response timeline
+        tx_history = history.get("treatment_history", [])
+
+        # Milestone alerts
+        milestones = _build_milestone_alerts(record, history)
+
+        # Risk factor radar
+        risk_summary = history.get("risk_summary", {})
+
+        # Survival predictions from AI if available
+        survival_curves = {}
+        try:
+            from prostanet.shared.feature_flags import resolve_feature_flags
+            if resolve_feature_flags().get("ENABLE_AI_SURVIVAL_MODEL"):
+                from prostanet.ai.inference.prediction_service import PredictionService
+                from prostanet.ai.inference.model_registry import ModelRegistry
+                from pathlib import Path
+                reg = ModelRegistry(models_dir=Path("output/models"))
+                reg.load_all_available()
+                service = PredictionService(model_registry=reg)
+                survival_curves = service.predict_survival(patient_id, record) or {}
+        except Exception:
+            pass
+
+        return jsonify({
+            "success": True,
+            "patient_id": patient_id,
+            "resolved_patient_ref": resolved.get("nss") or resolved.get("patient_ref") or str(patient_ref),
+            "psa_series": psa_series,
+            "state_timeline": state_timeline,
+            "treatment_history": tx_history,
+            "natural_history_summary": {
+                "current_state": history.get("current_state"),
+                "time_since_diagnosis_months": history.get("time_since_diagnosis_months"),
+                "adjusted_os_months": history.get("adjusted_os_months"),
+                "psa_nadir": history.get("psa_nadir"),
+                "psa_doubling_time_months": history.get("psa_doubling_time_months"),
+                "predicted_next_state": history.get("predicted_next_state"),
+                "predicted_time_to_transition_months": history.get("predicted_time_to_transition_months"),
+                "flags": history.get("flags", []),
+                "narrative": history.get("narrative", ""),
+            },
+            "risk_summary": risk_summary,
+            "survival_curves": survival_curves,
+            "milestone_alerts": milestones,
+            "ethnicity": history.get("ethnicity"),
+            "cci": history.get("comorbidity_cci"),
+        })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+def _build_milestone_alerts(
+    record: dict, history: dict
+) -> list[dict]:
+    """Build upcoming clinical milestone alerts."""
+    alerts = []
+    state = history.get("current_state", "")
+    psadt = history.get("psa_doubling_time_months")
+    pred_next = history.get("predicted_next_state")
+    pred_time = history.get("predicted_time_to_transition_months")
+
+    if psadt and psadt < 6:
+        alerts.append({
+            "type": "psa_kinetics",
+            "severity": "critical",
+            "title": "PSADT crítico",
+            "message": f"PSADT {psadt} meses — evaluar progresión y cambio terapéutico",
+            "timeframe_months": psadt,
+        })
+
+    if pred_next and pred_time:
+        alerts.append({
+            "type": "state_transition",
+            "severity": "warning",
+            "title": f"Transición predicha → {pred_next}",
+            "message": f"El modelo predice transición a {pred_next} en ~{pred_time} meses",
+            "timeframe_months": pred_time,
+        })
+
+    if state == "m0_crpc":
+        alerts.append({
+            "type": "imaging",
+            "severity": "info",
+            "title": "Imagen cada 6 meses en M0-CPRC",
+            "message": "PSMA-PET o gammagrafía ósea según NCCN para detección M1",
+            "timeframe_months": 6,
+        })
+
+    if state in ("m1_crpc",):
+        alerts.append({
+            "type": "palliative",
+            "severity": "info",
+            "title": "Evaluar cuidado paliativo",
+            "message": "En CPRC metastásico: considerar referencia a cuidados paliativos",
+            "timeframe_months": 1,
+        })
+
+    return sorted(alerts, key=lambda x: x.get("timeframe_months", 99))
+
+
+@modular_api.route("/api/ai/natural-history/<patient_ref>")
+def ai_natural_history(patient_ref):
+    """
+    Complete disease natural history analysis.
+
+    Returns the full longitudinal trajectory from diagnosis to current state,
+    survival estimates adjusted for comorbidities and ethnicity,
+    predicted next transition, PSA kinetics, and risk factors.
+    """
+    try:
+        resolved, error = _resolve_patient_api_ref(patient_ref)
+        if error:
+            return error
+        patient_id = resolved["patient_id"]
+        record = tracking_db.get_patient_full_record(patient_id)
+        if not record:
+            return jsonify({"success": False, "error": "Paciente no encontrado"}), 404
+
+        from prostanet.domains.patient_tracking.natural_history_tracker import (
+            analyze_natural_history,
+        )
+        report = analyze_natural_history(record)
+        return jsonify({
+            "success": True,
+            "patient_id": patient_id,
+            "resolved_patient_ref": resolved.get("nss") or resolved.get("patient_ref") or str(patient_ref),
+            "natural_history": report,
+        })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/cohort/overview")
+def cohort_overview():
+    """Population-level cohort overview: size, state distribution, vital status."""
+    try:
+        from prostanet.domains.research_intelligence.cohort_progression_analytics import (
+            CohortProgressionAnalytics,
+        )
+        analytics = CohortProgressionAnalytics()
+        return jsonify({"success": True, "overview": analytics.compute_overview()})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/cohort/transition-matrix")
+def cohort_transition_matrix():
+    """Empirical state transition probabilities from real patient data."""
+    try:
+        from prostanet.domains.research_intelligence.cohort_progression_analytics import (
+            CohortProgressionAnalytics,
+        )
+        analytics = CohortProgressionAnalytics()
+        return jsonify({"success": True, **analytics.compute_transition_matrix()})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/cohort/treatment-outcomes")
+def cohort_treatment_outcomes():
+    """Treatment outcome statistics (PSA50, duration, response) across cohort."""
+    try:
+        from prostanet.domains.research_intelligence.cohort_progression_analytics import (
+            CohortProgressionAnalytics,
+        )
+        state = request.args.get("state")
+        min_n = request.args.get("min_n", 3, type=int)
+        analytics = CohortProgressionAnalytics()
+        return jsonify({
+            "success": True,
+            **analytics.compute_treatment_outcomes(state=state, min_n=min_n),
+        })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/cohort/risk-stratification")
+def cohort_risk_stratification():
+    """Cohort risk stratification by ethnicity, age, CCI, and ISUP grade."""
+    try:
+        from prostanet.domains.research_intelligence.cohort_progression_analytics import (
+            CohortProgressionAnalytics,
+        )
+        analytics = CohortProgressionAnalytics()
+        return jsonify({
+            "success": True,
+            **analytics.compute_risk_stratification(),
+        })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/engine/recalculate/<int:patient_id>", methods=["POST"])
+def engine_recalculate(patient_id):
+    """Trigger full recalculation pipeline for a patient."""
+    try:
+        from prostanet.engine.recalculation_pipeline import RecalculationPipeline
+
+        data = request.get_json(silent=True) or {}
+        trigger_event = data.get("trigger_event", "manual")
+
+        reg = _build_ai_registry()
+        pipeline = RecalculationPipeline(model_registry=reg)
+        result = pipeline.run(
+            patient_id=patient_id,
+            trigger_event=trigger_event,
+            trigger_data=data.get("trigger_data", {}),
+        )
+        return jsonify({"success": True, "result": result})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/engine/confidence/<int:patient_id>")
+def engine_confidence(patient_id):
+    """Get current confidence score for a patient."""
+    try:
+        from prostanet.engine.confidence_scoring import ConfidenceScorer
+
+        record = tracking_db.get_patient_full_record(patient_id)
+        if not record:
+            return jsonify({"success": False, "error": "Paciente no encontrado"}), 404
+
+        scorer = ConfidenceScorer()
+        result = scorer.score(record)
+        return jsonify({"success": True, "confidence": result})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/ai/models")
+def ai_models_list():
+    """List available AI models and their status."""
+    try:
+        from prostanet.ai.config import get_ai_config
+
+        reg = _build_ai_registry()
+        return jsonify({
+            "success": True,
+            "runtime_mode": get_ai_config().runtime_mode,
+            "rule_based_source_of_truth": True,
+            "models": reg.list_models(),
+        })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+def _instantiate_agent(agent_id: str, **kwargs):
+    """Create agent by ID string."""
+    agents = {
+        "clinical_decision_agent": "prostanet.agents.clinical_decision_agent:ClinicalDecisionAgent",
+        "progression_surveillance_agent": "prostanet.agents.progression_surveillance_agent:ProgressionSurveillanceAgent",
+        "treatment_optimization_agent": "prostanet.agents.treatment_optimization_agent:TreatmentOptimizationAgent",
+        "quality_assurance_agent": "prostanet.agents.quality_assurance_agent:QualityAssuranceAgent",
+        "research_intelligence_agent": "prostanet.agents.research_intelligence_agent:ResearchIntelligenceAgent",
+    }
+    spec = agents.get(agent_id)
+    if not spec:
+        return None
+    module_path, class_name = spec.rsplit(":", 1)
+    import importlib
+    mod = importlib.import_module(module_path)
+    cls = getattr(mod, class_name)
+    try:
+        return cls(**kwargs)
+    except TypeError:
+        return cls()
+
+
+# ══════════════════════════════════════════════════════════════
+# Full Clinical Intelligence Pipeline — "Elimina al médico de
+# primer contacto": runs all 5 agents + confidence scoring
+# + guideline validation in a single call.
+# ══════════════════════════════════════════════════════════════
+
+
+@modular_api.route("/api/crpc-copilot/<patient_ref>", methods=["GET"])
+def crpc_copilot_bundle(patient_ref):
+    try:
+        resolved, error = _resolve_patient_api_ref(patient_ref)
+        if error:
+            return error
+        patient_id = resolved["patient_id"]
+        record = tracking_db.get_patient_full_record(patient_id)
+        if not record:
+            return jsonify({"success": False, "error": "Paciente no encontrado"}), 404
+        bundle = _build_crpc_copilot_payload(patient_id)
+        return jsonify(
+            {
+                "success": True,
+                "patient_id": patient_id,
+                "resolved_patient_ref": resolved.get("nss") or resolved.get("patient_ref") or str(patient_ref),
+                "crpc_decision_bundle": bundle,
+            }
+        )
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/post-rp-copilot/<patient_ref>", methods=["GET"])
+def post_rp_copilot_bundle(patient_ref):
+    try:
+        resolved, error = _resolve_patient_api_ref(patient_ref)
+        if error:
+            return error
+        patient_id = resolved["patient_id"]
+        record = tracking_db.get_patient_full_record(patient_id)
+        if not record:
+            return jsonify({"success": False, "error": "Paciente no encontrado"}), 404
+        bundle = _build_post_rp_salvage_payload(patient_id)
+        return jsonify(
+            {
+                "success": True,
+                "patient_id": patient_id,
+                "resolved_patient_ref": resolved.get("nss") or resolved.get("patient_ref") or str(patient_ref),
+                "post_rp_decision_bundle": bundle,
+            }
+        )
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/ai/full-assessment/<patient_ref>", methods=["POST"])
+def ai_full_assessment(patient_ref):
+    """
+    Complete AI clinical assessment.
+
+    Runs the full 5-agent pipeline:
+      1. QAA — data quality & safety validation
+      2. PSA — PSA kinetics & surveillance
+      3. CDA — clinical decision recommendation
+      4. TOA — treatment optimization & ranking
+      5. RIA — research & trial matching
+
+    Returns a consolidated clinical intelligence report.
+    """
+    from datetime import UTC, datetime
+    from dataclasses import asdict
+    import time
+
+    t_start = time.perf_counter()
+    try:
+        from prostanet.ai.config import get_ai_config
+
+        resolved, error = _resolve_patient_api_ref(patient_ref)
+        if error:
+            return error
+        patient_id = resolved["patient_id"]
+        record = tracking_db.get_patient_full_record(patient_id)
+        if not record:
+            return jsonify({"success": False, "error": "Paciente no encontrado"}), 404
+
+        data = request.get_json(silent=True) or {}
+        trigger_event = data.get("trigger_event", "manual_full_assessment")
+        runtime_mode = get_ai_config().runtime_mode
+
+        from prostanet.agents.contracts import AgentInput
+        agent_input = AgentInput(
+            patient_id=patient_id,
+            record=record,
+            trigger_event=trigger_event,
+            trigger_data=data.get("trigger_data", {}),
+            timestamp=datetime.now(UTC).isoformat(),
+        )
+
+        # Run agents in clinical priority order
+        agent_order = [
+            "quality_assurance_agent",   # Safety gate first
+            "progression_surveillance_agent",  # Detect alerts
+            "clinical_decision_agent",   # Core clinical logic
+            "treatment_optimization_agent",    # Treatment ranking
+            "research_intelligence_agent",     # Trial matching
+        ]
+
+        outputs = {}
+        alerts_all = []
+        recommendations_all = []
+        reg = _build_ai_registry()
+
+        for agent_id in agent_order:
+            agent = _instantiate_agent(agent_id, model_registry=reg)
+            if agent is None:
+                continue
+            try:
+                out = agent.evaluate_safe(agent_input)
+                outputs[agent_id] = asdict(out)
+                alerts_all.extend(out.alerts or [])
+                recommendations_all.extend(out.recommendations or [])
+            except Exception as exc:
+                outputs[agent_id] = {"error": str(exc)}
+
+        # Confidence scoring
+        confidence_result = {}
+        try:
+            from prostanet.engine.confidence_scoring import ConfidenceScorer
+            scorer = ConfidenceScorer()
+            confidence_result = scorer.score(record, list(outputs.values()))
+        except Exception:
+            pass
+
+        # Clinical explanation
+        explanation = {}
+        try:
+            from prostanet.engine.explanation_engine import ExplanationEngine
+            engine = ExplanationEngine()
+            state = record.get("latest_assessment", {}).get("state") or ""
+            explanation = engine.explain(record, state=state)
+        except Exception:
+            pass
+
+        elapsed_ms = round((time.perf_counter() - t_start) * 1000)
+
+        # Serialize alerts + recommendations
+        def _to_dict(obj):
+            if hasattr(obj, "__dataclass_fields__"):
+                return asdict(obj)
+            return obj
+
+        cda_output = outputs.get("clinical_decision_agent")
+        qa_validation = _validate_cda_output(cda_output, record)
+        rule_based_recommendation = _build_rule_based_recommendation(record)
+        crpc_decision_bundle = _build_crpc_copilot_payload(patient_id)
+        post_rp_decision_bundle = _build_post_rp_salvage_payload(patient_id)
+        ai_advisory_overlay = {
+            "mode": runtime_mode,
+            "qa_validation": qa_validation,
+            "confidence": confidence_result,
+            "agents_run": list(outputs.keys()),
+            "recommendations": [_to_dict(r) for r in recommendations_all],
+            "alerts": [_to_dict(a) for a in alerts_all],
+            "crpc_copilot_status": crpc_decision_bundle.get("status", "not_applicable"),
+            "post_rp_copilot_status": post_rp_decision_bundle.get("status", "not_applicable"),
+        }
+        if post_rp_decision_bundle.get("available"):
+            rule_based_recommendation = post_rp_decision_bundle.get("rule_based_recommendation") or rule_based_recommendation
+            ai_advisory_overlay["qa_validation"] = post_rp_decision_bundle.get("qa_validation") or qa_validation
+            ai_advisory_overlay["post_rp_salvage_copilot"] = post_rp_decision_bundle
+        if crpc_decision_bundle.get("available"):
+            rule_based_recommendation = crpc_decision_bundle.get("rule_based_recommendation") or rule_based_recommendation
+            ai_advisory_overlay["qa_validation"] = crpc_decision_bundle.get("qa_validation") or qa_validation
+            ai_advisory_overlay["crpc_copilot"] = crpc_decision_bundle
+        top_recommendation = ai_advisory_overlay["recommendations"][0] if ai_advisory_overlay["recommendations"] else None
+        can_present_advisory = (
+            runtime_mode == "advisory"
+            and bool(top_recommendation)
+            and (qa_validation is None or qa_validation.get("approved", False))
+        )
+        final_presented_recommendation = (
+            {
+                "source": "rule_based_plus_ai_advisory",
+                "state": rule_based_recommendation.get("state", ""),
+                "primary_recommendation": top_recommendation,
+                "qa_passed": qa_validation.get("approved", False) if qa_validation else None,
+            }
+            if can_present_advisory
+            else rule_based_recommendation
+        )
+        if post_rp_decision_bundle.get("available"):
+            final_presented_recommendation = post_rp_decision_bundle.get("final_presented_recommendation") or final_presented_recommendation
+        if crpc_decision_bundle.get("available"):
+            final_presented_recommendation = crpc_decision_bundle.get("final_presented_recommendation") or final_presented_recommendation
+
+        return jsonify({
+            "success": True,
+            "patient_id": patient_id,
+            "resolved_patient_ref": resolved.get("nss") or resolved.get("patient_ref") or str(patient_ref),
+            "trigger_event": trigger_event,
+            "runtime_mode": runtime_mode,
+            "rule_based_source_of_truth": True,
+            "advisory_api": True,
+            "agents_run": list(outputs.keys()),
+            "agent_outputs": outputs,
+            "consolidated_alerts": [_to_dict(a) for a in alerts_all],
+            "consolidated_recommendations": [_to_dict(r) for r in recommendations_all],
+            "confidence": confidence_result,
+            "explanation": explanation,
+            "rule_based_recommendation": rule_based_recommendation,
+            "ai_advisory_overlay": ai_advisory_overlay,
+            "crpc_decision_bundle": crpc_decision_bundle,
+            "post_rp_decision_bundle": post_rp_decision_bundle,
+            "final_presented_recommendation": final_presented_recommendation,
+            "elapsed_ms": elapsed_ms,
+        })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+# ══════════════════════════════════════════════════════════════
+# NLP Clinical Document Extraction
+# ══════════════════════════════════════════════════════════════
+
+
+@modular_api.route("/api/ai/nlp/extract", methods=["POST"])
+def ai_nlp_extract():
+    """
+    Extract structured clinical data from unstructured Spanish text.
+
+    Body (JSON):
+      - text: raw clinical document text
+      - document_type: pathology_report | imaging_report | clinical_note | discharge_summary
+      - patient_id: (optional) attach to patient
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        text = data.get("text", "")
+        document_type = data.get("document_type", "clinical_note")
+
+        if not text:
+            return jsonify({"success": False, "error": "Campo 'text' requerido"}), 400
+
+        from prostanet.ai.models.nlp_extractor import ClinicalNLPExtractor
+        extractor = ClinicalNLPExtractor()
+        result = extractor.extract(text, document_type=document_type)
+
+        patient_id = data.get("patient_id")
+        response = {
+            "success": True,
+            "entities": result.entities,
+            "confidence": result.confidence,
+            "document_type": result.document_type,
+            "entity_count": len(result.entities),
+            "char_count": result.char_count,
+        }
+
+        if patient_id:
+            response["fieldspec_payload"] = result.to_fieldspec_payload()
+
+        return jsonify(response)
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/ai/nlp/extract/<int:patient_id>", methods=["POST"])
+def ai_nlp_extract_for_patient(patient_id):
+    """
+    Extract and stage clinical data from text, linked to a patient.
+
+    Body: same as /api/ai/nlp/extract
+    Returns extraction candidates ready for user review before saving.
+    """
+    try:
+        record = tracking_db.get_patient_full_record(patient_id)
+        if not record:
+            return jsonify({"success": False, "error": "Paciente no encontrado"}), 404
+
+        data = request.get_json(silent=True) or {}
+        text = data.get("text", "")
+        document_type = data.get("document_type", "clinical_note")
+
+        if not text:
+            return jsonify({"success": False, "error": "Campo 'text' requerido"}), 400
+
+        from prostanet.ai.models.nlp_extractor import ClinicalNLPExtractor
+        extractor = ClinicalNLPExtractor()
+        extraction = extractor.extract_from_document_ingestion(
+            document_text=text,
+            patient_id=patient_id,
+            document_type=document_type,
+        )
+        return jsonify({"success": True, **extraction})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PHASE 3: SOAP Notes, Treatment Sequencer, Population Watchdog,
+#          mCRPC Prognostic Score, Terminal Care Pathway
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+@modular_api.route("/api/ai/soap-note/<int:patient_id>", methods=["POST"])
+def ai_soap_note(patient_id: int):
+    """
+    Generate an autonomous SOAP note for a patient visit.
+
+    Integrates: CAPRA/NCCN scores, natural history, guideline recommendations,
+    DDI alerts, trial eligibility, and genomic action items.
+
+    Body (optional JSON):
+      visit_context: dict   — additional context from the current visit
+    Returns: SOAP note text + structured sections + confidence score.
+    """
+    try:
+        record = tracking_db.get_patient_full_record(patient_id)
+        if not record:
+            return jsonify({"success": False, "error": "Paciente no encontrado"}), 404
+
+        data = request.get_json(silent=True) or {}
+        if data.get("visit_context"):
+            record.update(data["visit_context"])
+
+        from prostanet.domains.patient_tracking.soap_note_generator import SOAPNoteGenerator
+        generator = SOAPNoteGenerator()
+        soap = generator.generate(record)
+        return jsonify({"success": True, "soap_note": soap.to_dict()})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/ai/treatment-sequence/<int:patient_id>", methods=["POST"])
+def ai_treatment_sequence(patient_id: int):
+    """
+    Optimized multi-line treatment sequence for a patient.
+
+    Applies:
+      - Cross-resistance rules (ARSI → ARSI block)
+      - AR-V7 gates (positive → prefer taxane)
+      - NEPC pathway detection
+      - HRR/PSMA/BRCA biomarker eligibility
+      - ECOG/fitness constraints
+      - Formulary availability (IMSS/ISSSTE/privado)
+      - Evidence levels from ARASENS, PROfound, VISION, TRITON3
+
+    Body (optional JSON):
+      override_state: str   — force a specific clinical state
+    Returns: SequencePlan with ranked treatment lines + rationale.
+    """
+    try:
+        record = tracking_db.get_patient_full_record(patient_id)
+        if not record:
+            return jsonify({"success": False, "error": "Paciente no encontrado"}), 404
+
+        data = request.get_json(silent=True) or {}
+        if data.get("override_state"):
+            record["current_state"] = data["override_state"]
+
+        import dataclasses
+        from prostanet.domains.patient_tracking.treatment_sequencer import TreatmentSequencer
+        sequencer = TreatmentSequencer()
+        plan = sequencer.optimize(record)
+        return jsonify({"success": True, "sequence_plan": dataclasses.asdict(plan)})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/ai/population-watchdog", methods=["POST"])
+def ai_population_watchdog():
+    """
+    Run population-level watchdog scan across all active patients.
+
+    Checks:
+      - PSA kinetics (PSADT alerts)
+      - Testosterone escape in castrate-intent states
+      - Safety labs (Hgb, ALP, LDH)
+      - Protocol compliance windows
+      - Biomarker gaps (HRR, PSMA-PET)
+      - Treatment efficacy (PCWG3 / PSA50 response)
+      - ECOG deterioration trends
+      - AI state transition predictions
+
+    Body (optional JSON):
+      state_filter: str   — restrict scan to specific clinical state
+      max_patients: int   — limit number of patients scanned (default: 5000)
+
+    Returns: WatchdogReport with prioritized patient alerts.
+    Requires: ENABLE_RECALCULATION_ENGINE feature flag ON.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        state_filter = data.get("state_filter")
+        max_patients = int(data.get("max_patients", 5000))
+
+        from prostanet.engine.population_watchdog import PopulationWatchdog
+        watchdog = PopulationWatchdog()
+        report = watchdog.scan_all(state_filter=state_filter)
+        return jsonify({"success": True, "watchdog_report": report})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/ai/population-watchdog/<int:patient_id>", methods=["POST"])
+def ai_population_watchdog_patient(patient_id: int):
+    """
+    Run watchdog scan for a single patient.
+
+    Returns immediate PatientAlert list for the specified patient.
+    Faster than full population scan for real-time clinical use.
+    """
+    try:
+        from prostanet.engine.population_watchdog import PopulationWatchdog
+        watchdog = PopulationWatchdog()
+        alerts = watchdog.scan_patient(patient_id)
+        return jsonify({"success": True, "patient_id": patient_id, "alerts": alerts})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/ai/mcrpc-prognosis/<int:patient_id>", methods=["POST"])
+def ai_mcrpc_prognosis(patient_id: int):
+    """
+    ProstaNet mCRPC Integrated Prognostic Score (IPS).
+
+    State-of-the-art prognostic model combining:
+      - Halabi 2014 clinical backbone (C-index 0.72, validated in 9,292 patients)
+      - AR-V7 status (PROPHECY 2019: HR 2.26 for ARSI)
+      - CTC count — CellSearch (de Bono 2008: ≥5 CTC HR 1.76)
+      - BRCA2/HRR (PROfound 2020: HR 0.34 with olaparib)
+      - MSI-H (KEYNOTE-199: pembrolizumab eligible)
+      - PSMA-PET total body volume (VISION 2021)
+      - LDH dynamic (direction change as prognostic signal)
+    Estimated C-index: 0.77
+
+    Returns: risk_group, median OS, survival probabilities, treatment-modifying
+             biomarkers, and actionable next steps.
+    """
+    try:
+        record = tracking_db.get_patient_full_record(patient_id)
+        if not record:
+            return jsonify({"success": False, "error": "Paciente no encontrado"}), 404
+
+        from prostanet.domains.patient_tracking.halabi_nomogram import predict_mcrpc_prognosis
+        result = predict_mcrpc_prognosis(record)
+        return jsonify({"success": True, **result})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/ai/terminal-care/<int:patient_id>", methods=["POST"])
+def ai_terminal_care(patient_id: int):
+    """
+    Terminal care pathway assessment for end-stage prostate cancer.
+
+    Evaluates:
+      - PCWG3 radiographic and PSA progression criteria
+      - Symptom burden (pain, dyspnea, urinary obstruction, fatigue)
+      - Emergency alerts (spinal cord compression, hypercalcemia, urosepsis)
+      - Evidence-based palliative interventions per symptom cluster
+      - Hospice eligibility (≥2/6 criteria including ECOG, Halabi risk group)
+      - MDT referral recommendations
+      - Goals-of-care determination
+      - Prognosis anchor for SPIKES communication framework
+
+    Body (optional JSON):
+      include_prognosis: bool  — also run mCRPC IPS (default: true)
+    Returns: TerminalCareAssessment with complete palliative care plan.
+    """
+    try:
+        record = tracking_db.get_patient_full_record(patient_id)
+        if not record:
+            return jsonify({"success": False, "error": "Paciente no encontrado"}), 404
+
+        data = request.get_json(silent=True) or {}
+        include_prognosis = data.get("include_prognosis", True)
+
+        # Optionally inject mCRPC IPS so terminal care can use Halabi risk group
+        if include_prognosis:
+            try:
+                from prostanet.domains.patient_tracking.halabi_nomogram import predict_mcrpc_prognosis
+                record["halabi_nomogram"] = predict_mcrpc_prognosis(record)
+            except Exception:
+                pass
+
+        from prostanet.domains.patient_tracking.terminal_care_pathway import TerminalCarePathway
+        assessment = TerminalCarePathway.assess(record)
+        return jsonify({"success": True, "terminal_care": assessment})
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500

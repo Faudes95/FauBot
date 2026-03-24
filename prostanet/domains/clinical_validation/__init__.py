@@ -17,6 +17,9 @@ from prostanet.domains.clinical_validation.trajectory_seed_service import (
 from prostanet.domains.clinical_validation.validation_report_builder import (
     build_validation_report,
 )
+from prostanet.domains.clinical_validation.vertical_verification import (
+    run_vertical_verification,
+)
 from prostanet.domains.clinical_validation.visual_validation_runner import (
     attach_visual_artifacts,
 )
@@ -55,4 +58,5 @@ __all__ = [
     "build_trajectory_catalog",
     "list_trajectory_summaries",
     "run_longitudinal_validation",
+    "run_vertical_verification",
 ]

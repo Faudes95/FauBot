@@ -40,7 +40,7 @@ class M0CrpcService:
             not_recommended.append("Evitar iniciar un inhibidor de la vía del receptor androgénico antes de confirmar testosterona en rango de castración.")
             missing_critical_inputs.append("castrate_testosterone_confirmed")
         elif nccn["observe_only"]:
-            treatments.append({"name": "ADT + monitorizacion", "priority": "preferred", "notes": "PSADT >10 meses favorece observacion estrecha antes de escalar con ARPI."})
+            treatments.append({"name": "Vigilancia estrecha con ADT y monitorización", "priority": "preferred", "notes": "PSADT >10 meses favorece observación estrecha antes de escalar con ARPI."})
             not_recommended.append("Evitar escalada automatica a ARPI cuando el PSADT es mayor de 10 meses.")
         else:
             if nccn["prefer_darolutamide"]:

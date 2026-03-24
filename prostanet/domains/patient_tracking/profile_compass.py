@@ -24,6 +24,22 @@ from prostanet.domains.patient_tracking.risk_tools import build_risk_tools_panel
 from prostanet.domains.patient_tracking.therapy_catalog import summarize_trial_backbones, trial_backbone
 from prostanet.domains.patient_tracking.therapy_catalog import regimen_label, therapy_select_options
 from prostanet.shared.official_diagnosis import build_official_diagnosis_context, diagnosis_field_label
+from prostanet.shared.presentation_text import resolve_option_label
+from prostanet.shared.ui_value_normalizer import (
+    normalize_capture_target_label,
+    normalize_decision_domain_label,
+    normalize_fact_group_label,
+    normalize_field_label,
+    normalize_field_list,
+    normalize_input_fact_list,
+    normalize_last_decisive_data,
+    normalize_numeric_with_unit,
+    normalize_source_label,
+    normalize_ui_label,
+    normalize_ui_payload,
+    normalize_ui_text,
+    normalize_ui_value,
+)
 
 
 DIAGNOSTIC_STATES = {"diagnostic_workup", "post_negative_biopsy_followup"}
@@ -315,31 +331,144 @@ def _module_data_contracts() -> list[dict[str, Any]]:
 
 
 def _label_for_field(field_name: str) -> str:
-    labels = {
-        "line_of_therapy_number": "número de línea terapéutica",
-        "line_of_therapy_context": "contexto clínico de línea",
-        "g8_food_intake": "G8: ingesta de alimentos",
-        "g8_weight_loss": "G8: pérdida de peso",
-        "g8_mobility": "G8: movilidad",
-        "g8_neuropsych": "G8: estado neuropsicológico",
-        "g8_bmi": "G8: categoría BMI",
-        "g8_medications": "G8: medicamentos diarios",
-        "g8_self_health": "G8: percepción de salud",
-        "weight_loss_6m_pct": "pérdida de peso en 6 meses",
-        "low_activity": "actividad física reducida",
-        "slow_gait": "marcha lenta",
-        "weak_grip": "fuerza de prensión baja",
-        "mini_cog_score": "Mini-Cog",
-        "fatigue_score": "fatiga",
-        "cv_risk_documented": "riesgo cardiovascular documentado",
-        "drug_interaction_reviewed": "revisión de interacciones",
-        "psma_positive": "PSMA",
-        "hrr_status": "HRR / BRCA",
-        "msi_status": "MSI / TMB",
-        "castrate_testosterone_status": "estado de castración",
-        "testosterone": "testosterona",
-    }
-    return labels.get(field_name, diagnosis_field_label(field_name))
+    return normalize_field_label(field_name, default=diagnosis_field_label(field_name))
+
+
+def _displayize_field_list(values: list[Any] | tuple[Any, ...] | None, *, limit: int | None = None) -> list[str]:
+    return normalize_field_list(list(values or []), limit=limit)
+
+
+def _displayize_input_facts(values: list[Any] | tuple[Any, ...] | None, *, limit: int | None = None) -> list[str]:
+    return normalize_input_fact_list(list(values or []), limit=limit)
+
+
+def _displayize_field_value(field_name: str, value: Any) -> str:
+    if not _is_present(value):
+        return "No disponible"
+    normalized_field_name = str(field_name or "").strip().replace(" ", "_")
+    if normalized_field_name in {"drug_scheme", "current_treatment"}:
+        regimen = regimen_label(value)
+        if regimen:
+            return regimen
+    return str(normalize_ui_value(resolve_option_label(normalized_field_name, value)))
+
+
+def _displayize_copy(value: Any, *, default: str = "") -> str:
+    text = normalize_ui_text(value, default=default)
+    text = _collapse_duplicate_phrase(text)
+    return _collapse_duplicate_phrase(text)
+
+
+def _collapse_duplicate_phrase(value: Any) -> str:
+    text = " ".join(str(value or "").split())
+    if not text:
+        return ""
+    words = text.split()
+    if len(words) % 2 == 0:
+        half = len(words) // 2
+        if words[:half] == words[half:]:
+            return " ".join(words[:half])
+    return text
+
+
+def _decorate_provenance_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    decorated: list[dict[str, Any]] = []
+    for entry in entries or []:
+        clone = dict(entry)
+        field_name = str(clone.get("field_name") or "").strip()
+        clone["display_field_name"] = normalize_field_label(field_name, default=field_name or "Dato clínico")
+        clone["display_source_type"] = normalize_source_label(clone.get("source_type"))
+        clone["display_value"] = _displayize_field_value(field_name, clone.get("value"))
+        decorated.append(clone)
+    return decorated
+
+
+def _displayize_trace_items(items: list[Any] | tuple[Any, ...] | None, *, limit: int | None = None) -> list[str]:
+    rendered: list[str] = []
+    for item in items or []:
+        text = " ".join(str(item or "").split())
+        if not text:
+            continue
+        if ": " in text and "→" in text:
+            field_name, detail = text.split(": ", 1)
+            text = f"{normalize_field_label(field_name, default=field_name)}: {detail}"
+        elif text.endswith("actualizado en la visita longitudinal más reciente"):
+            field_name = text.replace("actualizado en la visita longitudinal más reciente", "").strip()
+            field_name = field_name.removesuffix(":").strip()
+            text = f"{normalize_field_label(field_name, default=field_name)} actualizado en la visita longitudinal más reciente"
+        rendered.append(_displayize_copy(text, default=""))
+    deduped = list(dict.fromkeys(rendered))
+    return deduped[:limit] if limit else deduped
+
+
+def _decorate_missing_input_groups(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    decorated: list[dict[str, Any]] = []
+    for entry in groups or []:
+        clone = dict(entry)
+        clone["display_missing_inputs"] = _displayize_field_list(entry.get("missing_inputs") or [], limit=8)
+        clone["display_inputs_used"] = _displayize_input_facts(entry.get("inputs_used") or [], limit=8)
+        decorated.append(clone)
+    return decorated
+
+
+def _decorate_triplet_decision(decision: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(decision, dict):
+        return {}
+    clone = dict(decision)
+    clone["display_missing_inputs"] = _displayize_field_list(decision.get("missing_inputs") or [], limit=8)
+    return clone
+
+
+def _decorate_copilot_sections(copilot: dict[str, Any]) -> dict[str, Any]:
+    decorated = dict(copilot or {})
+    clinical_alerts = []
+    for alert in decorated.get("clinical_alerts") or []:
+        clone = dict(alert)
+        title = _displayize_copy(clone.get("title"), default="")
+        message = _displayize_copy(clone.get("message"), default="")
+        if title and message and title.lower() == message.lower():
+            message = ""
+        clone["display_title"] = title or "Alerta clínica"
+        clone["display_message"] = message
+        clone["display_recommended_action"] = _displayize_copy(clone.get("recommended_action"), default="")
+        clone["display_guideline_reference"] = _displayize_copy(clone.get("guideline_reference"), default="")
+        clone["display_fields_to_capture"] = _displayize_field_list(clone.get("fields_to_capture") or [], limit=8)
+        clinical_alerts.append(clone)
+    if clinical_alerts:
+        decorated["clinical_alerts"] = clinical_alerts
+
+    comorbidity_scores = dict(decorated.get("comorbidity_scores") or {})
+    for key in ("charlson", "g8"):
+        score = dict(comorbidity_scores.get(key) or {})
+        if score:
+            score["display_missing_inputs"] = _displayize_field_list(score.get("missing_inputs") or [], limit=8)
+            comorbidity_scores[key] = score
+    if comorbidity_scores:
+        decorated["comorbidity_scores"] = comorbidity_scores
+
+    therapeutic_fitness = dict(decorated.get("therapeutic_fitness") or {})
+    for key in ("frailty", "fit_score"):
+        item = dict(therapeutic_fitness.get(key) or {})
+        if item:
+            item["display_missing_inputs"] = _displayize_field_list(item.get("missing_inputs") or [], limit=8)
+            therapeutic_fitness[key] = item
+    if therapeutic_fitness:
+        decorated["therapeutic_fitness"] = therapeutic_fitness
+    return decorated
+
+
+def _decorate_patient_alerts(alerts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    decorated: list[dict[str, Any]] = []
+    for alert in alerts or []:
+        clone = dict(alert)
+        title = _displayize_copy(clone.get("title"), default="")
+        description = _displayize_copy(clone.get("description"), default="")
+        if title and description and title.lower() == description.lower():
+            description = ""
+        clone["display_title"] = title or "Alerta clínica"
+        clone["display_description"] = description
+        decorated.append(clone)
+    return decorated
 
 
 def _build_missing_input_actions(
@@ -366,7 +495,14 @@ def _build_missing_input_actions(
         actions.append(
             {
                 **task,
-                "fields": [_label_for_field(field) for field in (task.get("raw_fields") or [])[:8]],
+                "fields": task.get("display_fields_summary") or [_label_for_field(field) for field in (task.get("raw_fields") or [])[:8]],
+                "display_label": task.get("display_label") or task.get("title") or "Completar inputs críticos",
+                "display_group": task.get("display_group") or normalize_capture_target_label(task.get("capture_target")),
+                "display_cta": task.get("display_cta") or task.get("action_label") or "Completar captura clínica",
+                "display_impact": task.get("display_impact") or f"Si se completa hoy, puede recalcular {normalize_decision_domain_label(task.get('decision_affected'))}.",
+                "display_why_now": task.get("display_why_now") or task.get("rationale") or "Faltan datos estructurados para sostener una decisión clínica.",
+                "display_fields_summary": task.get("display_fields_summary") or [_label_for_field(field) for field in (task.get("raw_fields") or [])[:8]],
+                "display_capture_target": task.get("display_capture_target") or normalize_capture_target_label(task.get("capture_target")),
             }
         )
     return actions[:8], bundle.get("intake_capture_target", ""), bundle.get("followup_capture_target", "")
@@ -543,6 +679,52 @@ def _build_primary_evidence_anchor(display_result: dict[str, Any]) -> list[dict[
                 }
             )
     return anchors[:3]
+
+
+def _build_profile_decision_view_model(
+    *,
+    clinical_compass: dict[str, Any],
+    care_intent_contract: dict[str, Any],
+    management_track: str,
+    state: str,
+) -> dict[str, Any]:
+    canonical_headline = _first_nonempty(
+        care_intent_contract.get("headline"),
+        clinical_compass.get("primary_clinical_question"),
+        "Sin decisión prioritaria estructurada",
+    )
+    canonical_narrative = _first_nonempty(
+        care_intent_contract.get("narrative"),
+        clinical_compass.get("recommended_direction"),
+        "El copiloto no ha emitido una narrativa adicional.",
+    )
+    canonical_family = _first_nonempty(
+        care_intent_contract.get("headline"),
+        care_intent_contract.get("recommendation_family"),
+        canonical_headline,
+        clinical_compass.get("recommendation_family"),
+        clinical_compass.get("current_stage_label"),
+        STATE_DISPLAY_MAP.get(state),
+        "No documentada",
+    )
+    last_decisive_data = normalize_last_decisive_data(clinical_compass.get("last_decisive_data"))
+    consistency_flags = []
+    if _is_present(clinical_compass.get("primary_clinical_question")) and str(clinical_compass.get("primary_clinical_question")).strip() != str(canonical_headline).strip():
+        consistency_flags.append("headline_overridden_by_care_intent")
+    if _is_present(clinical_compass.get("recommended_direction")) and str(clinical_compass.get("recommended_direction")).strip() != str(canonical_narrative).strip():
+        consistency_flags.append("narrative_overridden_by_care_intent")
+    if _is_present(clinical_compass.get("recommendation_family")) and str(clinical_compass.get("recommendation_family")).strip() != str(canonical_family).strip():
+        consistency_flags.append("family_overridden_by_care_intent")
+    return {
+        "headline": normalize_ui_value(canonical_headline),
+        "narrative": normalize_ui_value(canonical_narrative),
+        "recommendation_family": normalize_ui_value(canonical_family),
+        "effective_state": normalize_ui_value(clinical_compass.get("current_stage_label") or STATE_DISPLAY_MAP.get(state) or state),
+        "effective_management_track": normalize_ui_value(management_track or care_intent_contract.get("care_intent_key") or "No documentado"),
+        "last_decisive_data": last_decisive_data,
+        "consistency_flags": consistency_flags,
+        "is_consistent": not consistency_flags,
+    }
 
 
 def _merge_unique_text(primary: list[str], extra: list[str], *, limit: int = 6) -> list[str]:
@@ -737,6 +919,7 @@ def _build_clinical_compass(
     decision_recalculation_trace: dict[str, Any] | None = None,
     longitudinal_truth_snapshot: dict[str, Any] | None = None,
     guideline_followup_plan: dict[str, Any] | None = None,
+    care_intent_contract: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     display_result = (display_assessment or {}).get("display_result", {}) if display_assessment else {}
     raw_result = (raw_assessment or {}).get("result_snapshot", {}) if raw_assessment else {}
@@ -750,6 +933,7 @@ def _build_clinical_compass(
     truth_snapshot = dict(longitudinal_truth_snapshot or {})
     truth_values = dict(truth_snapshot.get("field_values") or {})
     guideline_plan = dict(guideline_followup_plan or {})
+    care_intent = dict(care_intent_contract or {})
     freshness = _build_data_freshness(patient, state)
     last_decisive = (
         recalculation_trace.get("latest_clinically_decisive_visit")
@@ -787,6 +971,7 @@ def _build_clinical_compass(
         "La etapa longitudinal reconciliada requiere confirmar transición y reemitir recomendación modular sobre el estado vigente."
         if state_conflict
         else _first_nonempty(
+            care_intent.get("narrative"),
             runtime_action.get("rationale"),
             nccn.get("trayectoria_recomendada"),
             nccn.get("recommendation"),
@@ -809,6 +994,7 @@ def _build_clinical_compass(
         "Estado reconciliado por confirmar"
         if state_conflict
         else _first_nonempty(
+            care_intent.get("recommendation_family"),
             runtime_action.get("recommendation_family"),
             decision_quality.get("recommendation_family"),
             raw_result.get("recommendation_family"),
@@ -821,29 +1007,29 @@ def _build_clinical_compass(
         limit=6,
     )
     return {
-        "current_diagnosis": current_diagnosis,
-        "official_diagnosis": current_diagnosis,
+        "current_diagnosis": normalize_ui_value(current_diagnosis),
+        "official_diagnosis": normalize_ui_value(current_diagnosis),
         "official_diagnosis_status": diagnosis_context.get("official_diagnosis_status", "missing"),
         "official_diagnosis_missing_fields": diagnosis_context.get("official_diagnosis_missing_fields", []),
-        "official_diagnosis_source_summary": diagnosis_context.get("official_diagnosis_source_summary", ""),
-        "operational_module_label": operational_module_label,
-        "current_stage_label": _first_nonempty(STATE_DISPLAY_MAP.get(state), state) if state_conflict else operational_module_label,
-        "explicit_stage_label": _first_nonempty(STATE_DISPLAY_MAP.get(reconciliation.get("explicit_state")), reconciliation.get("explicit_state")),
+        "official_diagnosis_source_summary": normalize_ui_value(diagnosis_context.get("official_diagnosis_source_summary", ""), default=""),
+        "operational_module_label": normalize_ui_value(operational_module_label),
+        "current_stage_label": normalize_ui_value(_first_nonempty(STATE_DISPLAY_MAP.get(state), state) if state_conflict else operational_module_label),
+        "explicit_stage_label": normalize_ui_value(_first_nonempty(STATE_DISPLAY_MAP.get(reconciliation.get("explicit_state")), reconciliation.get("explicit_state")), default=""),
         "state_conflict_flag": state_conflict,
         "state_conflict_reason": reconciliation.get("state_conflict_reason", ""),
-        "management_intent_status": _first_nonempty(latest_event.get("management_intent_status_label"), "Pendiente de confirmación"),
-        "event_kind_label": _first_nonempty(latest_event.get("event_kind_label"), "Recomendación generada"),
-        "primary_clinical_question": _first_nonempty(runtime_action.get("title"), PRIMARY_QUESTION_MAP.get(state), "¿Cuál es la siguiente mejor decisión clínica?"),
-        "recommended_direction": recommended_direction,
+        "management_intent_status": normalize_ui_value(_first_nonempty(latest_event.get("management_intent_status_label"), "Pendiente de confirmación")),
+        "event_kind_label": normalize_ui_value(_first_nonempty(latest_event.get("event_kind_label"), "Recomendación generada")),
+        "primary_clinical_question": normalize_ui_value(_first_nonempty(care_intent.get("headline"), runtime_action.get("title"), PRIMARY_QUESTION_MAP.get(state), "¿Cuál es la siguiente mejor decisión clínica?")),
+        "recommended_direction": normalize_ui_value(recommended_direction),
         "why_this_now": why_this_now,
         "what_could_change_course": what_could_change_course,
         "next_actions": next_actions,
         "monitoring_cadence": monitoring_cadence,
         "data_freshness": freshness,
-        "last_decisive_data": last_decisive,
+        "last_decisive_data": normalize_last_decisive_data(last_decisive),
         "evidence_anchor": _build_primary_evidence_anchor(display_result),
-        "confidence_category": confidence_category,
-        "recommendation_family": recommendation_family,
+        "confidence_category": normalize_ui_label(confidence_category),
+        "recommendation_family": normalize_ui_value(recommendation_family),
         "decision_changing_inputs": _as_list(display_result.get("decision_changing_inputs")),
         "why_not_more_confident": _as_list(decision_quality.get("why_not_more_confident")) or _as_list(display_result.get("why_not_more_confident")),
         "active_modifiers": modifier_bundle.get("active_modifiers", []),
@@ -1501,6 +1687,7 @@ def _advanced_panels(
                 "sources": entry.get("sources", []),
                 "updated_at": entry.get("updated_at", ""),
                 "missing_inputs": missing_inputs.get(key, []),
+                "display_missing_inputs": _displayize_field_list(missing_inputs.get(key, []), limit=8),
             }
         )
     return panels, context, missing_inputs
@@ -1590,7 +1777,9 @@ def _algorithm_panel_entry(raw_algorithm: dict[str, Any], display_algorithm: dic
         "what_score_means": result_snapshot.get("what_score_means") or algorithm_meta.get("what_score_means") or "",
         "risk_interpretation": result_snapshot.get("risk_interpretation") or algorithm_meta.get("risk_interpretation") or "",
         "inputs_used": inputs_used,
+        "display_inputs_used": _displayize_input_facts(inputs_used, limit=8),
         "missing_inputs": missing_inputs,
+        "display_missing_inputs": _displayize_field_list(missing_inputs, limit=8),
         "data_truth_status": result_snapshot.get("data_truth_status") or ("incomplete" if missing_inputs else "captured"),
         "clinical_decision_supported": result_snapshot.get("clinical_decision_supported") or algorithm_meta.get("clinical_decision_supported") or display_algorithm.get("clinical_use") or "",
     }
@@ -1641,7 +1830,7 @@ def _algorithm_panel_entry(raw_algorithm: dict[str, Any], display_algorithm: dic
         }
     elif key == "predict_prostate":
         panel["visual_type"] = "readiness"
-        panel["details"] = missing_inputs
+        panel["details"] = panel["display_missing_inputs"]
     elif raw_algorithm.get("integration_mode") == "external_result":
         panel["visual_type"] = "external_result"
         snapshot = raw_algorithm.get("result_snapshot", {})
@@ -1654,7 +1843,7 @@ def _algorithm_panel_entry(raw_algorithm: dict[str, Any], display_algorithm: dic
         }
     elif stage in DIAGNOSTIC_STATES:
         panel["visual_type"] = "readiness"
-        panel["details"] = missing_inputs
+        panel["details"] = panel["display_missing_inputs"]
     return panel
 
 
@@ -1866,7 +2055,14 @@ def _build_document_board(patient: dict[str, Any]) -> dict[str, Any]:
     candidates_by_document: dict[int, list[dict[str, Any]]] = {}
     for candidate in patient.get("document_candidates") or []:
         candidates_by_document.setdefault(candidate.get("document_id"), []).append(candidate)
-    verified_today = (patient.get("verified_document_facts") or [])[:10]
+    verified_today = []
+    for fact in (patient.get("verified_document_facts") or [])[:10]:
+        clone = dict(fact)
+        field_name = str(clone.get("field_name") or "").strip()
+        clone["display_field_name"] = normalize_field_label(field_name, default=field_name or "Dato clínico")
+        clone["display_fact_group"] = normalize_fact_group_label(clone.get("fact_group"))
+        clone["display_value"] = _displayize_field_value(field_name, clone.get("value"))
+        verified_today.append(clone)
     pending_documents = [
         {
             **item,
@@ -2424,6 +2620,107 @@ def _build_copilot_sections(patient: dict[str, Any], state: str, management_trac
         copilot_logger.debug("Copilot survival endpoints error: %s", exc)
         copilot["survival_endpoints"] = {"has_data": False}
 
+    # ═══════════════════════════════════════════════════════════════
+    # AI Engine Enrichments — all gated by feature flags (default OFF)
+    # ═══════════════════════════════════════════════════════════════
+    from prostanet.shared.feature_flags import resolve_feature_flags
+    ai_flags = resolve_feature_flags()
+
+    # ── AI State Transition Prediction ──
+    if ai_flags.get("ENABLE_AI_STATE_PREDICTION"):
+        try:
+            from prostanet.ai.inference.prediction_service import PredictionService
+            from prostanet.ai.inference.model_registry import ModelRegistry
+            reg = ModelRegistry()
+            reg.load_model("state_transition")
+            service = PredictionService(model_registry=reg)
+            pid = patient.get("identity", {}).get("id", 0)
+            transition = service.predict_state_transition(pid, patient)
+            copilot["ai_state_prediction"] = transition or {"has_data": False}
+        except Exception as exc:
+            copilot_logger.debug("AI state prediction error: %s", exc)
+            copilot["ai_state_prediction"] = {"has_data": False}
+
+    # ── AI Survival Curves (DeepSurv) ──
+    if ai_flags.get("ENABLE_AI_SURVIVAL_MODEL"):
+        try:
+            from prostanet.ai.inference.prediction_service import PredictionService
+            from prostanet.ai.inference.model_registry import ModelRegistry
+            reg = ModelRegistry()
+            reg.load_model("deep_surv")
+            service = PredictionService(model_registry=reg)
+            pid = patient.get("identity", {}).get("id", 0)
+            survival_ai = service.predict_survival(pid, patient)
+            copilot["ai_survival_curves"] = survival_ai or {"has_data": False}
+        except Exception as exc:
+            copilot_logger.debug("AI survival model error: %s", exc)
+            copilot["ai_survival_curves"] = {"has_data": False}
+
+    # ── AI Anomaly Detection ──
+    if ai_flags.get("ENABLE_AI_ANOMALY_DETECTION"):
+        try:
+            from prostanet.ai.inference.prediction_service import PredictionService
+            from prostanet.ai.inference.model_registry import ModelRegistry
+            reg = ModelRegistry()
+            reg.load_model("anomaly_detector")
+            service = PredictionService(model_registry=reg)
+            pid = patient.get("identity", {}).get("id", 0)
+            anomalies = service.predict_anomalies(pid, patient)
+            copilot["ai_anomaly_detection"] = anomalies or {"has_data": False}
+        except Exception as exc:
+            copilot_logger.debug("AI anomaly detection error: %s", exc)
+            copilot["ai_anomaly_detection"] = {"has_data": False}
+
+    # ── AI Agent Recommendation (CDA) ──
+    if ai_flags.get("ENABLE_AGENT_CDA"):
+        try:
+            from prostanet.engine.audit_log import AuditLogger
+            pid = patient.get("identity", {}).get("id", 0)
+            audit = AuditLogger()
+            latest = audit.get_latest_recommendation(pid)
+            if latest and latest.get("output"):
+                copilot["ai_recommendation"] = {
+                    "has_data": True,
+                    "agent_id": latest.get("agent_id"),
+                    "confidence_score": latest.get("confidence_score"),
+                    "output": latest["output"],
+                    "created_at": latest.get("created_at"),
+                }
+            else:
+                copilot["ai_recommendation"] = {"has_data": False}
+        except Exception as exc:
+            copilot_logger.debug("AI recommendation error: %s", exc)
+            copilot["ai_recommendation"] = {"has_data": False}
+
+    # ── AI Treatment Ranking (TOA) ──
+    if ai_flags.get("ENABLE_AI_TREATMENT_PREDICTION"):
+        try:
+            from prostanet.engine.audit_log import AuditLogger
+            pid = patient.get("identity", {}).get("id", 0)
+            audit = AuditLogger()
+            latest = audit.get_latest_recommendation(pid, agent_id="treatment_optimization_agent")
+            if latest and latest.get("output"):
+                copilot["ai_treatment_ranking"] = {
+                    "has_data": True,
+                    "output": latest["output"],
+                    "created_at": latest.get("created_at"),
+                }
+            else:
+                copilot["ai_treatment_ranking"] = {"has_data": False}
+        except Exception as exc:
+            copilot_logger.debug("AI treatment ranking error: %s", exc)
+            copilot["ai_treatment_ranking"] = {"has_data": False}
+
+    # ── Natural History Tracker — always runs (no GPU required) ──
+    try:
+        from prostanet.domains.patient_tracking.natural_history_tracker import (
+            analyze_natural_history,
+        )
+        copilot["natural_history"] = analyze_natural_history(patient)
+    except Exception as exc:
+        copilot_logger.debug("Natural history tracker error: %s", exc)
+        copilot["natural_history"] = {"has_data": False}
+
     return copilot
 
 
@@ -2489,10 +2786,13 @@ def build_patient_profile_view_model(
         raw_assessment=raw_assessment,
         display_assessment=assessment,
     )
+    risk_tools_bundle["cards"] = _decorate_missing_input_groups(risk_tools_bundle.get("cards", []))
+    risk_tools_bundle["missing_inputs"] = _displayize_field_list(risk_tools_bundle.get("missing_inputs") or [], limit=8)
     triplet_decision = _build_triplet_decision_for_profile(
         state=state,
         raw_assessment=raw_assessment,
     )
+    triplet_decision = _decorate_triplet_decision(triplet_decision)
     agenda_board = build_agenda_board(patient, state, management_track, raw_assessment)
     persisted_agenda_items = [dict(item) for item in (patient.get("agenda_items") or agenda_board.get("items", []))]
     scheduled_by_key = {
@@ -2602,9 +2902,33 @@ def build_patient_profile_view_model(
     else:
         patient_outcome_events = list(patient.get("outcome_events") or [])
     current_trial_profile = dict(trial_benchmark_snapshot.get("current_trial_profile") or {})
+    preferred_frontline_regimen = dict(raw_assessment.get("result_snapshot", {}).get("preferred_frontline_regimen") or {})
+    if is_mhspc_state(state) and preferred_frontline_regimen:
+        rationale = list(preferred_frontline_regimen.get("selection_rationale") or [])
+        current_trial_profile.update(
+            {
+                "recommended_trial_backbone": [preferred_frontline_regimen.get("regimen_code", "")],
+                "recommended_trial_backbone_label": preferred_frontline_regimen.get("regimen_label", ""),
+                "recommended_trial_backbone_source": ", ".join((preferred_frontline_regimen.get("pivotal_trial_fit") or {}).get("matched_trials") or []),
+                "recommended_trial_backbone_note": " ".join(rationale[:2]) or "Esquema frontline individualizado según elegibilidad clínica, guideline fit y evidencia pivote.",
+                "preferred_frontline_regimen": preferred_frontline_regimen,
+                "recommended_component_drugs": list(preferred_frontline_regimen.get("component_drugs") or []),
+            }
+        )
+        trial_benchmark_snapshot["current_trial_profile"] = current_trial_profile
     if current_trial_profile and not current_trial_profile.get("recommended_trial_backbone_label"):
         current_trial_profile.update(
             summarize_trial_backbones(list(current_trial_profile.get("matched_trials") or []))
+        )
+        trial_benchmark_snapshot["current_trial_profile"] = current_trial_profile
+    if current_trial_profile:
+        current_trial_profile["display_benchmark_family"] = normalize_ui_text(
+            current_trial_profile.get("benchmark_family"),
+            default="Sin familia comparable priorizada",
+        )
+        current_trial_profile["display_eligibility_status"] = normalize_ui_text(
+            current_trial_profile.get("eligibility_status"),
+            default="",
         )
         trial_benchmark_snapshot["current_trial_profile"] = current_trial_profile
     longitudinal_bundle = longitudinal_bundle or {}
@@ -2619,6 +2943,31 @@ def build_patient_profile_view_model(
         longitudinal_bundle.get("decision_recalculation_trace")
         or patient.get("decision_recalculation_trace")
         or {}
+    )
+    decision_recalculation_trace["what_changed_today"] = _displayize_trace_items(
+        decision_recalculation_trace.get("what_changed_today") or [],
+        limit=6,
+    )
+    trace_visit = dict(decision_recalculation_trace.get("latest_clinically_decisive_visit") or {})
+    if trace_visit:
+        trace_visit["display_changed_fields"] = _displayize_field_list(
+            trace_visit.get("changed_fields") or trace_visit.get("fields_changed") or [],
+            limit=6,
+        )
+        trace_visit["display_source_type"] = normalize_source_label(trace_visit.get("source_type"))
+        decision_recalculation_trace["latest_clinically_decisive_visit"] = trace_visit
+    decision_recalculation_trace["display_changed_fields"] = _displayize_field_list(
+        decision_recalculation_trace.get("display_changed_fields")
+        or (
+            (decision_recalculation_trace.get("latest_clinically_decisive_visit") or {}).get("changed_fields")
+            or (decision_recalculation_trace.get("latest_clinically_decisive_visit") or {}).get("fields_changed")
+            or []
+        ),
+        limit=6,
+    )
+    decision_recalculation_trace["display_visibility_status"] = normalize_ui_label(
+        decision_recalculation_trace.get("visibility_status"),
+        default="Contextual",
     )
     transition_resolution = dict(
         longitudinal_bundle.get("transition_resolution")
@@ -2635,6 +2984,16 @@ def build_patient_profile_view_model(
         or patient.get("guideline_followup_plan")
         or {}
     )
+    crpc_copilot_bundle = dict(
+        longitudinal_bundle.get("crpc_copilot_bundle")
+        or latest_signal_snapshot.get("crpc_copilot_bundle")
+        or {}
+    )
+    post_rp_salvage_bundle = dict(
+        longitudinal_bundle.get("post_rp_salvage_bundle")
+        or latest_signal_snapshot.get("post_rp_salvage_bundle")
+        or {}
+    )
     laboratory_intelligence_profile = dict(
         longitudinal_bundle.get("laboratory_intelligence_profile")
         or patient.get("laboratory_intelligence_profile")
@@ -2645,6 +3004,15 @@ def build_patient_profile_view_model(
         or patient.get("latest_clinically_decisive_visit")
         or decision_recalculation_trace.get("latest_clinically_decisive_visit")
         or {}
+    )
+    latest_clinically_decisive_visit["display_changed_fields"] = _displayize_field_list(
+        latest_clinically_decisive_visit.get("changed_fields")
+        or latest_clinically_decisive_visit.get("fields_changed")
+        or [],
+        limit=6,
+    )
+    latest_clinically_decisive_visit["display_source_type"] = normalize_source_label(
+        latest_clinically_decisive_visit.get("source_type")
     )
     if not psa_forecast:
         from prostanet.domains.patient_tracking.psa_forecast import build_psa_forecast
@@ -2688,7 +3056,19 @@ def build_patient_profile_view_model(
                 },
             }
     forecast_reliability = dict(psa_forecast.get("reliability") or {})
+    forecast_reliability["display_confidence_label"] = normalize_ui_text(
+        forecast_reliability.get("confidence_label"),
+        default="No disponible",
+    )
     benchmark_reliability = dict(live_benchmark.get("reliability") or {})
+    benchmark_reliability["display_confidence_label"] = normalize_ui_text(
+        benchmark_reliability.get("confidence_label"),
+        default="No disponible",
+    )
+    benchmark_reliability["display_cohort_tier"] = normalize_ui_text(
+        benchmark_reliability.get("cohort_tier"),
+        default="No disponible",
+    )
     prognostic_impact_bundle = build_prognostic_impact_bundle(
         patient=patient,
         state=state,
@@ -2697,6 +3077,13 @@ def build_patient_profile_view_model(
         risk_tools_bundle=risk_tools_bundle,
         current_trial_profile=current_trial_profile,
     )
+    backbone_alignment = dict(prognostic_impact_bundle.get("backbone_alignment") or {})
+    if backbone_alignment:
+        backbone_alignment["display_alignment_status"] = normalize_ui_text(
+            backbone_alignment.get("alignment_status"),
+            default="No disponible",
+        )
+        prognostic_impact_bundle["backbone_alignment"] = backbone_alignment
     latest_signal_snapshot.update(
         {
             "outcome_events_summary": adjudication_snapshot.get("outcome_events_summary", {}),
@@ -2724,7 +3111,9 @@ def build_patient_profile_view_model(
         and transition_resolution.get("policy") == "manual_confirmation_required"
     ]
     document_board = _build_document_board(patient)
-    copilot_sections = _build_copilot_sections(patient, state, management_track, raw_assessment)
+    copilot_sections = _decorate_copilot_sections(_build_copilot_sections(patient, state, management_track, raw_assessment))
+    psa_observability = _build_psa_observability(patient, copilot_sections)
+    psa_observability["display_source"] = normalize_source_label(psa_observability.get("source"))
     master_followup_plan = build_master_followup_plan(
         patient,
         state=state,
@@ -2796,7 +3185,22 @@ def build_patient_profile_view_model(
         agenda_items=active_agenda_items,
         copilot=copilot_sections,
     )
-    psa_observability = _build_psa_observability(patient, copilot_sections)
+    current_response_state = dict(adjudication_snapshot.get("current_response_state") or {})
+    if current_response_state:
+        current_response_state["display_label"] = normalize_ui_text(current_response_state.get("label"), default="")
+        adjudication_snapshot["current_response_state"] = current_response_state
+    last_adjudicated_event = dict(adjudication_snapshot.get("last_adjudicated_event") or {})
+    if last_adjudicated_event:
+        last_adjudicated_event["display_summary"] = normalize_ui_text(
+            last_adjudicated_event.get("summary"),
+            default="Sin evento adjudicado visible",
+        )
+        last_adjudicated_event["display_axis"] = normalize_ui_text(last_adjudicated_event.get("axis"), default="")
+        adjudication_snapshot["last_adjudicated_event"] = last_adjudicated_event
+    adjudication_snapshot["current_course_status_display"] = normalize_ui_text(
+        adjudication_snapshot.get("current_course_status"),
+        default="Sin estado adjudicado aún.",
+    )
     psa_observability["forecast"] = psa_forecast
     response_visualization = dict(copilot_sections.get("response_visualization") or {})
     psa_trajectory = dict(response_visualization.get("psa_trajectory") or {})
@@ -2834,6 +3238,53 @@ def build_patient_profile_view_model(
         reverse=True,
     )[:24]
     agenda_resolution_trace = _build_agenda_resolution_trace(archived_agenda_items)
+    clinical_compass = _build_clinical_compass(
+        patient=patient,
+        state=state,
+        reconciliation=reconciliation,
+        display_assessment=assessment,
+        raw_assessment=raw_assessment,
+        state_timeline=state_timeline,
+        diagnosis_context=diagnosis_context,
+        copilot_modifiers=copilot_modifiers,
+        next_best_action=latest_signal_snapshot.get("next_best_action", {}),
+        decision_recalculation_trace=decision_recalculation_trace,
+        longitudinal_truth_snapshot=longitudinal_truth_snapshot,
+        guideline_followup_plan=guideline_followup_plan,
+        care_intent_contract=care_intent_contract,
+    )
+    profile_decision_view_model = _build_profile_decision_view_model(
+        clinical_compass=clinical_compass,
+        care_intent_contract=care_intent_contract,
+        management_track=management_track,
+        state=state,
+    )
+    profile_decision_consistency = {
+        "is_consistent": bool(profile_decision_view_model.get("is_consistent", True)),
+        "flags": list(profile_decision_view_model.get("consistency_flags") or []),
+    }
+    identity_summary = {
+        "baseline_psa_display": normalize_numeric_with_unit(
+            patient.get("baseline", {}).get("baseline_psa"),
+            "ng/mL",
+        ),
+    }
+    if copilot_sections.get("therapeutic_fitness"):
+        therapeutic_fitness = dict(copilot_sections.get("therapeutic_fitness") or {})
+        if isinstance(therapeutic_fitness.get("frailty"), dict):
+            therapeutic_fitness["frailty"] = {
+                **therapeutic_fitness["frailty"],
+                "status_label": normalize_ui_label(therapeutic_fitness["frailty"].get("status"), default="No disponible"),
+                "display_missing_inputs": _displayize_field_list((therapeutic_fitness["frailty"] or {}).get("missing_inputs") or [], limit=8),
+            }
+        if isinstance(therapeutic_fitness.get("fit_score"), dict):
+            therapeutic_fitness["fit_score"] = {
+                **therapeutic_fitness["fit_score"],
+                "category_label": normalize_ui_label(therapeutic_fitness["fit_score"].get("category"), default="No disponible"),
+                "display_missing_inputs": _displayize_field_list((therapeutic_fitness["fit_score"] or {}).get("missing_inputs") or [], limit=8),
+            }
+        copilot_sections["therapeutic_fitness"] = therapeutic_fitness
+    psa_forecast["status_label"] = normalize_ui_label(psa_forecast.get("status"), default="No disponible")
     return {
         "diagnostic_state": diagnostic_state,
         "management_track": management_track,
@@ -2843,20 +3294,18 @@ def build_patient_profile_view_model(
         "schedule_management_track": patient.get("schedule_management_track", management_track),
         "state_conflict_flag": reconciliation.get("state_conflict_flag", False),
         "state_conflict_reason": reconciliation.get("state_conflict_reason", ""),
-        "clinical_compass": _build_clinical_compass(
-            patient=patient,
-            state=state,
-            reconciliation=reconciliation,
-            display_assessment=assessment,
-            raw_assessment=raw_assessment,
-            state_timeline=state_timeline,
-            diagnosis_context=diagnosis_context,
-            copilot_modifiers=copilot_modifiers,
-            next_best_action=latest_signal_snapshot.get("next_best_action", {}),
-            decision_recalculation_trace=decision_recalculation_trace,
-            longitudinal_truth_snapshot=longitudinal_truth_snapshot,
-            guideline_followup_plan=guideline_followup_plan,
-        ),
+        "clinical_compass": clinical_compass,
+        "profile_decision_view_model": profile_decision_view_model,
+        "profile_decision_consistency": profile_decision_consistency,
+        "identity_summary": identity_summary,
+        "ui_normalized_labels": {
+            "psa_forecast_status": psa_forecast.get("status_label", ""),
+            "baseline_psa": identity_summary.get("baseline_psa_display", "No disponible"),
+        },
+        "value_availability_flags": {
+            "baseline_psa": identity_summary.get("baseline_psa_display") != "No disponible",
+            "last_decisive_data": bool(profile_decision_view_model.get("last_decisive_data", {}).get("source") or profile_decision_view_model.get("last_decisive_data", {}).get("date")),
+        },
         "official_diagnosis": diagnosis_context.get("official_diagnosis", ""),
         "official_diagnosis_status": diagnosis_context.get("official_diagnosis_status", "missing"),
         "official_diagnosis_missing_fields": diagnosis_context.get("official_diagnosis_missing_fields", []),
@@ -2905,6 +3354,24 @@ def build_patient_profile_view_model(
         "transition_resolution": transition_resolution,
         "care_intent_contract": care_intent_contract,
         "guideline_followup_plan": guideline_followup_plan,
+        "crpc_copilot_bundle": crpc_copilot_bundle,
+        "crpc_copilot_status": crpc_copilot_bundle.get("status", "not_applicable"),
+        "post_rp_salvage_bundle": post_rp_salvage_bundle,
+        "post_rp_copilot_status": post_rp_salvage_bundle.get("status", "not_applicable"),
+        "salvage_window_status": post_rp_salvage_bundle.get("salvage_window_status", ""),
+        "salvage_window_reason": post_rp_salvage_bundle.get("salvage_window_reason", ""),
+        "qa_passed": (
+            (post_rp_salvage_bundle.get("qa_validation") or {}).get("approved")
+            if post_rp_salvage_bundle.get("available")
+            else (crpc_copilot_bundle.get("qa_validation") or {}).get("approved")
+        ),
+        "sequence_summary": (
+            post_rp_salvage_bundle.get("sequence_candidates", [])
+            if post_rp_salvage_bundle.get("available")
+            else crpc_copilot_bundle.get("sequence_summary", [])
+        ),
+        "crpc_schedule_overlay": crpc_copilot_bundle.get("crpc_schedule_overlay", {}),
+        "post_rp_schedule_overlay": post_rp_salvage_bundle.get("post_rp_schedule_overlay", {}),
         "laboratory_intelligence_profile": laboratory_intelligence_profile,
         "latest_clinically_decisive_visit": latest_clinically_decisive_visit,
         "agenda_resolution_trace": agenda_resolution_trace,
@@ -2912,6 +3379,7 @@ def build_patient_profile_view_model(
         "supportive_evidence_context": _as_list(display_result.get("supportive_evidence_context"))[:3],
         "source_citations": display_result.get("source_citations", []),
         "care_overlays": care_overlays,
+        "patient_alerts": _decorate_patient_alerts(patient.get("alerts") or []),
         "agenda_board": agenda_board,
         "master_followup_plan": master_followup_plan,
         "master_followup_summary": master_followup_plan.get("summary", {}),
@@ -2926,7 +3394,7 @@ def build_patient_profile_view_model(
         "therapy_checkpoints": agenda_board.get("therapy_checkpoints", []),
         "protocol_comparators": agenda_board.get("protocol_comparators", []),
         "protocol_trace": agenda_board.get("protocol_trace", {}),
-        "data_provenance": (patient.get("data_provenance") or [])[:12],
+        "data_provenance": _decorate_provenance_entries((patient.get("data_provenance") or [])[:12]),
         "clinical_signals": latest_signal_snapshot,
         "next_best_action": latest_signal_snapshot.get("next_best_action", {}),
         "transition_proposals": transition_proposals,
@@ -2936,9 +3404,14 @@ def build_patient_profile_view_model(
         "pending_adjudications": adjudication_snapshot.get("pending_adjudications", []),
         "current_response_state": adjudication_snapshot.get("current_response_state", {}),
         "current_course_status": adjudication_snapshot.get("current_course_status", ""),
+        "current_course_status_display": adjudication_snapshot.get("current_course_status_display", "Sin estado adjudicado aún."),
         "last_adjudicated_event": adjudication_snapshot.get("last_adjudicated_event", {}),
         "trial_comparable_endpoints": trial_benchmark_snapshot.get("trial_endpoints", []),
         "current_trial_comparable_profile": trial_benchmark_snapshot.get("current_trial_profile", {}),
+        "preferred_frontline_regimen": raw_result.get("preferred_frontline_regimen", {}),
+        "frontline_regimen_rankings": raw_result.get("frontline_regimen_rankings", []),
+        "frontline_regimen_rejections": raw_result.get("frontline_regimen_rejections", []),
+        "drug_component_metadata": raw_result.get("drug_component_metadata", {}),
         "benchmark_snapshots": (trial_benchmark_snapshot.get("benchmark_snapshot") or {}).get("benchmark_snapshots", []),
         "document_board": document_board,
         "patient_kpis": patient_kpis,

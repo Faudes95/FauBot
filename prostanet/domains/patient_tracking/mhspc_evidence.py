@@ -3,6 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from clinical_scores import docetaxel_fitness
+from prostanet.domains.patient_tracking.mhspc_regimen_selector import (
+    preferred_non_triplet_regimen_label,
+)
 from prostanet.domains.patient_tracking.therapy_catalog import trial_backbone
 
 
@@ -70,11 +73,8 @@ def _state_label(state: str) -> str:
     return labels.get(state, "mHSPC")
 
 
-def _preferred_non_triplet_label(payload: dict[str, Any] | None = None) -> str:
-    payload = payload or {}
-    if _boolish(payload.get("comorbidity_seizure", "0")) or _boolish(payload.get("comorbidity_cardio", "0")) or _boolish(payload.get("cv_risk_documented", "0")):
-        return "ADT + darolutamida"
-    return "ADT + darolutamida"
+def _preferred_non_triplet_label(state: str, payload: dict[str, Any] | None = None) -> str:
+    return preferred_non_triplet_regimen_label(state, payload or {})
 
 
 def build_triplet_decision(
@@ -196,7 +196,7 @@ def build_triplet_decision(
         "preferred_triplet_backbone": preferred_backbone_bundle.get("recommended_trial_backbone", "") if preferred_triplet else "",
         "preferred_triplet_backbone_label": preferred_triplet,
         "supported_triplet_backbones": supported_triplets,
-        "preferred_non_triplet_backbone_label": _preferred_non_triplet_label(payload),
+        "preferred_non_triplet_backbone_label": _preferred_non_triplet_label(exact_state, payload),
         "evidence_basis": evidence_basis,
     }
 
@@ -281,4 +281,3 @@ def build_visible_mhspc_trial_matches(
             }
         )
     return matches, len(hidden)
-

@@ -1,6 +1,7 @@
 import csv
 import io
 import json
+import re
 import sqlite3
 
 from prostanet.shared.tnm_engine import TNMEngine
@@ -1165,6 +1166,288 @@ def test_profile_compass_prioritizes_longitudinal_direction_over_stale_assessmen
     assert "Brújula longitudinal viva" in profile_html
     assert "testosterona actual de 95 ng/dL" not in profile_html
     assert "Fracaso de supresión androgénica / castración inadecuada." not in profile_html
+
+
+def test_patient_ref_routes_accept_numeric_and_alphanumeric_identifiers(app_client):
+    client, db_path = app_client
+    payload = make_patient_payload(nss="VAL-ROUTE-001", full_name="Paciente Ref Clínico")
+    payload.update({"metastasis_site": "Bone", "line_of_therapy": 2})
+    register = client.post("/api/register_patient", json=payload)
+    assert register.status_code == 200
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "adt_progression_verification")
+
+    client.post(
+        f"/api/patients/{patient_id}/visits",
+        json={
+            "visit_date": "2026-03-25",
+            "state": "adt_progression_verification",
+            "management_track": "systemic_surveillance",
+            "current_treatment": "ADT + abiraterona",
+            "testosterone": 18,
+            "disease_status": "Progresión radiográfica",
+            "progression_pattern": "radiographic",
+        },
+    )
+
+    signals_numeric = client.get(f"/api/patients/{patient_id}/signals")
+    signals_alpha = client.get(f"/api/patients/{payload['nss']}/signals")
+    schedule_alpha = client.get(f"/api/patients/{payload['nss']}/schedule")
+    progression_alpha = client.get(f"/api/ai/progression-dashboard/{payload['nss']}")
+    natural_history_alpha = client.get(f"/api/ai/natural-history/{payload['nss']}")
+    full_assessment_alpha = client.post(f"/api/ai/full-assessment/{payload['nss']}", json={})
+
+    assert signals_numeric.status_code == 200
+    assert signals_alpha.status_code == 200
+    assert schedule_alpha.status_code == 200
+    assert progression_alpha.status_code == 200
+    assert natural_history_alpha.status_code == 200
+    assert full_assessment_alpha.status_code == 200
+
+    signals_numeric_payload = signals_numeric.get_json()
+    signals_alpha_payload = signals_alpha.get_json()
+    schedule_alpha_payload = schedule_alpha.get_json()
+    progression_payload = progression_alpha.get_json()
+    natural_history_payload = natural_history_alpha.get_json()
+    full_assessment_payload = full_assessment_alpha.get_json()
+
+    assert signals_numeric_payload["resolved_patient_id"] == patient_id
+    assert signals_alpha_payload["resolved_patient_id"] == patient_id
+    assert signals_alpha_payload["resolved_patient_ref"] == payload["nss"]
+    assert schedule_alpha_payload["resolved_patient_id"] == patient_id
+    assert schedule_alpha_payload["resolved_patient_ref"] == payload["nss"]
+    assert progression_payload["patient_id"] == patient_id
+    assert progression_payload["resolved_patient_ref"] == payload["nss"]
+    assert natural_history_payload["patient_id"] == patient_id
+    assert natural_history_payload["resolved_patient_ref"] == payload["nss"]
+    assert full_assessment_payload["patient_id"] == patient_id
+    assert full_assessment_payload["resolved_patient_ref"] == payload["nss"]
+
+
+def test_profile_sanitizes_missing_values_and_internal_status_labels(app_client):
+    client, db_path = app_client
+    payload = make_patient_payload(nss="39494949504", full_name="Paciente UI Limpia")
+    payload["baseline_psa"] = None
+    register = client.post("/api/register_patient", json=payload)
+    assert register.status_code == 200
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "localized_initial")
+
+    profile_response = client.get(f"/patient_profile/{payload['nss']}")
+    assert profile_response.status_code == 200
+    profile_html = profile_response.get_data(as_text=True)
+
+    assert "None ng/mL" not in profile_html
+    assert "insufficient_data" not in profile_html
+    assert "Incomplete" not in profile_html
+    assert "actionable" not in profile_html
+    assert "No disponible" in profile_html
+
+
+def test_missing_input_actions_expose_display_copy_without_losing_machine_fields(app_client):
+    client, db_path = app_client
+    payload = make_patient_payload(nss="39494949505", full_name="Paciente Captura Accionable")
+    payload.update({"metastasis_site": "Bone", "line_of_therapy": 2})
+    register = client.post("/api/register_patient", json=payload)
+    assert register.status_code == 200
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "m1_crpc")
+
+    import tracking_db
+    from prostanet.domains.patient_tracking.profile_compass import build_patient_profile_view_model
+
+    refreshed = tracking_db.get_patient_full_record(payload["nss"])
+    profile = build_patient_profile_view_model(
+        patient=refreshed,
+        latest_assessment_raw=refreshed.get("latest_assessment") or {},
+        latest_assessment=refreshed.get("latest_assessment") or {},
+        state_timeline=refreshed.get("state_timeline") or [],
+        care_overlays=refreshed.get("care_overlays") or [],
+        recommendations={},
+    )
+
+    action = next(item for item in profile["missing_input_actions"] if item["key"] == "line_refresh")
+    assert {"line_of_therapy_number", "current_adt_context", "drug_scheme"} <= set(action["raw_fields"])
+    assert action["display_cta"] == "Completar en visita"
+    assert action["display_group"] == "Visita clínica"
+    assert "Contexto actual de ADT" in action["display_fields_summary"]
+    assert "Esquema sistémico actual" in action["display_fields_summary"]
+    assert "current_adt_context" not in action["display_fields_summary"]
+    assert "drug_scheme" not in action["display_fields_summary"]
+    assert "secuenciación sistémica" in action["display_impact"].lower()
+
+
+def test_patient_profile_visible_text_hides_machine_field_names_in_missing_input_cards(app_client):
+    client, db_path = app_client
+    payload = make_patient_payload(nss="39494949506", full_name="Paciente Perfil Sin Jerga")
+    payload.update({"metastasis_site": "Bone", "line_of_therapy": 2})
+    register = client.post("/api/register_patient", json=payload)
+    assert register.status_code == 200
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "m1_crpc")
+
+    profile_response = client.get(f"/patient_profile/{payload['nss']}")
+    assert profile_response.status_code == 200
+    profile_html = profile_response.get_data(as_text=True)
+    section_match = re.search(
+        r"Captura clínica obligada.*?Brújula clínica actual",
+        profile_html,
+        flags=re.DOTALL,
+    )
+    assert section_match
+    visible_text = re.sub(r"<[^>]+>", " ", section_match.group(0))
+    visible_text = re.sub(r"\s+", " ", visible_text)
+
+    assert "psma_negative_dominant_lesions" not in visible_text
+    assert "current_adt_context" not in visible_text
+    assert "drug_scheme" not in visible_text
+    assert "Impacta:" not in visible_text
+    assert "Contexto actual de ADT" in visible_text
+    assert "Esquema sistémico actual" in visible_text
+    assert "Completar en visita" in visible_text
+
+
+def test_followup_recalculation_trace_humanizes_changed_fields():
+    from prostanet.domains.patient_tracking.followup_reconciliation_service import build_decision_recalculation_trace
+
+    trace = build_decision_recalculation_trace(
+        patient={},
+        state="m1_crpc",
+        management_track="systemic_control",
+        longitudinal_truth_snapshot={
+            "superseded_inputs": [
+                {
+                    "field_name": "drug_scheme",
+                    "previous_value": "ADT_ABIRATERONE",
+                    "current_value": "DOCETAXEL",
+                },
+                {
+                    "field_name": "ast",
+                    "previous_value": 32,
+                    "current_value": 89,
+                },
+            ],
+            "latest_clinically_decisive_visit": {"clinically_sufficient": True},
+        },
+        transition_resolution={"policy": "auto_applied"},
+        care_intent_contract={"headline": "Reevaluar secuencia sistémica y seguridad activa"},
+    )
+
+    assert trace["what_changed_today"][0].startswith("Esquema sistémico actual:")
+    assert "adt + abiraterona" in trace["what_changed_today"][0].lower()
+    assert "docetaxel" in trace["what_changed_today"][0].lower()
+    assert trace["what_changed_today"][1].startswith("AST:")
+    assert "drug_scheme" not in trace["what_changed_today"][0]
+    assert "ast actualizado" not in " ".join(trace["what_changed_today"]).lower()
+
+
+def test_patient_profile_alerts_and_provenance_hide_machine_copy(app_client):
+    client, db_path = app_client
+    payload = make_patient_payload(nss="39494949507", full_name="Paciente Copiloto Limpio")
+    payload.update({"metastasis_site": "Bone", "line_of_therapy": 2})
+    register = client.post("/api/register_patient", json=payload)
+    assert register.status_code == 200
+    patient_id = register.get_json()["patient_id"]
+    _seed_latest_assessment_state(db_path, patient_id, "m1_crpc")
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO data_provenance (
+            patient_id, field_name, value_json, source_type, source_date
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            patient_id,
+            "drug_scheme",
+            json.dumps("ADT_ABIRATERONE"),
+            "follow_up_visits",
+            "2026-03-01",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    import tracking_db
+    from prostanet.domains.patient_tracking.profile_compass import build_patient_profile_view_model
+
+    refreshed = tracking_db.get_patient_full_record(payload["nss"])
+    profile = build_patient_profile_view_model(
+        patient=refreshed,
+        latest_assessment_raw=refreshed.get("latest_assessment") or {},
+        latest_assessment=refreshed.get("latest_assessment") or {},
+        state_timeline=refreshed.get("state_timeline") or [],
+        care_overlays=refreshed.get("care_overlays") or [],
+        recommendations={},
+    )
+
+    alert = next(item for item in profile["copilot"]["clinical_alerts"] if item.get("display_fields_to_capture"))
+    assert "current_adt_context" not in " ".join(alert["display_fields_to_capture"])
+    assert all("_" not in label for label in alert["display_fields_to_capture"])
+    assert all(not label.startswith("source_document:") for label in alert["display_fields_to_capture"])
+    assert profile["data_provenance"][0]["display_field_name"] == "Esquema sistémico actual"
+    assert profile["data_provenance"][0]["display_source_type"] == "Visita longitudinal"
+
+    profile_response = client.get(f"/patient_profile/{payload['nss']}")
+    assert profile_response.status_code == 200
+    profile_html = profile_response.get_data(as_text=True)
+
+    alert_match = re.search(
+        r"Alertas clínicas del copiloto.*?Calendario de seguimiento programado",
+        profile_html,
+        flags=re.DOTALL,
+    )
+    assert alert_match
+    alert_text = re.sub(r"<[^>]+>", " ", alert_match.group(0))
+    alert_text = re.sub(r"\s+", " ", alert_text)
+
+    provenance_match = re.search(
+        r"Provenance clínica reciente.*?Datos verificados recientes",
+        profile_html,
+        flags=re.DOTALL,
+    )
+    assert provenance_match
+    provenance_text = re.sub(r"<[^>]+>", " ", provenance_match.group(0))
+    provenance_text = re.sub(r"\s+", " ", provenance_text)
+
+    assert "Captura esperada:" not in alert_text
+    assert "Completar para recalcular" in alert_text
+    assert "current_adt_context" not in alert_text
+    assert "drug_scheme" not in provenance_text
+    assert "follow_up_visits" not in provenance_text
+    assert "Esquema sistémico actual" in provenance_text
+    assert "Visita longitudinal" in provenance_text
+    assert "Facts verificados recientes" not in profile_html
+
+
+def test_profile_alert_copy_collapses_duplicate_title_message():
+    from prostanet.domains.patient_tracking.profile_compass import (
+        _decorate_copilot_sections,
+        _decorate_patient_alerts,
+    )
+
+    duplicated = "Resultado molecular verificable para PARP / biomarcadores"
+    copilot = _decorate_copilot_sections(
+        {
+            "clinical_alerts": [
+                {
+                    "title": duplicated,
+                    "message": duplicated,
+                    "recommended_action": "Completar captura",
+                    "severity": "critical",
+                }
+            ]
+        }
+    )
+    patient_alerts = _decorate_patient_alerts(
+        [{"title": duplicated, "description": duplicated, "severity": "critical"}]
+    )
+
+    assert copilot["clinical_alerts"][0]["display_title"] == duplicated
+    assert copilot["clinical_alerts"][0]["display_message"] == ""
+    assert patient_alerts[0]["display_title"] == duplicated
+    assert patient_alerts[0]["display_description"] == ""
 
 
 def test_bcr_without_imaging_stays_non_metastatic_and_pending_restaging(app_client):
@@ -3735,6 +4018,18 @@ def test_dashboard_research_intelligence_endpoint_returns_modular_panels(app_cli
     assert "survival" in second_data
     assert "psma_imaging" in second_data
     assert "laboratory_intelligence" in second_data
+
+
+def test_dashboard_separates_legacy_calibration_from_longitudinal_release_status(app_client):
+    client, _db_path = app_client
+
+    response = client.get("/dashboard")
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "Calibración modular legacy" in html
+    assert "Validación longitudinal viva" in html
+    assert "estado actual de release longitudinal" in html
 
 
 def test_research_cohort_survival_and_export_endpoints_work(app_client):

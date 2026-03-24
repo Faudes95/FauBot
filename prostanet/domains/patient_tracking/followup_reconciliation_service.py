@@ -2,9 +2,24 @@ from __future__ import annotations
 
 from typing import Any
 
+from prostanet.domains.patient_tracking.therapy_catalog import regimen_label
+from prostanet.shared.presentation_text import resolve_option_label
+from prostanet.shared.ui_value_normalizer import normalize_field_label, normalize_ui_value
+
 
 def _is_present(value: Any) -> bool:
     return value not in (None, "", [], {}, "No aplica", "No documentado", "Desconocido", "Desconocida")
+
+
+def _display_value(field_name: str, value: Any) -> str:
+    if value in (None, ""):
+        return "No disponible"
+    normalized_field_name = str(field_name or "").strip().replace(" ", "_")
+    if normalized_field_name in {"drug_scheme", "current_treatment"}:
+        regimen = regimen_label(value)
+        if regimen:
+            return regimen
+    return str(normalize_ui_value(resolve_option_label(normalized_field_name, value)))
 
 
 def build_decision_recalculation_trace(
@@ -27,15 +42,20 @@ def build_decision_recalculation_trace(
     care_intent_contract = dict(care_intent_contract or {})
     changed_today: list[str] = []
     why_changed: list[str] = []
+    display_changed_fields = []
 
     for item in superseded_inputs[:6]:
-        field_name = str(item.get("field_name") or "").replace("_", " ")
+        raw_field_name = str(item.get("field_name") or "").strip()
+        field_label = normalize_field_label(raw_field_name, default=raw_field_name.replace("_", " "))
+        display_changed_fields.append(field_label)
         changed_today.append(
-            f"{field_name}: {item.get('previous_value')} → {item.get('current_value')}"
+            f"{field_label}: {_display_value(raw_field_name, item.get('previous_value'))} → {_display_value(raw_field_name, item.get('current_value'))}"
         )
     if not changed_today:
         for field_name in list(decisive_visit.get("changed_fields") or decisive_visit.get("fields_changed") or [])[:6]:
-            changed_today.append(f"{str(field_name).replace('_', ' ')} actualizado en la visita longitudinal más reciente")
+            field_label = normalize_field_label(field_name, default=str(field_name).replace("_", " "))
+            display_changed_fields.append(field_label)
+            changed_today.append(f"{field_label} actualizado en la visita longitudinal más reciente")
 
     if reconciliation and reconciliation.get("state_conflict_flag"):
         why_changed.append(str(reconciliation.get("state_conflict_reason") or "La evolución longitudinal cambió la etapa reconciliada."))
@@ -62,6 +82,7 @@ def build_decision_recalculation_trace(
         "why_changed": why_changed[:4],
         "latest_clinically_decisive_visit": decisive_visit,
         "superseded_inputs": superseded_inputs,
+        "display_changed_fields": display_changed_fields[:6],
         "visibility_status": "actionable" if decisive_visit.get("clinically_sufficient") else "contextual",
         "transition_resolution": transition_resolution,
     }

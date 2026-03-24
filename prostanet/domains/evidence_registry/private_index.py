@@ -137,10 +137,31 @@ class EvidencePrivateIndex:
 
     @staticmethod
     def _read_index(index_path: Path) -> dict[str, Any]:
-        return json.loads(index_path.read_text(encoding="utf-8"))
+        try:
+            return json.loads(index_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return {
+                "document_id": index_path.stem,
+                "source_path": "",
+                "chunks": [],
+                "corrupt_index": True,
+            }
 
     @staticmethod
     def _status_payload(index_path: Path, payload: dict[str, Any]) -> dict[str, Any]:
+        if payload.get("corrupt_index"):
+            return {
+                "document_id": payload.get("document_id", index_path.stem),
+                "indexed": False,
+                "reason": "corrupt_index",
+                "source_path": payload.get("source_path", ""),
+                "index_path": str(index_path),
+                "sha256": "",
+                "indexed_at": "",
+                "page_count": 0,
+                "chunk_count": 0,
+                "license_class": "",
+            }
         return {
             "document_id": payload.get("document_id", ""),
             "indexed": True,

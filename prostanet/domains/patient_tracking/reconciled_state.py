@@ -145,6 +145,46 @@ def _has_local_treatment(patient: dict[str, Any]) -> bool:
     return bool(patient.get("surgery")) or bool(patient.get("radiation"))
 
 
+def _has_post_prostatectomy_context(patient: dict[str, Any]) -> bool:
+    if patient.get("surgery"):
+        return True
+    prior_state = str((patient.get("prior_history") or {}).get("current_state") or "")
+    if prior_state == "post_prostatectomy":
+        return True
+    assessment_state = str((patient.get("latest_assessment") or {}).get("state") or "")
+    if assessment_state == "post_prostatectomy":
+        return True
+    bcr = patient.get("bcr") or {}
+    primary_treatment = str(bcr.get("primary_treatment") or "").strip().upper()
+    if primary_treatment in {"RP", "POST_RP", "RADICAL PROSTATECTOMY", "PROSTATECTOMY"}:
+        return True
+    truth_values = ((patient.get("longitudinal_truth_snapshot") or {}).get("field_values") or {})
+    assessment_inputs = ((patient.get("latest_assessment") or {}).get("input_snapshot") or {})
+    for source in (
+        patient.get("baseline") or {},
+        truth_values,
+        assessment_inputs,
+        bcr,
+    ):
+        if not isinstance(source, dict):
+            continue
+        if _safe_bool(source.get("prior_prostatectomy")):
+            return True
+        if _safe_bool(source.get("post_prostatectomy")):
+            return True
+        if _safe_bool(source.get("prostatectomy_done")):
+            return True
+        if _is_present(source.get("rp_date")) or _is_present(source.get("prostatectomy_date")):
+            return True
+        if _is_present(source.get("pathologic_stage")) or _is_present(source.get("pathological_stage")):
+            return True
+        if _is_present(source.get("surgery_type")) or _is_present(source.get("margin_location")):
+            return True
+        if _is_present(source.get("surgical_margin")) or _is_present(source.get("surgical_margin_status")):
+            return True
+    return False
+
+
 def _is_metachronous_mhspc(patient: dict[str, Any]) -> bool:
     baseline = patient.get("baseline") or {}
     explicit = str(baseline.get("metachronous_metastasis", "") or "").strip().lower()
@@ -317,19 +357,29 @@ def _post_prostatectomy_psa_series(patient: dict[str, Any]) -> list[float]:
     return values
 
 
+def _post_prostatectomy_bcr_confirmed(bcr: dict[str, Any]) -> bool:
+    if not isinstance(bcr, dict):
+        return False
+    if _safe_bool(bcr.get("bcr_detected")):
+        return True
+    bcr_psa = _safe_float(bcr.get("bcr_psa"))
+    if bcr_psa is not None and bcr_psa >= 0.2:
+        if any(_is_present(bcr.get(field)) for field in ("bcr_date", "psadt_at_bcr", "salvage_date")):
+            return True
+        definition = str(bcr.get("bcr_definition") or "").strip().lower()
+        if definition and definition not in {"", "none", "unknown", "pendiente"}:
+            return True
+    if _is_present(bcr.get("salvage_date")):
+        return True
+    return False
+
+
 def derive_post_prostatectomy_course(patient: dict[str, Any]) -> str:
-    has_postlocal_context = bool(patient.get("surgery"))
-    prior_state = str((patient.get("prior_history") or {}).get("current_state") or "")
-    if prior_state == "post_prostatectomy":
-        has_postlocal_context = True
-    if not has_postlocal_context:
+    if not _has_post_prostatectomy_context(patient):
         return ""
 
     bcr = patient.get("bcr") or {}
-    if any(
-        _is_present(bcr.get(field))
-        for field in ("bcr_definition", "salvage_date", "bcr_date", "psadt_at_bcr")
-    ):
+    if _post_prostatectomy_bcr_confirmed(bcr):
         return "true_bcr"
 
     psa_series = _post_prostatectomy_psa_series(patient)
@@ -357,11 +407,11 @@ def derive_post_prostatectomy_course(patient: dict[str, Any]) -> str:
 
 def _has_postlocal_bcr(patient: dict[str, Any]) -> bool:
     bcr = patient.get("bcr") or {}
-    has_postlocal_context = bool(patient.get("surgery") or patient.get("radiation"))
+    has_postlocal_context = _has_post_prostatectomy_context(patient) or bool(patient.get("radiation"))
     prior_state = str((patient.get("prior_history") or {}).get("current_state") or "")
     if prior_state in POSTLOCAL_STATES:
         has_postlocal_context = True
-    explicit_bcr_markers = any(
+    explicit_bcr_markers = _post_prostatectomy_bcr_confirmed(bcr) or any(
         _is_present(bcr.get(field))
         for field in ("bcr_psa", "psadt_at_bcr", "bcr_definition", "salvage_date", "bcr_date")
     )

@@ -315,25 +315,63 @@ def extract_candidates_for_document(
     document_type: str,
     file_name: str,
     private_payload: dict[str, Any],
+    enrich_with_nlp: bool = True,
 ) -> list[dict[str, Any]]:
+    """
+    Extract structured candidates from a clinical document.
+
+    When `enrich_with_nlp=True` (default), the ProstaNet NLP extractor is
+    also run on the full text and its findings are merged as additional
+    candidates (deduplicating by field_name).
+    """
     text_pages = private_payload.get("text_by_page", []) or []
     full_text = "\n".join(item.get("text", "") for item in text_pages)
     if not full_text.strip():
         return []
 
     if document_type == "pathology_report":
-        return _extract_pathology_candidates(full_text, text_pages)
-    if document_type == "laboratory_bundle":
-        return _extract_lab_candidates(full_text, text_pages)
-    if document_type == "imaging_report":
-        return _extract_imaging_candidates(full_text, text_pages, file_name=file_name)
-    if document_type == "genomic_report":
-        return _extract_genomic_candidates(full_text, text_pages)
-    if document_type == "surgery_summary":
-        return _extract_surgery_candidates(full_text, text_pages)
-    if document_type == "radiotherapy_summary":
-        return _extract_radiotherapy_candidates(full_text, text_pages)
-    return []
+        candidates = _extract_pathology_candidates(full_text, text_pages)
+    elif document_type == "laboratory_bundle":
+        candidates = _extract_lab_candidates(full_text, text_pages)
+    elif document_type == "imaging_report":
+        candidates = _extract_imaging_candidates(full_text, text_pages, file_name=file_name)
+    elif document_type == "genomic_report":
+        candidates = _extract_genomic_candidates(full_text, text_pages)
+    elif document_type == "surgery_summary":
+        candidates = _extract_surgery_candidates(full_text, text_pages)
+    elif document_type == "radiotherapy_summary":
+        candidates = _extract_radiotherapy_candidates(full_text, text_pages)
+    else:
+        candidates = []
+
+    # ── NLP enrichment layer ────────────────────────────────────────────────
+    if enrich_with_nlp:
+        try:
+            from prostanet.ai.models.nlp_extractor import ClinicalNLPExtractor
+            nlp = ClinicalNLPExtractor()
+            nlp_result = nlp.extract(full_text, document_type=document_type)
+            existing_fields = {c.get("field_name") for c in candidates if c.get("field_name")}
+            for entity in nlp_result.entities:
+                field = entity.get("field")
+                if not field or field in existing_fields:
+                    continue  # don't overwrite higher-confidence rule extractions
+                confidence = entity.get("confidence", 0.0)
+                if confidence >= 0.5:
+                    candidates.append({
+                        "field_name": field,
+                        "fact_group": entity.get("category", "nlp_extracted"),
+                        "value": entity.get("value"),
+                        "value_display": str(entity.get("value", "")),
+                        "excerpt": entity.get("raw_match", ""),
+                        "source": "nlp_extractor",
+                        "confidence": confidence,
+                        "target_result_type": _nlp_field_to_result_type(field),
+                    })
+                    existing_fields.add(field)
+        except Exception:
+            pass  # NLP enrichment is best-effort; never blocks core extraction
+
+    return candidates
 
 
 def build_verification_task(
@@ -837,3 +875,206 @@ def serialize_verified_facts(facts: list[dict[str, Any]]) -> list[dict[str, Any]
 
 def get_manual_template(document_type: str) -> list[dict[str, Any]]:
     return _manual_template(document_type)
+
+
+def _nlp_field_to_result_type(field: str) -> str:
+    """Map NLP extracted field names to result types for fact routing."""
+    _MAP = {
+        "psa": "laboratory_bundle",
+        "gleason_primary": "pathology_report",
+        "gleason_secondary": "pathology_report",
+        "isup_grade": "pathology_report",
+        "t_stage": "pathology_report",
+        "n_stage": "pathology_report",
+        "m_stage": "imaging_report",
+        "pi_rads": "imaging_report",
+        "psma_suv_max": "imaging_report",
+        "psadt_months": "laboratory_bundle",
+        "ecog": "laboratory_bundle",
+        "cores_positive": "pathology_report",
+        "cores_total": "pathology_report",
+        "perineural_invasion": "pathology_report",
+        "positive_surgical_margins": "surgery_summary",
+        "lymphovascular_invasion": "pathology_report",
+        "hemoglobin": "laboratory_bundle",
+        "testosterone": "laboratory_bundle",
+        "alp": "laboratory_bundle",
+        "ldh": "laboratory_bundle",
+    }
+    return _MAP.get(field, "unclassified_clinical_report")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DocumentIngestionService — High-level pipeline orchestrator
+# ══════════════════════════════════════════════════════════════════════════════
+
+class DocumentIngestionService:
+    """
+    Orchestrates the full document ingestion pipeline.
+
+    Pipeline:
+      File bytes → PatientDocumentPrivateStore.ingest()
+                 → classify_document()
+                 → extract_candidates_for_document()  [rule + NLP]
+                 → build_verification_task()
+                 → [user reviews] → build_verified_fact_bundle()
+                 → build_document_payload_from_facts()
+                 → save to tracking_db
+
+    Usage::
+        svc = DocumentIngestionService(patient_id=42)
+        task = svc.ingest_file(file_bytes, file_name="biopsia.pdf")
+        # task contains candidates for user review
+        payload = svc.commit_verified(task_key, verified_facts)
+    """
+
+    def __init__(
+        self,
+        patient_id: int,
+        document_root: Path | None = None,
+    ) -> None:
+        self.patient_id = patient_id
+        self._store = PatientDocumentPrivateStore(
+            patient_id=patient_id,
+            root=document_root or DEFAULT_PATIENT_DOCUMENT_ROOT,
+        )
+
+    def ingest_file(
+        self,
+        file_bytes: bytes,
+        file_name: str,
+        explicit_mime: str = "",
+        document_type: str | None = None,
+        *,
+        enrich_with_nlp: bool = True,
+    ) -> dict[str, Any]:
+        """
+        Ingest a document file into the pipeline.
+
+        Args:
+            file_bytes:     Raw file bytes (PDF, PNG, JPG, TXT)
+            file_name:      Original file name (used for MIME/type hints)
+            explicit_mime:  Override MIME type detection
+            document_type:  Force a document type (skips auto-classification)
+            enrich_with_nlp: Run NLP enrichment on extracted text
+
+        Returns:
+            verification_task dict with:
+              - document_key: str
+              - document_type: str
+              - candidates: list of extraction candidates for user review
+              - task_status: 'ready_for_review' | 'manual_review_required'
+        """
+        # Store and extract text
+        doc_key, private_payload = self._store.ingest(
+            file_bytes=file_bytes,
+            file_name=file_name,
+            explicit_mime=explicit_mime,
+        )
+
+        # Classify
+        if not document_type:
+            text_pages = private_payload.get("text_by_page", [])
+            full_text = "\n".join(p.get("text", "") for p in text_pages)
+            document_type = classify_document(
+                file_name=file_name,
+                full_text=full_text,
+            )
+
+        # Extract candidates (rule-based + NLP)
+        candidates = extract_candidates_for_document(
+            document_type=document_type,
+            file_name=file_name,
+            private_payload=private_payload,
+            enrich_with_nlp=enrich_with_nlp,
+        )
+
+        # Build verification task
+        task = build_verification_task(
+            document_key=doc_key,
+            candidates=candidates,
+        )
+
+        return {
+            "document_key": doc_key,
+            "document_type": document_type,
+            "document_type_label": DOCUMENT_TYPE_LABELS.get(document_type, document_type),
+            "candidates": candidates,
+            **task,
+        }
+
+    def ingest_text(
+        self,
+        text: str,
+        document_type: str = "unclassified_clinical_report",
+        *,
+        enrich_with_nlp: bool = True,
+    ) -> dict[str, Any]:
+        """
+        Ingest a plain-text clinical document (e.g. typed note, OCR output).
+
+        Args:
+            text:          Full document text
+            document_type: Forced document type
+            enrich_with_nlp: Run NLP enrichment
+
+        Returns: Same as ingest_file().
+        """
+        file_bytes = text.encode("utf-8")
+        return self.ingest_file(
+            file_bytes=file_bytes,
+            file_name="document.txt",
+            explicit_mime="text/plain",
+            document_type=document_type,
+            enrich_with_nlp=enrich_with_nlp,
+        )
+
+    def commit_verified(
+        self,
+        verified_facts: list[dict[str, Any]],
+        verified_by: str = "clinician",
+    ) -> dict[str, Any]:
+        """
+        Commit a set of verified facts to produce a structured payload.
+
+        Args:
+            verified_facts: List of facts reviewed and approved by the clinician
+            verified_by:    Who verified (clinician name / user ID)
+
+        Returns:
+            Structured payload ready for save in tracking_db.
+        """
+        if not verified_facts:
+            return {}
+
+        committed_result_types = list({
+            f.get("target_result_type", "")
+            for f in verified_facts
+            if f.get("target_result_type")
+        })
+
+        bundle = build_verified_fact_bundle(
+            verified_by=verified_by,
+            facts=verified_facts,
+            committed_result_types=committed_result_types,
+        )
+
+        # Build final payload per result type
+        payloads: dict[str, Any] = {}
+        for rt in committed_result_types:
+            rt_facts = [
+                f for f in verified_facts
+                if f.get("target_result_type") == rt
+            ]
+            if rt_facts:
+                payloads[rt] = build_document_payload_from_facts(
+                    document_type=rt,
+                    verified_facts=rt_facts,
+                )
+
+        return {
+            "bundle": bundle,
+            "payloads": payloads,
+            "committed_result_types": committed_result_types,
+            "patient_id": self.patient_id,
+        }

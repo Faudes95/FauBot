@@ -10,6 +10,21 @@ def _status_positive(payload: dict, key: str) -> bool:
     return val.startswith("pos") or val in {"detected", "detectado", "mutado", "loss", "perdida", "biallelic", "bialélico"}
 
 
+def _normalize_line_context(value: str, *, prior_arpi: bool, prior_docetaxel: bool) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"", "first_line_mcrpc", "line_1", "line1", "first_line", "pre_arpi"}:
+        return "first_line_mcrpc"
+    if normalized in {"post_arpi_pre_taxane", "pre_taxane"}:
+        return "post_arpi_pre_taxane"
+    if normalized in {"post_taxane", "post_docetaxel", "later_line"}:
+        return "post_taxane"
+    if prior_arpi and prior_docetaxel:
+        return "post_taxane"
+    if prior_arpi:
+        return "post_arpi_pre_taxane"
+    return "first_line_mcrpc"
+
+
 def evaluate_m1_crpc(payload: dict) -> dict:
     hrr = str(payload.get("hrr_status", "Desconocido"))
     msi = str(payload.get("msi_status", "desconocido"))
@@ -17,13 +32,24 @@ def evaluate_m1_crpc(payload: dict) -> dict:
     tmb_high = _flag(payload, "tmb_high")
     prior_docetaxel_cycles = int(float(payload.get("prior_docetaxel_cycles", 0) or 0))
     prior_therapy = str(payload.get("prior_therapy", ""))
-    prior_arpi = any(drug in prior_therapy for drug in ["Abiraterona", "Enzalutamida", "Apalutamida", "Darolutamida", "Rezvilutamida"])
-    line_context = str(payload.get("mcrpc_line_context", payload.get("line_context", "first_line_mcrpc")) or "first_line_mcrpc")
+    prior_therapy_lower = prior_therapy.lower()
+    prior_arpi = any(
+        token in prior_therapy_lower
+        for token in ["abirater", "enzalut", "apalut", "darolut", "rezvilut"]
+    )
     docetaxel_fit = str(payload.get("docetaxel_fit", "1")) == "1"
     chemotherapy_delay_candidate = _flag(payload, "chemotherapy_delay_candidate")
     castrate_confirmed = _flag(payload, "castrate_testosterone_confirmed")
-    prior_abiraterone = "Abiraterona" in prior_therapy
-    prior_enza_class = any(drug in prior_therapy for drug in ["Enzalutamida", "Apalutamida", "Darolutamida", "Rezvilutamida"])
+    prior_abiraterone = "abirater" in prior_therapy_lower
+    prior_enza_class = any(
+        token in prior_therapy_lower for token in ["enzalut", "apalut", "darolut", "rezvilut"]
+    )
+    prior_docetaxel = prior_docetaxel_cycles >= 6 or "docetax" in prior_therapy_lower
+    line_context = _normalize_line_context(
+        str(payload.get("mcrpc_line_context", payload.get("line_context", "first_line_mcrpc")) or "first_line_mcrpc"),
+        prior_arpi=prior_arpi,
+        prior_docetaxel=prior_docetaxel,
+    )
     hrr_gene = str(payload.get("hrr_gene", "Desconocido"))
     symptomatic_bone_only = str(payload.get("pain_symptoms", "Asintomatico")) != "Asintomatico" and str(payload.get("metastasis_site", "Bone")) == "Bone"
 
@@ -91,7 +117,7 @@ def evaluate_m1_crpc(payload: dict) -> dict:
         "tmb_high": tmb_high or (tmb_value is not None and tmb_value > 10),
         "psma_positive": psma_positive,
         "prior_arpi": prior_arpi,
-        "prior_docetaxel": prior_docetaxel_cycles >= 6 or "Docetaxel" in prior_therapy,
+        "prior_docetaxel": prior_docetaxel,
         "prior_abiraterone": prior_abiraterone,
         "prior_enza_class": prior_enza_class,
         "symptomatic_bone_only": symptomatic_bone_only,

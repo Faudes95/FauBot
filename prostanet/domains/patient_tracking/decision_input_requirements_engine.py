@@ -59,6 +59,16 @@ def _descriptor(field_name: str, *, bucket: str, why_now: str, decision_domains_
     }
 
 
+def _overlay_values(values: dict[str, Any], *sources: dict[str, Any], keys: set[str]) -> None:
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in keys:
+            value = source.get(key)
+            if _is_present(value):
+                values[key] = value
+
+
 STATE_RULES = {
     "diagnostic_workup": {
         "blocking_inputs": ["psa", "psad", "pirads_score", "dre_suspicious"],
@@ -191,6 +201,7 @@ def _field_values(patient: dict[str, Any]) -> dict[str, Any]:
     baseline = dict(patient.get("baseline") or {})
     assessment_inputs = dict(((patient.get("latest_assessment") or {}).get("input_snapshot") or {}))
     latest_followup = (patient.get("follow_ups") or [{}])[-1] if patient.get("follow_ups") else {}
+    latest_followup_payload = (((latest_followup.get("visit_bundle") or {}).get("payload")) or {}) if latest_followup else {}
     latest_stage_visit = (patient.get("stage_visits") or [{}])[-1] if patient.get("stage_visits") else {}
     stage_payload = (((latest_stage_visit.get("visit_bundle") or {}).get("payload")) or {}) if latest_stage_visit else {}
     latest_biopsy = (patient.get("biopsies") or [{}])[-1] if patient.get("biopsies") else {}
@@ -200,12 +211,42 @@ def _field_values(patient: dict[str, Any]) -> dict[str, Any]:
     latest_treatment = (patient.get("treatments") or [{}])[-1] if patient.get("treatments") else {}
     regimen_json = dict(latest_treatment.get("regimen_json") or {}) if isinstance(latest_treatment.get("regimen_json"), dict) else {}
 
-    for source in (baseline, assessment_inputs, latest_followup, stage_payload, latest_biopsy, bcr, as_protocol, as_legacy, latest_treatment, regimen_json):
+    for source in (baseline, assessment_inputs, latest_followup, latest_followup_payload, stage_payload, latest_biopsy, bcr, as_protocol, as_legacy, latest_treatment, regimen_json):
         if not isinstance(source, dict):
             continue
         for key, value in source.items():
             if _is_present(value) and not _is_present(values.get(key)):
                 values[key] = value
+
+    _overlay_values(
+        values,
+        latest_followup,
+        latest_followup_payload,
+        stage_payload,
+        latest_treatment,
+        regimen_json,
+        keys={
+            "conventional_imaging_status",
+            "progression_pattern",
+            "line_of_therapy_number",
+            "line_of_therapy",
+            "drug_scheme",
+            "current_treatment",
+            "psma_pet_done",
+            "psma_positive",
+            "psma_radioligand",
+            "psma_rads_score",
+            "psma_uptake_pattern",
+            "psma_negative_dominant_lesions",
+            "psma_stage_after_psma",
+            "psadt_months",
+            "testosterone",
+            "testosterone_current",
+            "current_adt_context",
+            "mcrpc_line_context",
+            "prior_therapy",
+        },
+    )
 
     if not _is_present(values.get("management_track")) and _is_present(latest_followup.get("management_track")):
         values["management_track"] = latest_followup.get("management_track")
@@ -213,6 +254,13 @@ def _field_values(patient: dict[str, Any]) -> dict[str, Any]:
         values["state"] = latest_followup.get("state_at_visit")
     if not _is_present(values.get("psma_pet_done")) and _is_present(patient.get("baseline", {}).get("psma_pet_done")):
         values["psma_pet_done"] = patient.get("baseline", {}).get("psma_pet_done")
+    psma_profile = dict(patient.get("psma_structured_profile") or {})
+    if not _is_present(values.get("psma_pet_done")) and psma_profile.get("available"):
+        values["psma_pet_done"] = 1
+    if not _is_present(values.get("psma_rads_score")) and _is_present(psma_profile.get("psma_rads_score")):
+        values["psma_rads_score"] = psma_profile.get("psma_rads_score")
+    if not _is_present(values.get("psma_uptake_pattern")) and _is_present(psma_profile.get("psma_uptake_pattern")):
+        values["psma_uptake_pattern"] = psma_profile.get("psma_uptake_pattern")
     if not _is_present(values.get("line_of_therapy_number")) and _is_present(latest_treatment.get("line_of_therapy")):
         values["line_of_therapy_number"] = latest_treatment.get("line_of_therapy")
     if not _is_present(values.get("line_of_therapy_number")) and _is_present(values.get("line_of_therapy")):
@@ -354,7 +402,12 @@ def build_decision_input_requirements(
             required_to_recalculate.append("salvage_local_feasible")
         if psadt_months is None:
             why_these_fields_now.append("La recaída bioquímica necesita PSADT antes de cerrar el carril de rescate.")
-        if (salvage_feasible in {"0", "false", "no"} or prior_radiation or (latest_psa is not None and latest_psa >= 0.5)) and psma_done not in {"1", "true", "si", "sí", "yes"}:
+        if (
+            salvage_feasible in {"0", "false", "no"}
+            or prior_radiation
+            or (latest_psa is not None and latest_psa >= 0.5)
+            or (post_prostatectomy_course == "true_bcr" and salvage_feasible in {"1", "true", "yes", "si", "sí"} and latest_psa is not None and latest_psa >= 0.2)
+        ) and psma_done not in {"1", "true", "si", "sí", "yes"}:
             add_fields(
                 ["psma_pet_done"],
                 bucket="decision_blocking_inputs",
@@ -463,6 +516,36 @@ def build_decision_input_requirements(
             )
 
     if current_state == "m1_crpc":
+        prior_therapy_text = str(field_values.get("prior_therapy") or "").lower()
+        line_context_text = str(field_values.get("mcrpc_line_context") or "").lower()
+        has_prior_taxane = any(token in prior_therapy_text for token in ("docetax", "cabazitax"))
+        has_prior_arpi = any(token in prior_therapy_text for token in ("abirater", "enza", "apalut", "darolut"))
+        card_or_vision_context = (
+            has_prior_taxane
+            and (
+                has_prior_arpi
+                or "post_arpi" in line_context_text
+                or "post_taxane" in line_context_text
+                or "later_line" in line_context_text
+            )
+        )
+        if card_or_vision_context:
+            for field in ("line_of_therapy_number", "drug_scheme", "progression_pattern"):
+                hard_blocking_inputs = [item for item in hard_blocking_inputs if item != field]
+                decision_blocking_inputs = [item for item in decision_blocking_inputs if item != field]
+            blocking_input_descriptors = [
+                item for item in blocking_input_descriptors
+                if item.get("field_name") not in {"line_of_therapy_number", "drug_scheme", "progression_pattern"}
+            ]
+            add_fields(
+                ["psma_radioligand", "psma_rads_score", "psma_uptake_pattern", "psma_negative_dominant_lesions"],
+                bucket="decision_blocking_inputs",
+                why="En el contexto CARD/VISION la elegibilidad PSMA estructurada pesa más que volver a pedir la línea ya conocida.",
+                domains=["psma_pathway", "mcrpc_sequencing"],
+            )
+            required_to_recalculate.extend(["psma_rads_score", "psma_uptake_pattern", "psma_negative_dominant_lesions"])
+            decision_domains_blocked.extend(["psma_pathway", "mcrpc_sequencing"])
+            why_these_fields_now.append("La decisión post-taxano debe cerrarse con PSMA estructurada antes de elegir CARD/VISION o radiofármaco.")
         if line_of_therapy is not None and line_of_therapy <= 1 and not _text_contains_any(treatment_text, ("abirater", "enzalut", "apalut", "darolut")):
             add_fields(
                 ["drug_scheme"],

@@ -2,6 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from prostanet.shared.ui_value_normalizer import (
+    normalize_capture_target_cta,
+    normalize_capture_target_label,
+    normalize_decision_domain_label,
+    normalize_field_list,
+)
+
 
 ADVANCED_STATES = {
     "adt_progression_verification",
@@ -208,6 +215,15 @@ def build_missing_input_capture_bundle(
                 "form_scope": {"mode": "capture_block", "focus": group_key, "fields": fields},
                 "action_label": "Completar en visita" if capture_target == "followup" else "Completar ingreso",
                 "task_kind": "recapture" if always_show and not fields else "missing",
+                "display_label": title or meta.get("title") or "Completar inputs críticos",
+                "display_group": normalize_capture_target_label(capture_target),
+                "display_cta": normalize_capture_target_cta(capture_target),
+                "display_capture_target": normalize_capture_target_label(capture_target),
+                "display_impact": (
+                    f"Si se completa hoy, puede recalcular {normalize_decision_domain_label(decision_affected or meta.get('decision_affected') or field_decision)}."
+                ),
+                "display_why_now": rationale or meta.get("rationale") or "Faltan datos estructurados para sostener una decisión clínica.",
+                "display_fields_summary": normalize_field_list(fields, limit=8),
             }
         )
 

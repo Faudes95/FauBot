@@ -130,7 +130,7 @@ class AdtProgressionVerificationService:
         if classification == "suppression_failure_or_inadequate_castration":
             return [
                 {
-                    "name": "Optimizar la terapia de privación androgénica y confirmar testosterona en rango de castración",
+                    "name": "Optimizar ADT y confirmar testosterona en rango de castración",
                     "priority": "preferente",
                     "notes": "Revisar adherencia, fecha de última aplicación, mecanismo de castración y considerar cambio de estrategia de supresión androgénica.",
                 }

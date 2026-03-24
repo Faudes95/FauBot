@@ -153,6 +153,15 @@ def _reconciled_patient_snapshot(record):
     }
 
 
+def _resolve_patient_api_ref(patient_ref):
+    import tracking_db
+
+    resolved = tracking_db.resolve_patient_ref(patient_ref)
+    if not resolved:
+        return None, error_response("Paciente no encontrado", 404)
+    return resolved, None
+
+
 def _analysis_dataset_payload():
     from prostanet.domains.dashboard.dashboard_facade import get_analysis_dataset_bundle
 
@@ -770,26 +779,40 @@ def api_confirm_state_transition(patient_id, proposal_id):
         return error_response(str(e), 500)
 
 
-@app.route('/api/patients/<int:patient_id>/next-best-action', methods=['GET'])
-def api_next_best_action(patient_id):
+@app.route('/api/patients/<patient_ref>/next-best-action', methods=['GET'])
+def api_next_best_action(patient_ref):
     import tracking_db
     try:
+        resolved, error = _resolve_patient_api_ref(patient_ref)
+        if error:
+            return error
+        patient_id = resolved["patient_id"]
         patient = tracking_db.get_patient_full_record(patient_id)
         if not patient:
             return error_response("Paciente no encontrado", 404)
         action = tracking_db.get_patient_next_best_action(patient_id)
         if action is None:
             return error_response("Paciente no encontrado", 404)
-        return jsonify({"success": True, "next_best_action": action, **_reconciled_patient_snapshot(patient)})
+        return jsonify({
+            "success": True,
+            "next_best_action": action,
+            "resolved_patient_id": patient_id,
+            "resolved_patient_ref": resolved.get("nss") or resolved.get("patient_ref") or str(patient_ref),
+            **_reconciled_patient_snapshot(patient),
+        })
     except Exception as e:
         logger.error(f"Error getting next best action: {e}")
         return error_response(str(e), 500)
 
 
-@app.route('/api/patients/<int:patient_id>/signals', methods=['GET'])
-def api_patient_signals(patient_id):
+@app.route('/api/patients/<patient_ref>/signals', methods=['GET'])
+def api_patient_signals(patient_ref):
     import tracking_db
     try:
+        resolved, error = _resolve_patient_api_ref(patient_ref)
+        if error:
+            return error
+        patient_id = resolved["patient_id"]
         patient = tracking_db.get_patient_full_record(patient_id)
         if not patient:
             return error_response("Paciente no encontrado", 404)
@@ -877,6 +900,18 @@ def api_patient_signals(patient_id):
                 "decision_domains_blocked": bundle.get("decision_domains_blocked", []),
                 "guideline_basis": bundle.get("guideline_basis", []),
                 "ui_contradiction_flags": bundle.get("ui_contradiction_flags", []),
+                "crpc_copilot_bundle": bundle.get("crpc_copilot_bundle", profile_view.get("crpc_copilot_bundle", {})),
+                "crpc_copilot_status": bundle.get("crpc_copilot_status", profile_view.get("crpc_copilot_status", "not_applicable")),
+                "post_rp_salvage_bundle": bundle.get("post_rp_salvage_bundle", profile_view.get("post_rp_salvage_bundle", {})),
+                "post_rp_copilot_status": bundle.get("post_rp_copilot_status", profile_view.get("post_rp_copilot_status", "not_applicable")),
+                "salvage_window_status": bundle.get("salvage_window_status", profile_view.get("salvage_window_status", "")),
+                "salvage_window_reason": bundle.get("salvage_window_reason", profile_view.get("salvage_window_reason", "")),
+                "qa_passed": bundle.get("qa_passed", profile_view.get("qa_passed")),
+                "sequence_summary": bundle.get("sequence_summary", profile_view.get("sequence_summary", [])),
+                "crpc_schedule_overlay": bundle.get("crpc_schedule_overlay", profile_view.get("crpc_schedule_overlay", {})),
+                "post_rp_schedule_overlay": bundle.get("post_rp_schedule_overlay", profile_view.get("post_rp_schedule_overlay", {})),
+                "resolved_patient_id": patient_id,
+                "resolved_patient_ref": resolved.get("nss") or resolved.get("patient_ref") or str(patient_ref),
                 **_reconciled_patient_snapshot(patient),
             }
         )
@@ -885,10 +920,14 @@ def api_patient_signals(patient_id):
         return error_response(str(e), 500)
 
 
-@app.route('/api/patients/<int:patient_id>/labs-intelligence', methods=['GET'])
-def api_patient_labs_intelligence(patient_id):
+@app.route('/api/patients/<patient_ref>/labs-intelligence', methods=['GET'])
+def api_patient_labs_intelligence(patient_ref):
     import tracking_db
     try:
+        resolved, error = _resolve_patient_api_ref(patient_ref)
+        if error:
+            return error
+        patient_id = resolved["patient_id"]
         tracking_db.refresh_longitudinal_intelligence(patient_id, force_recompute=False)
         patient = tracking_db.get_patient_full_record(patient_id)
         if not patient:
@@ -905,6 +944,8 @@ def api_patient_labs_intelligence(patient_id):
                 "treatment_linked_rules": payload.get("therapy_safety_checkpoints", []),
                 "coverage_gaps": payload.get("coverage", {}),
                 "latest_clinically_decisive_visit": patient.get("latest_clinically_decisive_visit", {}),
+                "resolved_patient_id": patient_id,
+                "resolved_patient_ref": resolved.get("nss") or resolved.get("patient_ref") or str(patient_ref),
                 **_reconciled_patient_snapshot(patient),
             }
         )
@@ -913,10 +954,14 @@ def api_patient_labs_intelligence(patient_id):
         return error_response(str(e), 500)
 
 
-@app.route('/api/patients/<int:patient_id>/decision-trace', methods=['GET'])
-def api_patient_decision_trace(patient_id):
+@app.route('/api/patients/<patient_ref>/decision-trace', methods=['GET'])
+def api_patient_decision_trace(patient_ref):
     import tracking_db
     try:
+        resolved, error = _resolve_patient_api_ref(patient_ref)
+        if error:
+            return error
+        patient_id = resolved["patient_id"]
         tracking_db.refresh_longitudinal_intelligence(patient_id, force_recompute=False)
         patient = tracking_db.get_patient_full_record(patient_id)
         if not patient:
@@ -932,6 +977,8 @@ def api_patient_decision_trace(patient_id):
                 "decision_snapshot_history": patient.get("decision_snapshot_history", []),
                 "guideline_plan_history": patient.get("guideline_plan_history", []),
                 "missing_input_history": patient.get("missing_input_history", []),
+                "resolved_patient_id": patient_id,
+                "resolved_patient_ref": resolved.get("nss") or resolved.get("patient_ref") or str(patient_ref),
                 **_reconciled_patient_snapshot(patient),
             }
         )

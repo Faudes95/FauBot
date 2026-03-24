@@ -113,7 +113,8 @@
         </div>
 
         <div class="chart-container">
-            <h3 class="text-sm font-semibold text-white mb-4">Calibración clínica y biblioteca de escenarios</h3>
+            <h3 class="text-sm font-semibold text-white mb-2">Calibración modular legacy</h3>
+            <p class="mb-4 text-xs text-slate-500">Esta sección conserva el harness modular histórico. Sirve como referencia secundaria y no sustituye el gate de release longitudinal vivo.</p>
             <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4" id="calibrationCards">
                 <!-- Filled by JS -->
             </div>
@@ -197,9 +198,17 @@
                     <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3" id="laboratoryIntelligenceGrid"></div>
                 </div>
             </div>
-            <div class="mt-4 grid grid-cols-1 xl:grid-cols-4 gap-4">
+            <div class="mt-4 grid grid-cols-1 xl:grid-cols-5 gap-4">
                 <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
-                    <h4 class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Validación longitudinal</h4>
+                    <h4 class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Copiloto CRPC</h4>
+                    <div class="mt-4 grid grid-cols-1 gap-3" id="crpcCopilotGrid"></div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <h4 class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Copiloto post-RP</h4>
+                    <div class="mt-4 grid grid-cols-1 gap-3" id="postRpSalvageGrid"></div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <h4 class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Validación longitudinal viva</h4>
                     <div class="mt-4 grid grid-cols-1 gap-3" id="validationRunGrid"></div>
                 </div>
                 <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
@@ -450,6 +459,8 @@
             renderInstitutionalBenchmarkPanels();
             renderPsmaImagingPanels();
             renderLaboratoryIntelligencePanels();
+            renderCrpcCopilotPanels();
+            renderPostRPSalvagePanels();
             renderValidationPanels();
             renderDynamicCohortPanels();
             renderMultivariatePanels();
@@ -945,21 +956,21 @@
             const topModules = summary.slice(0, 2).map(item => `${humanizeClinicalText(item.module_id)}: ${item.passed}/${item.total}`).join(' · ');
             const cards = [
                 {
-                    name: 'Concordancia del harness',
+                    name: 'Concordancia legacy',
                     score: concordance,
                     details: [
                         `${harness.passed_cases || 0}/${harness.total_cases || 0} escenarios pasados`,
-                        'Objetivo operativo: 100% dentro del alcance validado',
-                        'La desviacion debe forzar revision del motor',
+                        'Referencia histórica del harness modular pequeño',
+                        'No representa por sí solo el estado actual de release longitudinal',
                     ],
                 },
                 {
-                    name: 'Escenarios fallidos',
+                    name: 'Fallos del harness legacy',
                     score: harness.failed_cases ? Math.max(0, 100 - Math.min(100, harness.failed_cases * 10)) : 100,
                     details: [
                         `${harness.failed_cases || 0} fallos activos`,
-                        'Los fallos bloquean confianza de despliegue',
-                        'Cada fallo necesita causa raiz y correccion',
+                        'Útil para regresión rápida por módulo',
+                        'Cada fallo requiere causa raíz aunque no sustituya la validación viva',
                     ],
                 },
                 {
@@ -968,7 +979,7 @@
                     details: [
                         `${summary.length || 0} modulos con casos estructurados`,
                         topModules || 'Sin resumen modular todavia',
-                        'Debe cubrir todos los estados longitudinales soportados',
+                        'Cobertura del arnés legacy por familia modular',
                     ],
                 },
                 {
@@ -977,7 +988,7 @@
                     details: [
                         'Imagen, genómica, biopsias y PROs con persistencia real',
                         'Mide si el expediente ya alimenta inteligencia longitudinal',
-                        'Debe acercarse a 100% en escenarios validados',
+                        'Interpretar junto a la validación longitudinal viva',
                     ],
                 },
             ];
@@ -1332,21 +1343,125 @@
                 return;
             }
             const familyDetail = (payload.top_failing_scenario_families || []).map((item) => `${item[0]} (${item[1]})`).join(', ') || 'Sin familias fallando.';
+            const runLabel = payload.run_id ? `Corrida ${payload.run_id}` : 'Sin identificador de corrida';
+            const createdAt = payload.created_at || 'Fecha no disponible';
+            const cohortMode = payload.cohort_mode || 'current_db';
+            const reportHref = payload.run_id ? `/api/validation/run/${payload.run_id}/report` : '#';
+            const runHref = payload.run_id ? `/api/validation/run/${payload.run_id}` : '#';
             const cards = [
-                { title: 'Trayectorias', value: payload.total_trajectories || 0, detail: payload.cohort_mode || 'validation run' },
-                { title: 'Concordancia guía', value: `${Number(payload.guideline_concordance_pct || 0).toFixed(1)}%`, detail: 'NCCN-first con provenance explícito.' },
-                { title: 'Prompts críticos', value: `${Number(payload.missing_input_prompt_accuracy || 0).toFixed(1)}%`, detail: 'Precisión de blocking inputs por escenario.' },
-                { title: 'Contradicciones UI', value: payload.ui_contradictions || 0, detail: payload.critical_failures ? `${payload.critical_failures} fallas críticas activas.` : 'Sin fallas críticas.' },
-                { title: 'Completitud longitudinal', value: `${Number(payload.data_accumulation_completeness_pct || 0).toFixed(1)}%`, detail: 'Persistencia de labs, agenda y decisión a lo largo del tiempo.' },
+                { title: 'Estado actual de release longitudinal', value: `${payload.passed || 0}/${payload.total_trajectories || 0}`, detail: `${runLabel} · ${humanizeClinicalText(cohortMode)} · ${createdAt}` },
+                { title: 'Concordancia guía', value: `${Number(payload.guideline_concordance_pct || 0).toFixed(1)}%`, detail: 'NCCN-first con provenance explícito en el runner longitudinal vivo.' },
+                { title: 'Prompts críticos', value: `${Number(payload.missing_input_prompt_accuracy || 0).toFixed(1)}%`, detail: 'Precisión de datos faltantes que sí cambian la conducta clínica.' },
+                { title: 'Contradicciones UI', value: payload.ui_contradictions || 0, detail: payload.critical_failures ? `${payload.critical_failures} fallas críticas activas.` : 'Sin fallas críticas activas.' },
+                { title: 'Completitud longitudinal', value: `${Number(payload.data_accumulation_completeness_pct || 0).toFixed(1)}%`, detail: 'Persistencia real de laboratorios, agenda, estado y decisión a lo largo del trayecto.' },
                 { title: 'Familias con fallas', value: payload.failed || 0, detail: familyDetail },
             ];
-            container.innerHTML = cards.map((card) => `
+            const cardsHtml = cards.map((card) => `
                 <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
                     <div class="text-xs uppercase tracking-[0.18em] text-slate-500">${humanizeClinicalText(card.title)}</div>
                     <div class="mt-2 text-xl font-bold text-white">${card.value}</div>
                     <div class="mt-2 text-xs text-slate-400">${humanizeClinicalText(card.detail)}</div>
                 </div>
             `).join('');
+            const artifactLinks = payload.run_id ? `
+                <div class="rounded-2xl border border-cyan-500/20 bg-cyan-950/10 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-cyan-200">Artefactos y reporte</div>
+                    <div class="mt-3 flex flex-col gap-2 text-sm">
+                        <a class="text-cyan-300 hover:text-cyan-200" href="${runHref}" target="_blank" rel="noreferrer">Abrir snapshot de la corrida</a>
+                        <a class="text-cyan-300 hover:text-cyan-200" href="${reportHref}" target="_blank" rel="noreferrer">Abrir reporte detallado</a>
+                    </div>
+                </div>
+            ` : '';
+            container.innerHTML = cardsHtml + artifactLinks;
+            window.clinicalPresentation?.normalizeDocument(container);
+        }
+
+        function renderCrpcCopilotPanels() {
+            const container = document.getElementById('crpcCopilotGrid');
+            const payload = dashboardResearch?.crpc_copilot || {};
+            if (!payload.available) {
+                container.innerHTML = '<div class="text-sm text-slate-500">Todavía no hay snapshots del copiloto CRPC registrados.</div>';
+                return;
+            }
+            const runtimeModes = Object.entries(payload.runtime_modes || {}).map(([mode, count]) => `${humanizeClinicalText(mode)} (${count})`).join(', ') || 'Sin modos registrados.';
+            const failureFamilies = (payload.top_failure_families || []).map((item) => `${item[0]} (${item[1]})`).join(', ') || 'Sin familias bloqueadas.';
+            const recentCases = (payload.recent_cases || []).map((item) => `
+                <div class="rounded-xl border border-slate-700/70 bg-slate-950/50 px-3 py-2">
+                    <div class="text-[11px] uppercase tracking-[0.18em] text-slate-500">Paciente ${item.patient_id}</div>
+                    <div class="mt-1 text-sm font-semibold text-white">${humanizeClinicalText(item.effective_state || 'Estado no disponible')}</div>
+                    <div class="mt-1 text-xs text-slate-400">${humanizeClinicalText(item.concordance_label || 'rule_only')} · QA ${item.qa_passed ? 'pass' : 'pendiente'}</div>
+                </div>
+            `).join('');
+            const cards = [
+                { title: 'Concordancia shadow vs regla', value: `${Number(payload.shadow_rule_concordance_pct || 0).toFixed(1)}%`, detail: `Estricto ${Number(payload.strict_concordance_pct || 0).toFixed(1)}% · ${payload.total_patients || 0} pacientes con snapshot vigente.` },
+                { title: 'QA pass', value: `${Number(payload.qa_pass_pct || 0).toFixed(1)}%`, detail: `Última actualización: ${humanizeClinicalText(payload.latest_created_at || 'Fecha no disponible')}` },
+                { title: 'Bloqueados por datos faltantes', value: `${Number(payload.blocked_by_missing_data_pct || 0).toFixed(1)}%`, detail: 'Casos con blockers duros que todavía cambian conducta clínica.' },
+                { title: 'Bloqueados por seguridad', value: `${Number(payload.blocked_by_safety_pct || 0).toFixed(1)}%`, detail: 'Safety gates activos para hepatotoxicidad, PSMA, HRR y conflictos de secuencia.' },
+            ];
+            container.innerHTML = `
+                ${cards.map((card) => `
+                    <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
+                        <div class="text-xs uppercase tracking-[0.18em] text-slate-500">${humanizeClinicalText(card.title)}</div>
+                        <div class="mt-2 text-xl font-bold text-white">${card.value}</div>
+                        <div class="mt-2 text-xs text-slate-400">${humanizeClinicalText(card.detail)}</div>
+                    </div>
+                `).join('')}
+                <div class="rounded-2xl border border-cyan-500/20 bg-cyan-950/10 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-cyan-200">Modos y familias de fallo</div>
+                    <div class="mt-2 text-sm text-white">${humanizeClinicalText(runtimeModes)}</div>
+                    <div class="mt-2 text-xs text-slate-300">${humanizeClinicalText(failureFamilies)}</div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Casos recientes</div>
+                    <div class="mt-3 grid grid-cols-1 gap-2">${recentCases || '<div class="text-xs text-slate-500">Sin casos recientes.</div>'}</div>
+                </div>
+            `;
+            window.clinicalPresentation?.normalizeDocument(container);
+        }
+
+        function renderPostRPSalvagePanels() {
+            const container = document.getElementById('postRpSalvageGrid');
+            const payload = dashboardResearch?.post_rp_salvage_copilot || {};
+            if (!payload.available) {
+                container.innerHTML = '<div class="text-sm text-slate-500">Todavía no hay snapshots del copiloto post-RP registrados.</div>';
+                return;
+            }
+            const runtimeModes = Object.entries(payload.runtime_modes || {}).map(([mode, count]) => `${humanizeClinicalText(mode)} (${count})`).join(', ') || 'Sin modos registrados.';
+            const failureFamilies = (payload.top_failure_families || []).map((item) => `${item[0]} (${item[1]})`).join(', ') || 'Sin familias bloqueadas.';
+            const courseDistribution = Object.entries(payload.course_distribution || {}).map(([course, count]) => `${humanizeClinicalText(course)} (${count})`).join(', ') || 'Sin cursos registrados.';
+            const recentCases = (payload.recent_cases || []).map((item) => `
+                <div class="rounded-xl border border-slate-700/70 bg-slate-950/50 px-3 py-2">
+                    <div class="text-[11px] uppercase tracking-[0.18em] text-slate-500">Paciente ${item.patient_id}</div>
+                    <div class="mt-1 text-sm font-semibold text-white">${humanizeClinicalText(item.post_prostatectomy_course || 'Curso no disponible')}</div>
+                    <div class="mt-1 text-xs text-slate-400">${humanizeClinicalText(item.salvage_window_status || 'closed')} · QA ${item.qa_passed ? 'pass' : 'pendiente'}</div>
+                </div>
+            `).join('');
+            const cards = [
+                { title: 'Concordancia shadow vs regla', value: `${Number(payload.shadow_rule_concordance_pct || 0).toFixed(1)}%`, detail: `${payload.total_patients || 0} pacientes con snapshot vigente.` },
+                { title: 'QA pass', value: `${Number(payload.qa_pass_pct || 0).toFixed(1)}%`, detail: `Última actualización: ${humanizeClinicalText(payload.latest_created_at || 'Fecha no disponible')}` },
+                { title: 'Ventana salvage abierta', value: `${Number(payload.salvage_window_open_pct || 0).toFixed(1)}%`, detail: 'Casos con ventana open u open_pending_restaging.' },
+                { title: 'Redirect sistémico', value: `${Number(payload.redirect_systemic_pct || 0).toFixed(1)}%`, detail: 'Casos ya redirigidos fuera de salvage local aislado.' },
+                { title: 'Bloqueados por datos faltantes', value: `${Number(payload.blocked_by_missing_data_pct || 0).toFixed(1)}%`, detail: 'Casos con blockers duros que todavía cambian conducta clínica.' },
+            ];
+            container.innerHTML = `
+                ${cards.map((card) => `
+                    <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
+                        <div class="text-xs uppercase tracking-[0.18em] text-slate-500">${humanizeClinicalText(card.title)}</div>
+                        <div class="mt-2 text-xl font-bold text-white">${card.value}</div>
+                        <div class="mt-2 text-xs text-slate-400">${humanizeClinicalText(card.detail)}</div>
+                    </div>
+                `).join('')}
+                <div class="rounded-2xl border border-cyan-500/20 bg-cyan-950/10 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-cyan-200">Cursos y familias de fallo</div>
+                    <div class="mt-2 text-sm text-white">${humanizeClinicalText(courseDistribution)}</div>
+                    <div class="mt-2 text-xs text-slate-300">${humanizeClinicalText(failureFamilies)}</div>
+                    <div class="mt-2 text-xs text-slate-400">${humanizeClinicalText(runtimeModes)}</div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Casos recientes</div>
+                    <div class="mt-3 grid grid-cols-1 gap-2">${recentCases || '<div class="text-xs text-slate-500">Sin casos recientes.</div>'}</div>
+                </div>
+            `;
             window.clinicalPresentation?.normalizeDocument(container);
         }
 

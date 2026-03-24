@@ -604,4 +604,40 @@ class ClinicalAlertEngine:
         except Exception:
             pass
 
+        # ── IA: Detección de anomalías temporales (VAE) ──
+        try:
+            from prostanet.shared.feature_flags import resolve_feature_flags
+            if resolve_feature_flags().get("ENABLE_AI_ANOMALY_DETECTION"):
+                from prostanet.ai.inference.model_registry import ModelRegistry
+                from pathlib import Path
+                models_dir = Path("output/models")
+                reg = ModelRegistry(models_dir=models_dir)
+                anomaly_model = reg.get("anomaly_detector")
+                if anomaly_model:
+                    anomaly_result = anomaly_model.predict(patient)
+                    score = anomaly_result.values.get("anomaly_score", 0.0)
+                    is_anomaly = anomaly_result.values.get("is_anomaly", False)
+                    if is_anomaly:
+                        anomalous_features = anomaly_result.values.get("anomalous_features", [])
+                        feature_str = ", ".join(anomalous_features[:3]) or "laboratorio"
+                        severity = "critical" if score > 0.85 else "warning"
+                        alerts.append(ClinicalAlert(
+                            patient_id=patient_id,
+                            alert_type="ai_temporal_anomaly",
+                            severity=severity,
+                            category="ai_anomaly",
+                            title="Anomalía en serie temporal detectada por IA",
+                            message=(
+                                f"El modelo VAE detectó un patrón inusual en la evolución clínica "
+                                f"(score={score:.2f}). Parámetros afectados: {feature_str}. "
+                                "Esto puede indicar progresión atípica o discordancia de datos."
+                            ),
+                            recommended_action="Revisar la tendencia longitudinal de laboratorios e imágenes recientes.",
+                            guideline_reference="ProstaNet AI — Anomaly Detection v1.0",
+                            triggering_value=f"anomaly_score={score:.3f}",
+                            threshold="score>0.60",
+                        ))
+        except Exception:
+            pass
+
         return alerts

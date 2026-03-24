@@ -629,7 +629,8 @@ def test_m0_crpc_prefers_observation_or_darolutamide_by_risk_and_seizure_profile
     )
     assert observe_response.status_code == 200
     observe_result = observe_response.get_json()["result"]
-    assert observe_result["eligible_treatments"][0]["name"].lower() == "terapia de privación androgénica + monitorización"
+    assert "monitorización" in observe_result["eligible_treatments"][0]["name"].lower()
+    assert "privación androgénica" in observe_result["eligible_treatments"][0]["name"].lower()
     assert any("tiempo de duplicación del antígeno prostático específico" in item.lower() for item in observe_result["not_recommended"])
 
     daro_response = client.post(
@@ -661,8 +662,8 @@ def test_advanced_modules_surface_sequence_specific_options(app_client):
     assert high_volume_response.status_code == 200
     high_volume_result = high_volume_response.get_json()["result"]
     high_volume_names = {item["name"] for item in high_volume_result["eligible_treatments"]}
-    assert any(name.startswith("terapia de privación androgénica") and "Docetaxel + Darolutamida" in name for name in high_volume_names) or any(
-        name.startswith("terapia de privación androgénica") and "Docetaxel + Abiraterona" in name for name in high_volume_names
+    assert any("docetaxel" in name.lower() and "darolut" in name.lower() for name in high_volume_names) or any(
+        "docetaxel" in name.lower() and "abirater" in name.lower() for name in high_volume_names
     )
 
     m1_response = client.post(

@@ -74,7 +74,7 @@ def _register_case_patient(
     return int(patient_id), bundle, patient_record
 
 
-def _step_snapshot(patient_id: int, *, base_url: str) -> dict[str, Any]:
+def capture_patient_validation_snapshot(patient_id: int, *, base_url: str) -> dict[str, Any]:
     patient = tracking_db.get_patient_full_record(patient_id) or {}
     bundle = tracking_db.refresh_longitudinal_intelligence(patient_id, force_recompute=True)
     schedule_bundle = tracking_db.sync_scheduled_events(
@@ -90,6 +90,7 @@ def _step_snapshot(patient_id: int, *, base_url: str) -> dict[str, Any]:
         "schedule": schedule_bundle,
         "labs": bundle.get("laboratory_intelligence_profile", {}),
         "decision_trace": bundle.get("decision_recalculation_trace", {}),
+        "longitudinal_bundle": bundle,
         "patient_record": patient,
         "urls": {
             "profile": f"{base_url}/patient_profile/{patient_id}",
@@ -122,7 +123,7 @@ def seed_trajectory_case(
         assessment_service=assessment_service,
         tracking_service=tracking_service,
     )
-    baseline_snapshot = _step_snapshot(patient_id, base_url=base_url)
+    baseline_snapshot = capture_patient_validation_snapshot(patient_id, base_url=base_url)
     visit_reports = []
     for visit_index, visit in enumerate(list(trajectory.get("visits") or []), start=1):
         payload = tracking_service.canonicalize_payload(
@@ -138,7 +139,7 @@ def seed_trajectory_case(
         success, response = tracking_db.save_stage_visit_bundle(patient_id, payload)
         if not success:
             raise RuntimeError(f"No se pudo guardar la visita {visit_index} de {trajectory.get('scenario_id')}: {response}")
-        visit_snapshot = _step_snapshot(patient_id, base_url=base_url)
+        visit_snapshot = capture_patient_validation_snapshot(patient_id, base_url=base_url)
         visit_reports.append(
             {
                 "step_index": visit_index,
@@ -204,6 +205,7 @@ def seed_validation_cohort(
 
 __all__ = [
     "DEFAULT_BASE_URL",
+    "capture_patient_validation_snapshot",
     "seed_trajectory_case",
     "seed_validation_cohort",
     "validation_db_context",

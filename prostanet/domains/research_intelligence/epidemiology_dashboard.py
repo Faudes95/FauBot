@@ -97,6 +97,8 @@ def build_epidemiology_dashboard_payload() -> dict[str, Any]:
         "consent_coverage_pct": consent.get("coverage_pct", 0.0),
     }
     validation = get_latest_validation_summary()
+    crpc_copilot = tracking_db.get_crpc_copilot_dashboard_summary()
+    post_rp_salvage_copilot = tracking_db.get_post_rp_salvage_dashboard_summary()
     return {
         "survival": survival,
         "multivariate": multivariate,
@@ -115,4 +117,6 @@ def build_epidemiology_dashboard_payload() -> dict[str, Any]:
         "consent_governance": consent,
         "research_readiness": readiness,
         "longitudinal_validation": validation,
+        "crpc_copilot": crpc_copilot,
+        "post_rp_salvage_copilot": post_rp_salvage_copilot,
     }

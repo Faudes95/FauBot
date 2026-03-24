@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from prostanet.shared.precision_medicine_legacy import evaluate_patient_for_mhspc
 
 from prostanet.domains.evidence_registry.service import EvidenceRegistryService
@@ -14,6 +16,9 @@ from prostanet.domains.mcspc_high_volume.schemas import (
 from prostanet.domains.patient_tracking.mhspc_evidence import (
     build_triplet_decision,
     build_visible_mhspc_trial_matches,
+)
+from prostanet.domains.patient_tracking.mhspc_regimen_selector import (
+    select_mhspc_frontline_regimens,
 )
 from prostanet.shared.contracts import evaluation_result
 from prostanet.shared.recommendation_enrichment import enrich_evaluation_result
@@ -47,7 +52,12 @@ class _BaseMcspcHighVolumeService:
             "cardio": str(payload.get("comorbidity_cardio", "0")) == "1",
         }
         legacy = evaluate_patient_for_mhspc(normalized)
-        treatments = self._build_treatments(payload, nccn, legacy)
+        selector_bundle = select_mhspc_frontline_regimens(
+            self.module_id,
+            payload,
+            docetaxel_bundle=nccn["docetaxel_fitness"],
+        )
+        treatments = self._build_treatments(payload, nccn, legacy, selector_bundle)
         triplet_decision = build_triplet_decision(
             self.module_id,
             payload,
@@ -95,6 +105,7 @@ class _BaseMcspcHighVolumeService:
                 "docetaxel_fitness": nccn["docetaxel_fitness"],
                 "temporal_pattern": nccn["temporal_pattern"],
                 "triplet_decision": triplet_decision,
+                "frontline_regimen_rankings": selector_bundle["frontline_regimen_rankings"],
                 "bone_health_bundle": {
                     "dxa_baseline_done": str(payload.get("dxa_baseline_done", "0")) == "1",
                     "calcium_vitd_started": str(payload.get("calcium_vitd_started", "0")) == "1",
@@ -112,6 +123,13 @@ class _BaseMcspcHighVolumeService:
         result["triplet_decision_card"] = triplet_decision
         result["visible_trial_matches"] = visible_trial_matches
         result["hidden_cross_scenario_trial_count"] = hidden_trial_count
+        result["preferred_frontline_regimen"] = selector_bundle["preferred_regimen"]
+        result["frontline_regimen_rankings"] = selector_bundle["frontline_regimen_rankings"]
+        result["frontline_regimen_rejections"] = selector_bundle["frontline_regimen_rejections"]
+        result["pivotal_trial_fit"] = selector_bundle["pivotal_trial_fit"]
+        result["drug_component_metadata"] = selector_bundle["drug_component_metadata"]
+        result["patient_specific_modifiers"] = selector_bundle["patient_specific_modifiers"]
+        result["eligibility_gates"] = selector_bundle["eligibility_gates"]
         return enrich_evaluation_result(
             result,
             clinical_title=f"Ruta priorizada de enfermedad metastásica sensible a la castración de alto volumen {title_suffix}",
@@ -136,33 +154,10 @@ class _BaseMcspcHighVolumeService:
             ),
         )
 
-    def _build_treatments(self, payload: dict, nccn: dict, legacy: dict) -> list[dict]:
-        treatments: list[dict] = []
+    def _build_treatments(self, payload: dict, nccn: dict, legacy: dict, selector_bundle: dict[str, Any]) -> list[dict]:
+        treatments: list[dict] = list(selector_bundle.get("eligible_treatments") or [])
         if nccn["prefer_akeega"]:
             treatments.append({"name": "ADT + Niraparib + Abiraterone", "priority": "preferred", "notes": "BRCA2-directed precision path in mCSPC with traceable molecular assay."})
-        if nccn["prefer_triplet_darolutamide"]:
-            treatments.append({"name": "ADT + Docetaxel + Darolutamida", "priority": "preferred", "notes": self._note_for(legacy, "Darolutamida") or "Backbone tipo ARASENS cuando el paciente es fit para docetaxel."})
-        if nccn["prefer_triplet_abiraterone"]:
-            treatments.append({"name": "ADT + Docetaxel + Abiraterona", "priority": "preferred", "notes": self._note_for(legacy, "Abiraterona") or "Backbone tipo PEACE-1, especialmente pertinente en enfermedad de novo / sincrónica."})
-
-        if not any("Docetaxel" in item["name"] for item in treatments):
-            daro_priority = "preferred" if nccn["prefer_doublet_darolutamide"] else "eligible"
-            treatments.append(
-                {
-                    "name": "ADT + Darolutamida",
-                    "priority": daro_priority,
-                    "notes": "Doble terapia visible respaldada por ARANOTE; útil cuando no se selecciona triplete o el perfil de seguridad favorece darolutamida.",
-                }
-            )
-            if nccn["prefer_enzalutamide"]:
-                treatments.append({"name": "ADT + Enzalutamida", "priority": "eligible", "notes": self._note_for(legacy, "Enzalutamida")})
-            if nccn["prefer_apalutamide"]:
-                treatments.append({"name": "ADT + Apalutamida", "priority": "eligible", "notes": self._note_for(legacy, "Apalutamida")})
-            if nccn["rezvilutamide_candidate"]:
-                treatments.append({"name": "ADT + Rezvilutamida", "priority": "eligible", "notes": "Opción soportada por EAU 2026 para intensificación hormonal cuando se selecciona doblete."})
-            if nccn["prefer_abiraterone_doublet"]:
-                treatments.append({"name": "ADT + Abiraterona", "priority": "eligible", "notes": self._note_for(legacy, "Abiraterona")})
-
         if str(payload.get("metastasis_site", "Bone")) == "Bone":
             treatments.append({"name": "Calcio + vitamina D", "priority": "selected_candidate", "notes": "Bundle basal de salud ósea para toda enfermedad metastásica sensible a la castración."})
             if not nccn["bone_protection_started"]:
