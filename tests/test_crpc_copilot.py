@@ -395,7 +395,20 @@ def test_m0_crpc_prioritizes_darolutamide_when_seizure_risk_is_present(app_clien
     bundle = _build_bundle(patient_id)
 
     assert "darolut" in bundle["rule_based_recommendation"]["recommended_action"].lower()
+    assert bundle["preferred_frontline_regimen"]["regimen_code"] == "ADT_DAROLUTAMIDE"
+    assert bundle["eligible_treatments"][0]["regimen_code"] == "ADT_DAROLUTAMIDE"
+    assert bundle["active_regimen_monitoring_package"]["family_code"] == "arpi_family"
+    assert bundle["sequence_transition_bundle"]["active_regimen_code"] == "ADT_DAROLUTAMIDE"
     assert "darolut" in bundle["sequence_candidates"][0]["drug_label"].lower()
+    assert bundle["sequence_candidates"][0]["regimen_code"] == "ADT_DAROLUTAMIDE"
+    assert "Oral" in bundle["sequence_candidates"][0]["route"]
+    assert [item["regimen_code"] for item in bundle["sequence_candidates"][:3]] == [
+        "ADT_DAROLUTAMIDE",
+        "ADT_ENZALUTAMIDE",
+        "ADT_APALUTAMIDE",
+    ]
+    assert bundle["sequence_candidates"][0]["imss_key"]
+    assert bundle["sequence_candidates"][1]["imss_key"]
 
 
 def test_m0_crpc_with_psadt_above_ten_favors_observation_before_escalation(app_client, monkeypatch):
@@ -564,7 +577,9 @@ def test_m1_crpc_prioritizes_non_arpi_after_prior_arpi_and_taxane(app_client, mo
     bundle = _build_bundle(patient_id)
 
     assert bundle["sequence_candidates"]
-    assert any(token in bundle["sequence_candidates"][0]["drug_label"].lower() for token in ("cabazitax", "docetax"))
+    assert bundle["sequence_candidates"][0]["regimen_code"] not in {"ADT_ENZALUTAMIDE", "ADT_ABIRATERONE"}
+    assert bundle["sequence_candidates"][0]["route"]
+    assert bundle["sequence_candidates"][0]["description"]
 
 
 def test_m1_crpc_pre_arpi_keeps_standard_arpi_visible_before_biomarker_shortcuts(app_client, monkeypatch):
@@ -595,6 +610,8 @@ def test_m1_crpc_pre_arpi_keeps_standard_arpi_visible_before_biomarker_shortcuts
 
     assert "enzalut" in bundle["rule_based_recommendation"]["recommended_action"].lower()
     assert "enzalut" in bundle["sequence_candidates"][0]["drug_label"].lower()
+    assert bundle["sequence_candidates"][0]["regimen_code"] == "ADT_ENZALUTAMIDE"
+    assert "160 mg al día" in bundle["sequence_candidates"][0]["dose"]
 
 
 def test_m1_crpc_active_first_line_arpi_is_not_counted_as_exhausted_prior_therapy(app_client, monkeypatch):
@@ -681,6 +698,163 @@ def test_m1_crpc_post_taxane_prioritizes_psma_blockers_over_generic_line_fields(
     assert "drug_scheme" not in requirements["blocking_inputs"]
 
 
+def test_m0_crpc_high_risk_requirements_request_arpi_safety_package(app_client, monkeypatch):
+    _enable_crpc_copilot(monkeypatch)
+    client, db_path = app_client
+    patient_id = _register_patient(client, nss="CRPC-M0-SAFETY-001", full_name="m0 safety")
+    _seed_latest_assessment_state(db_path, patient_id, "m0_crpc")
+    _update_latest_assessment_input(
+        db_path,
+        patient_id,
+        {
+            "testosterone_value": 18,
+            "castrate_testosterone_confirmed": 1,
+            "current_adt_context": "ADT continua",
+            "psadt_months": 6.2,
+            "imaging_negative": 1,
+        },
+    )
+
+    patient = tracking_db.get_patient_full_record(patient_id)
+    requirements = build_decision_input_requirements(
+        patient,
+        effective_state="m0_crpc",
+        effective_management_track="advanced_sequencing",
+        latest_assessment=patient.get("latest_assessment") or {},
+        next_best_action={},
+    )
+
+    assert "ADT_DAROLUTAMIDE" in requirements["candidate_regimens_under_consideration"]
+    assert "ADT_ENZALUTAMIDE" in requirements["candidate_regimens_under_consideration"]
+    assert "ADT_APALUTAMIDE" in requirements["candidate_regimens_under_consideration"]
+    assert "current_medications" in requirements["decision_blocking_inputs"]
+    assert "dermatitis_history" in requirements["decision_blocking_inputs"]
+    assert "conventional_imaging_modality" in requirements["decision_blocking_inputs"]
+    assert "conventional_imaging_date" in requirements["decision_blocking_inputs"]
+    assert "NMCRPC_ARPI" in requirements["regimen_specific_blocks"]
+
+
+def test_m1_crpc_pre_taxane_requirements_request_structured_taxane_and_abiraterone_inputs(app_client, monkeypatch):
+    _enable_crpc_copilot(monkeypatch)
+    client, db_path = app_client
+    patient_id = _register_patient(client, nss="CRPC-M1-TAXANE-001", full_name="m1 taxane")
+    _seed_latest_assessment_state(db_path, patient_id, "m1_crpc")
+    _update_latest_assessment_input(
+        db_path,
+        patient_id,
+        {
+            "testosterone_value": 12,
+            "castrate_testosterone_confirmed": 1,
+            "mcrpc_line_context": "first_line_mcrpc",
+            "prior_therapy": "ADT",
+            "current_treatment": "ADT continua",
+            "line_of_therapy_number": 1,
+            "drug_scheme": "ADT",
+            "progression_pattern": "biochemical_only",
+        },
+    )
+
+    patient = tracking_db.get_patient_full_record(patient_id)
+    requirements = build_decision_input_requirements(
+        patient,
+        effective_state="m1_crpc",
+        effective_management_track="advanced_sequencing",
+        latest_assessment=patient.get("latest_assessment") or {},
+        next_best_action={},
+    )
+
+    assert "DOCETAXEL" in requirements["candidate_regimens_under_consideration"]
+    assert "ADT_ABIRATERONE" in requirements["candidate_regimens_under_consideration"]
+    assert "anc" in requirements["blocking_inputs"]
+    assert "platelets" in requirements["blocking_inputs"]
+    assert "cbc_date" in requirements["blocking_inputs"]
+    assert "ast" in requirements["blocking_inputs"]
+    assert "alt" in requirements["blocking_inputs"]
+    assert "bilirubin" in requirements["blocking_inputs"]
+    assert "potassium" in requirements["blocking_inputs"]
+    assert "systolic_bp" in requirements["blocking_inputs"]
+    assert "glucose" in requirements["blocking_inputs"]
+    assert requirements["regimen_specific_blocks"]["DOCETAXEL"]["verification_status"] in {"pending_labs", "stale_labs", "verified"}
+
+
+def test_active_regimen_monitoring_requirements_are_exposed_from_result_snapshot(app_client, monkeypatch):
+    _enable_crpc_copilot(monkeypatch)
+    client, db_path = app_client
+    patient_id = _register_patient(client, nss="CRPC-M0-MONITOR-001", full_name="m0 monitor")
+    _seed_latest_assessment_state(db_path, patient_id, "m0_crpc")
+    module_result = client.post(
+        "/api/modules/m0_crpc/evaluate",
+        json={
+            "psadt_months": 6,
+            "castration_resistant": 1,
+            "castrate_testosterone_confirmed": 1,
+            "imaging_negative": 1,
+            "comorbidity_seizure": 1,
+            "current_treatment": "ADT_DAROLUTAMIDE",
+            "psa": 1.7,
+            "testosterone": 18,
+        },
+    ).get_json()["result"]
+    _update_latest_assessment_input(
+        db_path,
+        patient_id,
+        {
+            "psadt_months": 6,
+            "castrate_testosterone_confirmed": 1,
+            "imaging_negative": 1,
+            "current_treatment": "ADT_DAROLUTAMIDE",
+            "drug_scheme": "ADT_DAROLUTAMIDE",
+        },
+    )
+
+    patient = tracking_db.get_patient_full_record(patient_id)
+    patient["latest_assessment"]["result_snapshot"] = module_result
+    requirements = build_decision_input_requirements(
+        patient,
+        effective_state="m0_crpc",
+        effective_management_track="advanced_sequencing",
+        latest_assessment=patient.get("latest_assessment") or {},
+        next_best_action={},
+    )
+
+    assert {"psa", "testosterone", "systolic_bp"} <= set(requirements["monitoring_required_fields"])
+    assert requirements["monitoring_capture_block"]["family_code"] == "arpi_family"
+    assert requirements["monitoring_capture_block"]["active_regimen_code"] == "ADT_DAROLUTAMIDE"
+    assert "arpi" in requirements["monitoring_capture_block"]["focus"].lower()
+
+
+def test_low_volume_requirements_do_not_open_docetaxel_capture_by_default(app_client, monkeypatch):
+    _enable_crpc_copilot(monkeypatch)
+    client, db_path = app_client
+    patient_id = _register_patient(client, nss="MHSPC-LV-REQ-001", full_name="mhspc low volume")
+    _seed_latest_assessment_state(db_path, patient_id, "mcspc_low_volume_sync_oligo")
+    _update_latest_assessment_input(
+        db_path,
+        patient_id,
+        {
+            "metastasis_site": "Bone",
+            "metastasis_count": 2,
+            "ecog_score": 1,
+            "bone_distribution_documented": 1,
+        },
+    )
+
+    patient = tracking_db.get_patient_full_record(patient_id)
+    requirements = build_decision_input_requirements(
+        patient,
+        effective_state="mcspc_low_volume_sync_oligo",
+        effective_management_track="restaging",
+        latest_assessment=patient.get("latest_assessment") or {},
+        next_best_action={},
+    )
+
+    assert "DOCETAXEL" not in requirements["candidate_regimens_under_consideration"]
+    assert "anc" not in requirements["blocking_inputs"]
+    assert "cbc_date" not in requirements["blocking_inputs"]
+    assert "comorbidity_seizure" in requirements["decision_blocking_inputs"]
+    assert "child_pugh_score" in requirements["decision_blocking_inputs"]
+
+
 def test_crpc_copilot_endpoints_and_profile_render_bundle_for_patient_ref(app_client, monkeypatch):
     _enable_crpc_copilot(monkeypatch)
     client, db_path = app_client
@@ -728,6 +902,9 @@ def test_crpc_copilot_endpoints_and_profile_render_bundle_for_patient_ref(app_cl
     assert "Copiloto CRPC" in profile_html
     assert "Decisión primaria NCCN/EAU" in profile_html
     assert "Overlay asesor AI" in profile_html
+    assert "Tratamiento preferente y otros elegibles" in profile_html
+    assert "Darolutamida" in profile_html
+    assert "Clave IMSS" in profile_html
 
 
 def test_dashboard_research_intelligence_exposes_crpc_copilot_summary(app_client, monkeypatch):

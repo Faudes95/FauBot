@@ -33,16 +33,72 @@ from prostanet.domains.patient_tracking.service import PatientTrackingService
 
 
 TARGET_SCENARIO_FAMILIES = (
+    "diagnostic_workup",
+    "post_negative_biopsy_followup",
+    "localized_initial",
+    "active_surveillance",
+    "mHSPC",
+    "post_radiotherapy_or_local_salvage",
     "adt_progression_verification",
     "m0_crpc",
     "m1_crpc",
     "post_prostatectomy",
     "recurrence_bcr",
 )
+DIAGNOSTIC_FAMILIES = {"diagnostic_workup", "post_negative_biopsy_followup"}
+LOCALIZED_FAMILIES = {"localized_initial", "active_surveillance"}
+MHSPC_FAMILIES = {"mHSPC"}
+POST_RT_FAMILIES = {"post_radiotherapy_or_local_salvage"}
 CRPC_FAMILIES = {"adt_progression_verification", "m0_crpc", "m1_crpc"}
 POST_RP_FAMILIES = {"post_prostatectomy", "recurrence_bcr"}
+DIAGNOSTIC_STATES = {"diagnostic_workup", "post_negative_biopsy_followup"}
+LOCALIZED_STATES = {"localized_initial"}
+MHSPC_STATES = {
+    "mcspc_low_volume_sync_oligo",
+    "mcspc_oligo_metachronous",
+    "mcspc_high_volume",
+    "mcspc_high_volume_sync",
+    "mcspc_high_volume_metachronous",
+}
+POST_RT_STATES = {"recurrence_bcr", "post_radiotherapy_or_local_salvage"}
 CRPC_STATES = {"adt_progression_verification", "m0_crpc", "m1_crpc"}
 POST_RP_STATES = {"post_prostatectomy", "recurrence_bcr"}
+MHSPC_REQUIRED_KEYS = {
+    "phenotype_summary",
+    "preferred_frontline_regimen",
+    "frontline_regimen_rankings",
+    "triplet_decision",
+    "docetaxel_fitness",
+    "qa_validation",
+    "final_presented_recommendation",
+}
+DIAGNOSTIC_REQUIRED_KEYS = {
+    "diagnostic_track",
+    "biopsy_readiness",
+    "mri_quality_or_repeat_need",
+    "risk_refiners",
+    "qa_validation",
+    "final_presented_recommendation",
+}
+LOCALIZED_REQUIRED_KEYS = {
+    "localized_track",
+    "active_surveillance_eligibility",
+    "active_surveillance_course",
+    "upgrade_triggers",
+    "preferred_local_strategy",
+    "final_presented_recommendation",
+}
+POST_RT_REQUIRED_KEYS = {
+    "post_rt_course",
+    "post_rt_salvage_window_status",
+    "post_rt_failure_definition",
+    "post_rt_transition_bundle",
+    "post_rt_local_salvage_ranking",
+    "restaging_strategy",
+    "local_salvage_pathway",
+    "systemic_redirection_status",
+    "final_presented_recommendation",
+}
 CRPC_REQUIRED_KEYS = {
     "state_family",
     "rule_based_recommendation",
@@ -62,6 +118,28 @@ POST_RP_REQUIRED_KEYS = {
     "final_presented_recommendation",
 }
 REPRESENTATIVE_SCENARIOS = {
+    "mhspc_first": [
+        "mhspc_low_volume_sync_doublet",
+        "mhspc_oligometachronous_mdt",
+        "mhspc_high_volume_triplet",
+        "mhspc_high_volume_fitness_limited",
+    ],
+    "diagnostic_to_biopsy_first": [
+        "diagnostic_low_psa_recheck",
+        "diagnostic_high_targeted_biopsy",
+        "post_negative_biopsy_reopen_due_to_mri",
+    ],
+    "localized_surveillance_first": [
+        "localized_very_low_active_surveillance",
+        "active_surveillance_confirmatory_overdue",
+        "active_surveillance_upgrade_conversion",
+    ],
+    "post_rt_salvage_first": [
+        "post_rt_psa_rise_restage",
+        "post_rt_local_salvage_candidate",
+        "post_rt_oligomet_mdt_candidate",
+        "post_rt_systemic_redirection",
+    ],
     "crpc_first": [
         "adt_progression_non_castrate",
         "m0_crpc_contraindication_refines_choice",
@@ -179,6 +257,14 @@ def _latest_state_from_row(row: dict[str, Any]) -> str:
 
 
 def _vertical_from_family(family: str) -> str:
+    if family in MHSPC_FAMILIES:
+        return "mhspc_first"
+    if family in DIAGNOSTIC_FAMILIES:
+        return "diagnostic_to_biopsy_first"
+    if family in LOCALIZED_FAMILIES:
+        return "localized_surveillance_first"
+    if family in POST_RT_FAMILIES:
+        return "post_rt_salvage_first"
     if family in CRPC_FAMILIES:
         return "crpc_first"
     if family in POST_RP_FAMILIES:
@@ -187,13 +273,27 @@ def _vertical_from_family(family: str) -> str:
 
 
 def _vertical_from_snapshot(snapshot: dict[str, Any]) -> str:
-    bundle = dict((snapshot.get("longitudinal_bundle") or {}).get("crpc_copilot_bundle") or {})
-    if bundle.get("available"):
-        return "crpc_first"
-    bundle = dict((snapshot.get("longitudinal_bundle") or {}).get("post_rp_salvage_bundle") or {})
-    if bundle.get("available"):
-        return "post_rp_salvage_first"
+    longitudinal_bundle = dict(snapshot.get("longitudinal_bundle") or {})
+    for bundle_key, vertical_name in (
+        ("mhspc_copilot_bundle", "mhspc_first"),
+        ("diagnostic_biopsy_bundle", "diagnostic_to_biopsy_first"),
+        ("localized_surveillance_bundle", "localized_surveillance_first"),
+        ("post_rt_salvage_bundle", "post_rt_salvage_first"),
+        ("crpc_copilot_bundle", "crpc_first"),
+        ("post_rp_salvage_bundle", "post_rp_salvage_first"),
+    ):
+        bundle = dict(longitudinal_bundle.get(bundle_key) or {})
+        if bundle.get("available"):
+            return vertical_name
     state = _text((snapshot.get("signals") or {}).get("effective_state"))
+    if state in MHSPC_STATES:
+        return "mhspc_first"
+    if state in DIAGNOSTIC_STATES:
+        return "diagnostic_to_biopsy_first"
+    if state in LOCALIZED_STATES:
+        return "localized_surveillance_first"
+    if state in POST_RT_STATES and _snapshot_has_post_rt_context(snapshot):
+        return "post_rt_salvage_first"
     if state in CRPC_STATES:
         return "crpc_first"
     if state in POST_RP_STATES and _snapshot_has_post_rp_context(snapshot):
@@ -228,9 +328,36 @@ def _snapshot_has_post_rp_context(snapshot: dict[str, Any]) -> bool:
     return False
 
 
+def _snapshot_has_post_rt_context(snapshot: dict[str, Any]) -> bool:
+    if _snapshot_has_post_rp_context(snapshot):
+        return False
+    patient = dict(snapshot.get("patient_record") or {})
+    latest_assessment = dict(patient.get("latest_assessment") or {})
+    bcr = dict(patient.get("bcr") or {})
+    primary_treatment = _text(bcr.get("primary_treatment")).upper()
+    if primary_treatment in {"RT", "RADIOTHERAPY", "EBRT", "RT_PRIMARY"}:
+        return True
+    for source in (
+        patient.get("baseline") or {},
+        (patient.get("longitudinal_truth_snapshot") or {}).get("field_values") or {},
+        latest_assessment.get("input_snapshot") or {},
+    ):
+        if not isinstance(source, dict):
+            continue
+        if str(source.get("prior_radiation", "")).strip().lower() in {"1", "true", "yes", "si", "sí"}:
+            return True
+        if any(_text(source.get(field)) for field in ("radiation_date", "prior_rt_date")):
+            return True
+    return False
+
+
 @contextmanager
 def _temporary_vertical_flags() -> Any:
     overrides = {
+        "ENABLE_MHSPC_COPILOT": "1",
+        "ENABLE_DIAGNOSTIC_BIOPSY_COPILOT": "1",
+        "ENABLE_LOCALIZED_SURVEILLANCE_COPILOT": "1",
+        "ENABLE_POST_RT_SALVAGE_COPILOT": "1",
         "ENABLE_CRPC_COPILOT": "1",
         "ENABLE_POST_RP_SALVAGE_COPILOT": "1",
         "PROSTANET_AI_RUNTIME_MODE": "shadow",
@@ -513,11 +640,193 @@ def _build_treatment_assertions(snapshot: dict[str, Any], *, bundle: dict[str, A
                     message="Un patrón PSMA/conventional M1 debe redirigir fuera del rescate local aislado.",
                 )
             )
+    if vertical == "mhspc_first":
+        state = effective_state
+        volume = _text(bundle.get("volume_disease"))
+        primary = _text((bundle.get("rule_based_recommendation") or {}).get("recommended_action"))
+        top_label = _text((bundle.get("preferred_frontline_regimen") or {}).get("regimen_label") or (bundle.get("preferred_frontline_regimen") or {}).get("display_label"))
+        docetaxel_bundle = dict(bundle.get("docetaxel_fitness") or {})
+        docetaxel_default = _text(docetaxel_bundle.get("docetaxel_default_intensification")).lower()
+        docetaxel_fit = docetaxel_default == "yes"
+        if state == "mcspc_low_volume_sync_oligo":
+            assertions.append(
+                _assertion(
+                    "mhspc_low_volume_keeps_rt_primary_visible",
+                    any(_contains(primary, token) for token in ("rt", "radioterapia")) or bool(bundle.get("rt_primary_candidate")),
+                    "RT primaria visible",
+                    {"recommended_action": primary, "rt_primary_candidate": bundle.get("rt_primary_candidate")},
+                    severity="critical",
+                    message="El mHSPC sincrónico de bajo volumen debe mantener visible la RT al primario.",
+                )
+            )
+        if state == "mcspc_oligo_metachronous":
+            assertions.append(
+                _assertion(
+                    "mhspc_oligo_metachronous_keeps_mdt_candidate",
+                    bool(bundle.get("mdt_candidate")),
+                    True,
+                    bundle.get("mdt_candidate"),
+                    severity="critical",
+                    message="El mHSPC oligometacrónico debe mantener MDT como candidato visible.",
+                )
+            )
+        if state in {"mcspc_high_volume", "mcspc_high_volume_sync"} and docetaxel_fit:
+            triplet_bundle = bundle.get("triplet_decision") or {}
+            triplet_text = " ".join(
+                [
+                    _text(triplet_bundle.get("decision")),
+                    _text(triplet_bundle.get("status_label")),
+                    _text(triplet_bundle.get("summary")),
+                    _text(triplet_bundle.get("primary_reason")),
+                    _text(triplet_bundle.get("preferred_triplet_backbone_label")),
+                    top_label,
+                ]
+            ).lower()
+            assertions.append(
+                _assertion(
+                    "mhspc_high_volume_fit_keeps_triplet_competitive",
+                    "triplet" in triplet_text or "triplete" in triplet_text or "docetaxel" in triplet_text,
+                    "Triplete competitivo / visible",
+                    {"triplet_decision": bundle.get("triplet_decision"), "preferred_regimen": top_label},
+                    severity="critical",
+                    message="El alto volumen apto a docetaxel debe abrir discusión real de triplete.",
+                )
+            )
+        frailty = _text(values.get("frailty_status"))
+        if state in {"mcspc_high_volume", "mcspc_high_volume_metachronous"} and (
+            docetaxel_default != "yes" or frailty.lower() in {"vulnerable", "frail", "fragil", "frágil"}
+        ):
+            assertions.append(
+                _assertion(
+                    "mhspc_high_volume_frailty_avoids_triplet_default",
+                    "triplet" not in top_label.lower(),
+                    "Sin triplete dominante",
+                    top_label,
+                    severity="critical",
+                    message="En alto volumen metacrónico o fitness limitado no debe quedar triplete como default visible.",
+                )
+            )
+        if volume:
+            assertions.append(
+                _assertion(
+                    "mhspc_volume_resolved",
+                    volume.lower() in {"low", "high", "bajo volumen", "alto volumen"},
+                    "volumen resuelto",
+                    volume,
+                    severity="normal",
+                    message="El bundle mHSPC debe exponer volumen derivado visible.",
+                )
+            )
+    if vertical == "diagnostic_to_biopsy_first":
+        track = _text(bundle.get("diagnostic_track"))
+        primary = _text((bundle.get("rule_based_recommendation") or {}).get("recommended_action"))
+        pirads = _text(values.get("pirads_score"))
+        psad = values.get("psad")
+        try:
+            psad_value = float(psad) if psad not in (None, "") else None
+        except (TypeError, ValueError):
+            psad_value = None
+        if track == "low_suspicion_surveillance":
+            assertions.append(
+                _assertion(
+                    "diagnostic_low_suspicion_keeps_surveillance",
+                    any(_contains(primary, token) for token in ("seguimiento", "monitor", "repetir")) and "biops" not in primary.lower(),
+                    "seguimiento / vigilancia corta",
+                    primary,
+                    severity="critical",
+                    message="La sospecha baja debe mantener una ruta diagnóstica conservadora.",
+                )
+            )
+        if track in {"targeted_biopsy_ready", "reopen_after_negative_biopsy"} or pirads in {"4", "5"} or (psad_value is not None and psad_value >= 0.15):
+            assertions.append(
+                _assertion(
+                    "diagnostic_high_signal_crosses_biopsy_threshold",
+                    "biops" in primary.lower(),
+                    "biopsia visible",
+                    primary,
+                    severity="critical",
+                    message="MRI/PSAD altos o reapertura posbiopsia benigna deben hacer visible la biopsia.",
+                )
+            )
+    if vertical == "localized_surveillance_first":
+        track = _text(bundle.get("localized_track"))
+        primary = _text((bundle.get("rule_based_recommendation") or {}).get("recommended_action"))
+        preferred = _text((bundle.get("preferred_local_strategy") or {}).get("label") or (bundle.get("preferred_local_strategy") or {}).get("name"))
+        upgrade_detected = str(values.get("upgrade_detected", "")).strip().lower() in {"1", "true", "yes", "si", "sí"}
+        if track == "stable_active_surveillance":
+            assertions.append(
+                _assertion(
+                    "localized_stable_as_keeps_surveillance_visible",
+                    any(_contains(primary, token) for token in ("surveillance", "vigil", "seguimiento")) or "surveillance" in preferred.lower(),
+                    "vigilancia activa visible",
+                    {"recommended_action": primary, "preferred_strategy": preferred},
+                    severity="critical",
+                    message="La vigilancia activa estable debe seguir visible como conducta longitudinal.",
+                )
+            )
+        if track == "as_exit_due_to_upgrade" or upgrade_detected:
+            assertions.append(
+                _assertion(
+                    "localized_upgrade_exits_as",
+                    "surveillance" not in preferred.lower(),
+                    "Salida de AS",
+                    preferred,
+                    severity="critical",
+                    message="El upgrade histológico o de carga no debe dejar AS como estrategia preferente visible.",
+                )
+            )
+    if vertical == "post_rt_salvage_first":
+        window = _text(bundle.get("post_rt_salvage_window_status"))
+        local_path = dict(bundle.get("local_salvage_pathway") or {})
+        psma_stage = _text(values.get("psma_stage_after_psma"))
+        conventional_stage = _text(values.get("conventional_imaging_status"))
+        if psma_stage in {"M1a", "M1b", "M1c"} or conventional_stage in {"M1", "M1A", "M1B", "M1C"}:
+            assertions.append(
+                _assertion(
+                    "post_rt_disseminated_pattern_redirects_systemic",
+                    window == "redirect_systemic" and not bool(local_path.get("visible")),
+                    "redirect_systemic + sin rescate local visible",
+                    {"window": window, "local_salvage_visible": bool(local_path.get("visible"))},
+                    severity="critical",
+                    message="El patrón diseminado post-RT debe bloquear rescate local aislado.",
+                )
+            )
+        elif window == "local_salvage_candidate":
+            assertions.append(
+                _assertion(
+                    "post_rt_local_pattern_keeps_salvage_visible",
+                    bool(local_path.get("visible")),
+                    True,
+                    local_path.get("visible"),
+                    severity="critical",
+                    message="La recurrencia post-RT local/pélvica debe mantener visible el rescate local.",
+                )
+            )
     return assertions
 
 
 def _build_bundle_contract_assertions(snapshot: dict[str, Any], *, vertical: str) -> list[dict[str, Any]]:
     bundle_map = dict(snapshot.get("longitudinal_bundle") or {})
+    if vertical == "mhspc_first":
+        bundle = dict(bundle_map.get("mhspc_copilot_bundle") or {})
+        if not bundle.get("available"):
+            return [_assertion("mhspc_bundle_available", False, True, False, severity="critical", message="La vertical mHSPC debe exponer un bundle visible durante la auditoría.")]
+        return _required_contract_assertions(bundle, required_keys=MHSPC_REQUIRED_KEYS, prefix="mhspc_bundle")
+    if vertical == "diagnostic_to_biopsy_first":
+        bundle = dict(bundle_map.get("diagnostic_biopsy_bundle") or {})
+        if not bundle.get("available"):
+            return [_assertion("diagnostic_bundle_available", False, True, False, severity="critical", message="La vertical diagnóstica debe exponer un bundle visible durante la auditoría.")]
+        return _required_contract_assertions(bundle, required_keys=DIAGNOSTIC_REQUIRED_KEYS, prefix="diagnostic_bundle")
+    if vertical == "localized_surveillance_first":
+        bundle = dict(bundle_map.get("localized_surveillance_bundle") or {})
+        if not bundle.get("available"):
+            return [_assertion("localized_bundle_available", False, True, False, severity="critical", message="La vertical localizada debe exponer un bundle visible durante la auditoría.")]
+        return _required_contract_assertions(bundle, required_keys=LOCALIZED_REQUIRED_KEYS, prefix="localized_bundle")
+    if vertical == "post_rt_salvage_first":
+        bundle = dict(bundle_map.get("post_rt_salvage_bundle") or {})
+        if not bundle.get("available"):
+            return [_assertion("post_rt_bundle_available", False, True, False, severity="critical", message="La vertical post-RT debe exponer un bundle visible durante la auditoría.")]
+        return _required_contract_assertions(bundle, required_keys=POST_RT_REQUIRED_KEYS, prefix="post_rt_bundle")
     if vertical == "crpc_first":
         bundle = dict(bundle_map.get("crpc_copilot_bundle") or {})
         if not bundle.get("available"):
@@ -533,6 +842,14 @@ def _build_bundle_contract_assertions(snapshot: dict[str, Any], *, vertical: str
 
 def _bundle_for_vertical(snapshot: dict[str, Any], vertical: str) -> dict[str, Any]:
     longitudinal_bundle = dict(snapshot.get("longitudinal_bundle") or {})
+    if vertical == "mhspc_first":
+        return dict(longitudinal_bundle.get("mhspc_copilot_bundle") or {})
+    if vertical == "diagnostic_to_biopsy_first":
+        return dict(longitudinal_bundle.get("diagnostic_biopsy_bundle") or {})
+    if vertical == "localized_surveillance_first":
+        return dict(longitudinal_bundle.get("localized_surveillance_bundle") or {})
+    if vertical == "post_rt_salvage_first":
+        return dict(longitudinal_bundle.get("post_rt_salvage_bundle") or {})
     if vertical == "crpc_first":
         return dict(longitudinal_bundle.get("crpc_copilot_bundle") or {})
     if vertical == "post_rp_salvage_first":
@@ -574,14 +891,14 @@ def _pick_live_patients(limit_per_vertical: int, *, base_url: str) -> list[dict[
     for row in rows:
         snapshot = capture_patient_validation_snapshot(int(row.get("id")), base_url=base_url)
         vertical = _vertical_from_snapshot(snapshot)
-        if vertical not in {"crpc_first", "post_rp_salvage_first"}:
+        if vertical == "other":
             continue
         enriched_row = {**row, "_prefetched_snapshot": snapshot, "selected_vertical": vertical}
         grouped[vertical].append(enriched_row)
-        if all(len(grouped.get(vertical_name, [])) >= limit_per_vertical for vertical_name in ("crpc_first", "post_rp_salvage_first")):
+        if all(len(grouped.get(vertical_name, [])) >= limit_per_vertical for vertical_name in REPRESENTATIVE_SCENARIOS):
             break
     selected: list[dict[str, Any]] = []
-    for vertical in ("crpc_first", "post_rp_salvage_first"):
+    for vertical in REPRESENTATIVE_SCENARIOS:
         selected.extend(grouped.get(vertical, [])[:limit_per_vertical])
     return selected
 
@@ -661,7 +978,14 @@ def _api_contract_assertions(
     signals = _fetch_json(client, "GET", f"/api/patients/{patient_ref}/signals")
     schedule = _fetch_json(client, "GET", f"/api/patients/{patient_ref}/schedule")
     full_assessment = _fetch_json(client, "POST", f"/api/ai/full-assessment/{patient_ref}")
-    copilot_path = "/api/crpc-copilot" if vertical == "crpc_first" else "/api/post-rp-copilot"
+    copilot_path = {
+        "mhspc_first": "/api/mhspc-copilot",
+        "diagnostic_to_biopsy_first": "/api/diagnostic-copilot",
+        "localized_surveillance_first": "/api/localized-copilot",
+        "post_rt_salvage_first": "/api/post-rt-copilot",
+        "crpc_first": "/api/crpc-copilot",
+        "post_rp_salvage_first": "/api/post-rp-copilot",
+    }.get(vertical, "/api/crpc-copilot")
     copilot = _fetch_json(client, "GET", f"{copilot_path}/{patient_ref}")
     bundle = _bundle_for_vertical(snapshot, vertical)
     assertions = [
@@ -675,7 +999,14 @@ def _api_contract_assertions(
         schedule_payload = dict(schedule["payload"] or {})
         assessment_payload = dict(full_assessment["payload"] or {})
         copilot_payload = dict(copilot["payload"] or {})
-        copilot_bundle_key = "crpc_decision_bundle" if vertical == "crpc_first" else "post_rp_decision_bundle"
+        copilot_bundle_key = {
+            "mhspc_first": "mhspc_decision_bundle",
+            "diagnostic_to_biopsy_first": "diagnostic_decision_bundle",
+            "localized_surveillance_first": "localized_decision_bundle",
+            "post_rt_salvage_first": "post_rt_decision_bundle",
+            "crpc_first": "crpc_decision_bundle",
+            "post_rp_salvage_first": "post_rp_decision_bundle",
+        }.get(vertical, "crpc_decision_bundle")
         endpoint_bundle = dict(copilot_payload.get(copilot_bundle_key) or {})
         expected_state = _text(bundle.get("effective_state"))
         assertions.extend(

@@ -14,7 +14,30 @@ devuelven un dict con los resultados del score correspondiente.
 from __future__ import annotations
 
 import math
+from datetime import date, datetime
 from typing import Any
+
+
+def _score_is_present(value: Any) -> bool:
+    return value not in (None, "", [], {}, "No aplica", "No realizado", "Desconocido", "Desconocida")
+
+
+def _score_safe_float(value: Any) -> float | None:
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _score_safe_int(value: Any) -> int | None:
+    try:
+        if value in (None, ""):
+            return None
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
 
 
 # ============================================================================
@@ -34,6 +57,43 @@ def capra_score(patient: dict[str, Any]) -> dict[str, Any]:
         - clinical_tstage:   Estadio T clínico (T1c, T2a, T2b, T2c, T3a, T3b, T4)
         - pct_cores_positive: Fracción de cores positivos (0.0 – 1.0)
     """
+    missing_inputs: list[str] = []
+    psa = _score_safe_float(patient.get('psa', patient.get('baseline_psa')))
+    if psa is None:
+        missing_inputs.append('psa')
+    gp = _score_safe_int(patient.get('gleason_primary'))
+    gs = _score_safe_int(patient.get('gleason_secondary'))
+    if gp is None:
+        missing_inputs.append('gleason_primary')
+    if gs is None:
+        missing_inputs.append('gleason_secondary')
+    tstage = str(patient.get('clinical_tstage') or '').upper().strip()
+    if not tstage:
+        missing_inputs.append('clinical_tstage')
+    pct = _score_safe_float(patient.get('pct_cores_positive'))
+    if pct is None:
+        positive = _score_safe_int(patient.get('num_cores_positive', patient.get('positive_cores')))
+        total = _score_safe_int(patient.get('total_cores'))
+        if positive is None or total in (None, 0):
+            if positive is None:
+                missing_inputs.append('num_cores_positive')
+            if total in (None, 0):
+                missing_inputs.append('total_cores')
+        else:
+            pct = positive / total
+    if missing_inputs:
+        return {
+            'score': None,
+            'max_score': 10,
+            'risk_group': 'INCOMPLETO',
+            'desglose': {},
+            'missing_inputs': list(dict.fromkeys(missing_inputs)),
+            'summary': 'CAPRA basal pendiente de patología suficiente.',
+            'bcr_free_3y': None,
+            'bcr_free_5y': None,
+            'referencia': 'Cooperberg et al., Cancer 2005;105(9):2115-25',
+        }
+
     points: dict[str, int] = {}
 
     # — Edad —
@@ -41,7 +101,6 @@ def capra_score(patient: dict[str, Any]) -> dict[str, Any]:
     points['edad'] = 1 if age >= 50 else 0
 
     # — PSA (ng/mL) —
-    psa = patient.get('psa', 0)
     if psa <= 6:
         points['psa'] = 0
     elif psa <= 10:
@@ -54,8 +113,6 @@ def capra_score(patient: dict[str, Any]) -> dict[str, Any]:
         points['psa'] = 4
 
     # — Gleason (patrón primario / secundario) —
-    gp = patient.get('gleason_primary', 3)
-    gs = patient.get('gleason_secondary', 3)
     if gp >= 4:
         # Patrón primario ≥ 4
         points['gleason'] = 3
@@ -66,16 +123,12 @@ def capra_score(patient: dict[str, Any]) -> dict[str, Any]:
         points['gleason'] = 0
 
     # — Estadio T clínico —
-    tstage = str(patient.get('clinical_tstage', 'T2a')).upper()
     if tstage in ('T3A', 'T3B', 'T4'):
         points['estadio_t'] = 1
     else:
         points['estadio_t'] = 0
 
     # — % cores positivos —
-    pct = patient.get('pct_cores_positive', 0)
-    if isinstance(pct, str):
-        pct = float(pct)
     # CAPRA usa ≥ 34%
     points['pct_cores'] = 1 if pct >= 0.34 else 0
 
@@ -98,6 +151,7 @@ def capra_score(patient: dict[str, Any]) -> dict[str, Any]:
         'max_score': 10,
         'risk_group': risk_group,
         'desglose': points,
+        'missing_inputs': [],
         'bcr_free_3y': bcr_free[0],
         'bcr_free_5y': bcr_free[1],
         'referencia': 'Cooperberg et al., Cancer 2005;105(9):2115-25',
@@ -149,9 +203,9 @@ def nccn_risk_group(patient: dict[str, Any]) -> dict[str, Any]:
         - psad:                Densidad de PSA (ng/mL/cc)  [opcional, calculado]
     """
     tstage = str(patient.get('clinical_tstage', 'T2a')).upper()
-    gp = patient.get('gleason_primary', 3)
-    gs = patient.get('gleason_secondary', 3)
-    gg = patient.get('isup_grade', 1)  # Grade Group
+    gp = patient.get('gleason_primary') or 3
+    gs = patient.get('gleason_secondary') or 3
+    gg = patient.get('isup_grade') or 1  # Grade Group
     psa = patient.get('psa', 0)
     n_pos = patient.get('num_cores_positive', 0)
     total_cores = max(int(patient.get('total_cores', 12) or 12), 1)
@@ -516,7 +570,7 @@ def kattan_organ_confined(patient: dict[str, Any]) -> dict[str, Any]:
     """
     age = patient.get('age', 65)
     psa = patient.get('psa', 10.0)
-    gg = patient.get('isup_grade', 1)  # Grade Group
+    gg = patient.get('isup_grade') or 1  # Grade Group
     tstage = str(patient.get('clinical_tstage', 'T2a')).upper()
 
     # ── Coeficientes publicados por MSK (Organ Confined Disease - Cores) ──
@@ -622,8 +676,8 @@ def briganti_lni(patient: dict[str, Any]) -> dict[str, Any]:
     """
     psa = patient.get('psa', 10.0)
     tstage = str(patient.get('clinical_tstage', 'T2a')).upper()
-    gp = patient.get('gleason_primary', 3)
-    gs = patient.get('gleason_secondary', 3)
+    gp = patient.get('gleason_primary') or 3
+    gs = patient.get('gleason_secondary') or 3
     pct = patient.get('pct_cores_positive', 0.0)
     if isinstance(pct, str):
         pct = float(pct)
@@ -883,9 +937,9 @@ def partin_tables(patient: dict[str, Any]) -> dict[str, Any]:
     """
     psa = patient.get('psa', 10.0)
     tstage = str(patient.get('clinical_tstage', 'T2a')).upper()
-    gp = patient.get('gleason_primary', 3)
-    gs = patient.get('gleason_secondary', 3)
-    gg = patient.get('isup_grade', 1)
+    gp = patient.get('gleason_primary') or 3
+    gs = patient.get('gleason_secondary') or 3
+    gg = patient.get('isup_grade') or 1
 
     # Base probabilities by Grade Group (approximate from Partin 2017 tables)
     # Format: {GG: (OC%, ECE%, SVI%, LNI%)} for PSA 4-10, T1c
@@ -951,9 +1005,9 @@ def active_surveillance_eligibility(patient: dict[str, Any]) -> dict[str, Any]:
     Evaluates patient eligibility for Active Surveillance across multiple protocols.
     """
     tstage = str(patient.get('clinical_tstage', 'T2a')).upper()
-    gp = patient.get('gleason_primary', 3)
-    gs = patient.get('gleason_secondary', 3)
-    gg = patient.get('isup_grade', 1)
+    gp = patient.get('gleason_primary') or 3
+    gs = patient.get('gleason_secondary') or 3
+    gg = patient.get('isup_grade') or 1
     psa = patient.get('psa', 10.0)
     n_pos = patient.get('num_cores_positive', 0)
     n_tot = patient.get('total_cores', 12)
@@ -1238,7 +1292,7 @@ def eau_risk_groups(patient: dict[str, Any]) -> dict[str, Any]:
     Metastásico:    M+
     """
     psa = patient.get('psa', 0)
-    isup = patient.get('isup_grade', 1)
+    isup = patient.get('isup_grade') or 1
     tstage = str(patient.get('clinical_tstage', patient.get('dre_findings', 'T2a'))).upper()
     meta = str(patient.get('metastasis_site', 'M0')).upper()
 
@@ -1328,7 +1382,7 @@ def mskcc_pre_rp_bcr(patient: dict[str, Any]) -> dict[str, Any]:
     """
     psa = patient.get('psa', 0)
     gleason = patient.get('gleason', patient.get('gleason_total', 6))
-    isup = patient.get('isup_grade', 1)
+    isup = patient.get('isup_grade') or 1
     tstage = str(patient.get('clinical_tstage', patient.get('dre_findings', 'T2a'))).upper()
     pct_cores = patient.get('pct_cores_positive', 0)
 
@@ -1741,8 +1795,8 @@ def generate_comprehensive_summary(scores: dict, ml_prediction: dict, patient: d
     aggression = []
     
     # Gleason Analysis
-    gp = patient.get('gleason_primary', 3)
-    gs = patient.get('gleason_secondary', 3)
+    gp = patient.get('gleason_primary') or 3
+    gs = patient.get('gleason_secondary') or 3
     if gp >= 4:
         aggression.append(
             "Patrón primario Gleason 4 o 5 indica un comportamiento biológico agresivo. "
@@ -2867,11 +2921,24 @@ def docetaxel_fitness(patient: dict[str, Any]) -> dict[str, Any]:
     """
     Evalúa aptitud estructurada para docetaxel.
 
-    Regla operativa:
-      - no fit: ECOG > 1, neuropatía periférica >= 2, frailty = Frail, Child-Pugh = C
-      - cautela: Child-Pugh = B, riesgo cardiovascular documentado,
-        o revisión de interacciones no documentada
+    La salida separa tres capas:
+      - elegibilidad base: contraindicado / con cautela / elegible / no evaluable
+      - trial-fit: ARASENS-like / PEACE-1-like / CHAARTED-like
+      - compatibilidad legacy: fit_for_docetaxel / fit_status
     """
+
+    DOCETAXEL_LAB_RECENCY_DAYS = 14
+    DOCETAXEL_LAB_ULN = {
+        "bilirubin": 1.2,
+        "ast": 40.0,
+        "alt": 40.0,
+        "alp": 120.0,
+    }
+    HIGH_VOLUME_DOCETAXEL_STATES = {
+        "mcspc_high_volume",
+        "mcspc_high_volume_sync",
+        "mcspc_high_volume_metachronous",
+    }
 
     def _to_int(value: Any) -> int | None:
         try:
@@ -2884,66 +2951,319 @@ def docetaxel_fitness(patient: dict[str, Any]) -> dict[str, Any]:
     def _truthy(value: Any) -> bool:
         return str(value).strip().lower() in {"1", "true", "yes", "si", "sí", "on", "documentado"}
 
+    def _to_float(value: Any) -> float | None:
+        try:
+            if value in (None, ""):
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _to_date(value: Any) -> date | None:
+        if value in (None, ""):
+            return None
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        text = str(value).strip()
+        if not text:
+            return None
+        for candidate in (text[:10], text):
+            try:
+                return datetime.fromisoformat(candidate).date()
+            except ValueError:
+                continue
+        return None
+
+    def _performance_status_driver() -> str:
+        explicit = str(patient.get("performance_status_driver") or "").strip().lower()
+        mapping = {
+            "cancer_related": "cancer_related",
+            "cancer": "cancer_related",
+            "cancer_related_decline": "cancer_related",
+            "comorbidity_or_frailty": "comorbidity_or_frailty",
+            "comorbidity": "comorbidity_or_frailty",
+            "frailty": "comorbidity_or_frailty",
+            "mixed_or_unclear": "mixed_or_unclear",
+            "mixed": "mixed_or_unclear",
+            "unclear": "mixed_or_unclear",
+        }
+        normalized = mapping.get(explicit, "")
+        if normalized:
+            return normalized
+        return "mixed_or_unclear"
+
     ecog = _to_int(patient.get("ecog_score", patient.get("ecog")))
     neuropathy = _to_int(patient.get("peripheral_neuropathy_grade"))
     frailty = str(patient.get("frailty_status", "") or "").strip().lower()
     child_pugh = str(patient.get("child_pugh_score", "A") or "A").strip().upper()
     cv_risk = _truthy(patient.get("cv_risk_documented")) or _truthy(patient.get("comorbidity_cardio"))
     ddi_reviewed = _truthy(patient.get("drug_interaction_reviewed"))
+    performance_status_driver = _performance_status_driver()
+    bone_pain = _truthy(patient.get("bone_pain")) or _truthy(patient.get("osseous_pain"))
+    anc_fields_present = any(field in patient for field in ("anc", "anc_current", "absolute_neutrophil_count"))
+    platelet_fields_present = any(field in patient for field in ("platelets", "platelets_current", "platelet_count"))
+    anc = _to_float(patient.get("anc") or patient.get("anc_current") or patient.get("absolute_neutrophil_count"))
+    platelets = _to_float(patient.get("platelets") or patient.get("platelets_current") or patient.get("platelet_count"))
+    bilirubin = _to_float(patient.get("bilirubin") or patient.get("bilirubin_current"))
+    ast = _to_float(patient.get("ast") or patient.get("ast_current"))
+    alt = _to_float(patient.get("alt") or patient.get("alt_current"))
+    alp = _to_float(patient.get("alp") or patient.get("alkaline_phosphatase") or patient.get("alp_current"))
+    cbc_date = _to_date(patient.get("cbc_date") or patient.get("cbc_sample_date") or patient.get("docetaxel_cbc_date"))
+    liver_panel_date = _to_date(
+        patient.get("liver_panel_date")
+        or patient.get("hepatic_panel_date")
+        or patient.get("docetaxel_liver_panel_date")
+    )
+    taxane_hypersensitivity = any(
+        _truthy(patient.get(field))
+        for field in (
+            "taxane_hypersensitivity_history",
+            "docetaxel_hypersensitivity_history",
+            "polysorbate_hypersensitivity",
+        )
+    )
+    state_hint = str(
+        patient.get("state")
+        or patient.get("assessment_state")
+        or patient.get("module_id")
+        or patient.get("effective_state")
+        or ""
+    ).strip().lower()
+    high_volume_triplet_state = state_hint in HIGH_VOLUME_DOCETAXEL_STATES or "mcspc_high_volume" in state_hint
+    force_docetaxel_verification = _truthy(patient.get("force_docetaxel_verification")) or _truthy(
+        patient.get("docetaxel_candidate_now") or patient.get("taxane_candidate_now")
+    )
+    docetaxel_context = str(
+        patient.get("docetaxel_context")
+        or patient.get("taxane_context")
+        or ("mhspc_triplet" if high_volume_triplet_state else "advanced_taxane")
+    ).strip().lower()
 
     hard_stop_reasons: list[str] = []
+    label_block_reasons: list[str] = []
+    clinical_block_reasons: list[str] = []
     caution_reasons: list[str] = []
     missing_inputs: list[str] = []
+    stale_inputs: list[str] = []
+    label_safety_reasons: list[str] = []
 
     if ecog is None:
         missing_inputs.append("ecog_score")
-    elif ecog > 1:
-        hard_stop_reasons.append("ECOG mayor de 1")
+    elif ecog >= 3:
+        reason = "ECOG ≥3"
+        hard_stop_reasons.append(reason)
+        clinical_block_reasons.append(reason)
+    elif ecog == 2:
+        caution_reasons.append("ECOG 2: docetaxel solo con cautela")
 
     if neuropathy is None:
         missing_inputs.append("peripheral_neuropathy_grade")
-    elif neuropathy >= 2:
-        hard_stop_reasons.append("Neuropatía periférica grado 2 o mayor")
+    elif neuropathy >= 3:
+        reason = "Neuropatía periférica severa (grado 3 o mayor)"
+        hard_stop_reasons.append(reason)
+        clinical_block_reasons.append(reason)
+    elif neuropathy == 2:
+        caution_reasons.append("Neuropatía periférica grado 2")
 
     if frailty == "frail":
-        hard_stop_reasons.append("Fragilidad clínica Frail")
+        reason = "Fragilidad clínica Frail"
+        hard_stop_reasons.append(reason)
+        clinical_block_reasons.append(reason)
     elif not frailty:
         missing_inputs.append("frailty_status")
 
     if child_pugh == "C":
-        hard_stop_reasons.append("Child-Pugh C")
+        reason = "Child-Pugh C"
+        hard_stop_reasons.append(reason)
+        clinical_block_reasons.append(reason)
     elif child_pugh == "B":
         caution_reasons.append("Child-Pugh B")
 
-    if cv_risk:
-        caution_reasons.append("Riesgo cardiovascular documentado")
+    docetaxel_required_now = (high_volume_triplet_state or force_docetaxel_verification) and not bool(clinical_block_reasons)
+    if docetaxel_required_now and cbc_date is None:
+        missing_inputs.append("cbc_date")
+    if docetaxel_required_now and liver_panel_date is None:
+        missing_inputs.append("liver_panel_date")
+    if docetaxel_required_now and cbc_date is not None and (date.today() - cbc_date).days > DOCETAXEL_LAB_RECENCY_DAYS:
+        stale_inputs.extend(["cbc_date", "anc", "platelets"])
+    if docetaxel_required_now and liver_panel_date is not None and (date.today() - liver_panel_date).days > DOCETAXEL_LAB_RECENCY_DAYS:
+        stale_inputs.extend(["liver_panel_date", "bilirubin", "ast", "alt", "alp"])
 
-    if not ddi_reviewed:
-        caution_reasons.append("Revisión de interacciones farmacológicas pendiente")
+    if docetaxel_required_now and anc is None:
+        missing_inputs.append("anc")
+    elif anc is not None and anc < 1500:
+        reason = "Neutrófilos <1500/mm3"
+        hard_stop_reasons.append(reason)
+        label_block_reasons.append(reason)
+        label_safety_reasons.append(reason)
+    elif anc_fields_present and anc is None:
+        missing_inputs.append("anc")
+
+    if docetaxel_required_now and platelets is None:
+        missing_inputs.append("platelets")
+    elif platelets is not None and platelets < 100000:
+        reason = "Plaquetas <100000/mm3"
+        hard_stop_reasons.append(reason)
+        clinical_block_reasons.append(reason)
+    elif platelet_fields_present and platelets is None:
+        missing_inputs.append("platelets")
+
+    if taxane_hypersensitivity:
+        reason = "Antecedente de hipersensibilidad severa a docetaxel/polisorbato"
+        hard_stop_reasons.append(reason)
+        label_block_reasons.append(reason)
+        label_safety_reasons.append(reason)
+
+    if docetaxel_required_now and bilirubin is None:
+        missing_inputs.append("bilirubin")
+    if docetaxel_required_now and ast is None:
+        missing_inputs.append("ast")
+    if docetaxel_required_now and alt is None:
+        missing_inputs.append("alt")
+    if docetaxel_required_now and alp is None:
+        missing_inputs.append("alp")
+
+    if bilirubin is not None and bilirubin > DOCETAXEL_LAB_ULN["bilirubin"]:
+        reason = "Bilirrubina > ULN institucional"
+        hard_stop_reasons.append(reason)
+        label_block_reasons.append(reason)
+        label_safety_reasons.append(reason)
+    elif all(value is not None for value in (ast, alt, alp)):
+        ast_limit = 1.5 * DOCETAXEL_LAB_ULN["ast"]
+        alt_limit = 1.5 * DOCETAXEL_LAB_ULN["alt"]
+        alp_limit = 2.5 * DOCETAXEL_LAB_ULN["alp"]
+        if ((ast is not None and ast > ast_limit) or (alt is not None and alt > alt_limit)) and alp > alp_limit:
+            reason = "AST/ALT >1.5x ULN con ALP >2.5x ULN institucional"
+            hard_stop_reasons.append(reason)
+            label_block_reasons.append(reason)
+            label_safety_reasons.append(reason)
+
+    if ecog == 2 and performance_status_driver == "mixed_or_unclear":
+        caution_reasons.append("ECOG 2 sin aclarar si el deterioro es por cáncer o por fragilidad/comorbilidad")
+        missing_inputs.append("performance_status_driver")
+    if ecog == 2 and not bone_pain and performance_status_driver == "cancer_related":
+        caution_reasons.append("ECOG 2 cáncer-relacionado sin documentar dolor óseo o carga sintomática")
+        missing_inputs.extend(["bone_pain"])
+
+    verification_status = "verified"
+    if stale_inputs:
+        verification_status = "stale_labs"
+    elif docetaxel_required_now and any(
+        field in missing_inputs for field in ("anc", "platelets", "cbc_date", "bilirubin", "ast", "alt", "alp", "liver_panel_date")
+    ):
+        verification_status = "pending_labs"
 
     if missing_inputs:
         caution_reasons.append(
             "Faltan datos para confirmar aptitud completa: "
             + ", ".join(sorted(dict.fromkeys(missing_inputs)))
         )
+    if stale_inputs:
+        caution_reasons.append(
+            "Los laboratorios de elegibilidad a docetaxel están vencidos (>14 días): "
+            + ", ".join(sorted(dict.fromkeys(stale_inputs)))
+        )
 
-    fit_for_docetaxel = not hard_stop_reasons
     if hard_stop_reasons:
-        fit_status = "not_fit"
-        fit_summary = "No fit para docetaxel: " + "; ".join(hard_stop_reasons) + "."
+        base_eligibility = "contraindicated"
     elif caution_reasons:
+        base_eligibility = "eligible_with_caution"
+    else:
+        base_eligibility = "eligible"
+
+    docetaxel_trial_fit = {
+        "arasens_like": "no",
+        "peace1_like": "no",
+        "chaarted_like": "no",
+    }
+    if base_eligibility in {"eligible", "eligible_with_caution"} and frailty != "frail" and child_pugh != "C":
+        if ecog in {0, 1} and (neuropathy is None or neuropathy <= 1):
+            docetaxel_trial_fit = {
+                "arasens_like": "matched",
+                "peace1_like": "matched",
+                "chaarted_like": "matched",
+            }
+        elif ecog == 2:
+            if performance_status_driver == "cancer_related":
+                docetaxel_trial_fit["chaarted_like"] = "partial"
+                docetaxel_trial_fit["peace1_like"] = "partial"
+            elif bone_pain:
+                docetaxel_trial_fit["peace1_like"] = "partial"
+
+    if hard_stop_reasons:
+        default_intensification = "no"
+    elif force_docetaxel_verification and not high_volume_triplet_state:
+        if base_eligibility == "eligible" and verification_status == "verified":
+            default_intensification = "yes"
+        elif base_eligibility in {"eligible", "eligible_with_caution"}:
+            default_intensification = "conditional"
+        else:
+            default_intensification = "no"
+    elif base_eligibility == "eligible" and verification_status == "verified" and any(value == "matched" for value in docetaxel_trial_fit.values()):
+        default_intensification = "yes"
+    elif base_eligibility in {"eligible_with_caution", "not_assessable"} and any(
+        value in {"matched", "partial"} for value in docetaxel_trial_fit.values()
+    ):
+        default_intensification = "conditional"
+    else:
+        default_intensification = "no"
+
+    fit_for_docetaxel = base_eligibility in {"eligible", "eligible_with_caution"}
+    if base_eligibility == "eligible":
+        fit_status = "fit"
+        fit_summary = "Apto para docetaxel sin banderas mayores de seguridad."
+    elif verification_status in {"pending_labs", "stale_labs"} and not hard_stop_reasons:
+        fit_status = "fit_with_caution"
+        fit_summary = (
+            "Pendiente validar elegibilidad a docetaxel: "
+            + "; ".join(caution_reasons)
+            + "."
+        )
+    elif base_eligibility == "eligible_with_caution":
         fit_status = "fit_with_caution"
         fit_summary = "Apto para docetaxel con cautela: " + "; ".join(caution_reasons) + "."
     else:
-        fit_status = "fit"
-        fit_summary = "Apto para docetaxel sin banderas mayores de seguridad."
+        fit_status = "not_fit"
+        if label_block_reasons:
+            fit_summary = "Contraindicación documentada para docetaxel: " + "; ".join(hard_stop_reasons) + "."
+        else:
+            fit_summary = "No elegible hoy para docetaxel por seguridad clínica: " + "; ".join(hard_stop_reasons) + "."
 
     return {
+        "eligible": fit_for_docetaxel,
         "fit_for_docetaxel": fit_for_docetaxel,
         "fit_status": fit_status,
+        "docetaxel_base_eligibility": base_eligibility,
+        "docetaxel_verification_status": verification_status,
+        "docetaxel_block_type": "label" if label_block_reasons else ("clinical_safety" if clinical_block_reasons else "none"),
+        "docetaxel_required_now": docetaxel_required_now,
+        "docetaxel_lab_recency_days": DOCETAXEL_LAB_RECENCY_DAYS,
+        "docetaxel_trial_fit": docetaxel_trial_fit,
+        "docetaxel_default_intensification": default_intensification,
         "docetaxel_hard_stop_reasons": hard_stop_reasons,
         "docetaxel_caution_reasons": caution_reasons,
+        "docetaxel_label_safety_reasons": sorted(dict.fromkeys(label_safety_reasons)),
+        "docetaxel_clinical_safety_reasons": sorted(dict.fromkeys(clinical_block_reasons)),
         "docetaxel_fit_summary": fit_summary,
         "missing_inputs": missing_inputs,
-        "reference": "Política estructurada del producto alineada a ECOG, CTCAE neuropatía, fragilidad y reserva hepática.",
+        "docetaxel_missing_inputs": missing_inputs,
+        "docetaxel_stale_inputs": sorted(dict.fromkeys(stale_inputs)),
+        "performance_status_driver": performance_status_driver,
+        "docetaxel_candidate_now": force_docetaxel_verification,
+        "docetaxel_context": docetaxel_context,
+        "docetaxel_lab_snapshot": {
+            "cbc_date": cbc_date.isoformat() if cbc_date else "",
+            "liver_panel_date": liver_panel_date.isoformat() if liver_panel_date else "",
+            "anc": anc,
+            "platelets": platelets,
+            "bilirubin": bilirubin,
+            "ast": ast,
+            "alt": alt,
+            "alp": alp,
+            "source": str(patient.get("docetaxel_lab_source") or patient.get("lab_source") or "captura_actual"),
+        },
+        "docetaxel_lab_uln": dict(DOCETAXEL_LAB_ULN),
+        "reference": "Política estructurada del producto alineada a EAU 2026, ARASENS, PEACE-1, CHAARTED y label FDA de docetaxel.",
     }

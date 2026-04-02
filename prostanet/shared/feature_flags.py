@@ -10,24 +10,28 @@ DEFAULT_FEATURE_FLAGS = {
     "ENABLE_NCCN_2026_ENGINE": True,
     "ENABLE_EAU_2026_COMPARE": True,
     "ENABLE_BCR2_MODULE": True,
-    # ── AI Models ──
-    "ENABLE_AI_STATE_PREDICTION": False,
-    "ENABLE_AI_TREATMENT_PREDICTION": False,
-    "ENABLE_AI_SURVIVAL_MODEL": False,
-    "ENABLE_AI_ANOMALY_DETECTION": False,
-    "ENABLE_AI_NLP_EXTRACTION": False,
+    # ── AI Models (advisory mode — rule-based sigue siendo source of truth) ──
+    "ENABLE_AI_STATE_PREDICTION": True,
+    "ENABLE_AI_TREATMENT_PREDICTION": True,
+    "ENABLE_AI_SURVIVAL_MODEL": True,
+    "ENABLE_AI_ANOMALY_DETECTION": True,
+    "ENABLE_AI_NLP_EXTRACTION": True,
     # ── AI Agents ──
-    "ENABLE_AGENT_CDA": False,
-    "ENABLE_AGENT_PSA": False,
-    "ENABLE_AGENT_TOA": False,
-    "ENABLE_AGENT_QAA": False,
-    "ENABLE_AGENT_RIA": False,
-    # ── Vertical copiloto clínico ──
-    "ENABLE_CRPC_COPILOT": False,
-    "ENABLE_POST_RP_SALVAGE_COPILOT": False,
+    "ENABLE_AGENT_CDA": True,
+    "ENABLE_AGENT_PSA": True,
+    "ENABLE_AGENT_TOA": True,
+    "ENABLE_AGENT_QAA": True,
+    "ENABLE_AGENT_RIA": True,
+    # ── Vertical copiloto clínico (rule-based con overlay AI opcional) ──
+    "ENABLE_CRPC_COPILOT": True,
+    "ENABLE_POST_RP_SALVAGE_COPILOT": True,
+    "ENABLE_MHSPC_COPILOT": True,
+    "ENABLE_DIAGNOSTIC_BIOPSY_COPILOT": True,
+    "ENABLE_LOCALIZED_SURVEILLANCE_COPILOT": True,
+    "ENABLE_POST_RT_SALVAGE_COPILOT": True,
     # ── Engine ──
-    "ENABLE_RECALCULATION_ENGINE": False,
-    "ENABLE_EVENT_BUS": False,
+    "ENABLE_RECALCULATION_ENGINE": True,
+    "ENABLE_EVENT_BUS": True,
 }
 
 

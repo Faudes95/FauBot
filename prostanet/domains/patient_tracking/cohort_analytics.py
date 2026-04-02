@@ -7,10 +7,11 @@ from prostanet.domains.patient_tracking.risk_tools import (
     summarize_risk_tools_for_cohort,
 )
 from prostanet.domains.patient_tracking.prognostic_impact import summarize_prognostic_impact_for_cohort
+from prostanet.domains.patient_tracking.palliative_longitudinal import PALLIATIVE_TRACKS
 
 
 DIAGNOSTIC_STATES = {"diagnostic_workup", "post_negative_biopsy_followup"}
-POSTLOCAL_STATES = {"post_prostatectomy", "recurrence_bcr"}
+POSTLOCAL_STATES = {"post_prostatectomy", "recurrence_bcr", "post_radiotherapy_or_local_salvage"}
 ADVANCED_STATES = {
     "adt_progression_verification",
     "mcspc_oligo_metachronous",
@@ -142,8 +143,8 @@ def compute_patient_endpoint_readiness(patient: dict[str, Any], state: str) -> d
         # ── Endpoints de supervivencia (Fase 6.1) ──
         "overall_survival": bool(identity.get("diagnosis_date")) and (_is_present(patient.get("vital_status")) or _is_present(survival_status.get("vital_status"))),
         "rpfs": bool(treatments) and state in {"mcspc_oligo_metachronous", "mcspc_low_volume_sync_oligo", "mcspc_high_volume_sync", "mcspc_high_volume_metachronous", "mcspc_high_volume", "m0_crpc", "m1_crpc"},
-        "mfs": bool(identity.get("diagnosis_date")) and state in {"localized_initial", "post_prostatectomy", "recurrence_bcr", "m0_crpc"},
-        "ttr": bool(patient.get("bcr")) and state in {"localized_initial", "post_prostatectomy", "recurrence_bcr"},
+        "mfs": bool(identity.get("diagnosis_date")) and state in {"localized_initial", "post_prostatectomy", "recurrence_bcr", "post_radiotherapy_or_local_salvage", "m0_crpc"},
+        "ttr": bool(patient.get("bcr")) and state in {"localized_initial", "post_prostatectomy", "recurrence_bcr", "post_radiotherapy_or_local_salvage"},
         "ttsre": bool(skeletal_events) or (state in {"mcspc_high_volume_sync", "mcspc_high_volume_metachronous", "mcspc_high_volume", "m1_crpc"} and bool(imaging)),
         # ── Vigilancia activa KPIs (Fase 6.1) ──
         "as_conversion_rate": bool(active_surveillance_protocol.get("exit_reason") or (patient.get("active_surveillance") and patient.get("active_surveillance", {}).get("exit_reason") if isinstance(patient.get("active_surveillance"), dict) else False)),
@@ -221,7 +222,7 @@ def build_patient_kpis(
 
     safety_alerts = len(signals.get("active_safety") or [])
     safety_detail = f"{safety_alerts} alerta(s) activa(s)" if safety_alerts else "Sin alertas estructuradas activas"
-    if management_track in {"on_arpi", "systemic_surveillance", "palliative_overlay"}:
+    if management_track in {"on_arpi", "systemic_surveillance", "palliative_overlay"} | PALLIATIVE_TRACKS:
         safety_detail += " · bundle ADT / soporte concurrente"
 
     return [

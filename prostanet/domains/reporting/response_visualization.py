@@ -336,6 +336,39 @@ class ResponseVisualizationService:
         }
 
 
+def build_waterfall_from_line_segments(line_segments: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    bars: list[dict[str, Any]] = []
+    for index, segment in enumerate(line_segments or []):
+        change_pct = _safe_float(segment.get("best_pct_change"), None)
+        baseline_psa = _safe_float(segment.get("baseline_psa"), None)
+        nadir_psa = _safe_float(segment.get("nadir_psa"), None)
+        if change_pct is None or baseline_psa is None or nadir_psa is None:
+            continue
+        if change_pct <= -50:
+            color = "#10b981"
+        elif change_pct <= -30:
+            color = "#3b82f6"
+        elif change_pct <= 0:
+            color = "#f59e0b"
+        else:
+            color = "#ef4444"
+        bars.append(
+            asdict(
+                WaterfallBar(
+                    label=segment.get("label") or f"Línea {index + 1}",
+                    line_of_therapy=int(segment.get("line_of_therapy_number") or index + 1),
+                    psa_change_pct=round(change_pct, 1),
+                    nadir_psa=round(nadir_psa, 2),
+                    baseline_psa=round(baseline_psa, 2),
+                    outcome=segment.get("outcome") or ("PSA50" if change_pct <= -50 else "En seguimiento"),
+                    color=color,
+                )
+            )
+        )
+    bars.sort(key=lambda item: item.get("line_of_therapy") or 0)
+    return bars
+
+
 # ── Utilidades privadas ────────────────────────────────────────────────────
 
 def _safe_float(val: Any, default: float | None = 0.0) -> float | None:

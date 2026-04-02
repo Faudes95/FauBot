@@ -21,6 +21,17 @@ class FieldSpec:
     derived_from: list[str] = field(default_factory=list)
     evidence_tags: list[str] = field(default_factory=list)
     benchmark_note: str = ""
+    display_options: list[dict[str, Any]] = field(default_factory=list)
+    scale_descriptor: str = ""
+    score_interpretation: str = ""
+    reuse_key: str = ""
+    capture_layer: str = ""
+    when_to_ask: str = ""
+    reference_range_low: Any = None
+    reference_range_high: Any = None
+    reference_range_unit: str = ""
+    reference_range_label: str = ""
+    reference_range_source: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -37,6 +48,9 @@ class RegistrationFragment:
     optional_research: bool = False
     benchmark_only: bool = False
     imported_fields: list[dict[str, Any]] = field(default_factory=list)
+    capture_layer: str = ""
+    when_to_ask: str = ""
+    collapsed_by_default: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -187,6 +201,8 @@ class AgendaItem:
     priority: str = "routine"
     summary: str = ""
     required_inputs: list[str] = field(default_factory=list)
+    capture_fields: list[str] = field(default_factory=list)
+    derived_requirements: list[str] = field(default_factory=list)
     required: bool = True
     action_mode: str = "capture"
     completion_rule: dict[str, Any] = field(default_factory=dict)
@@ -620,6 +636,8 @@ class StateTransitionProposal:
     from_state: str
     target_state: str
     rationale: str
+    from_state_label: str = ""
+    target_state_label: str = ""
     from_management_track: str = ""
     target_management_track: str = ""
     priority: str = "routine"

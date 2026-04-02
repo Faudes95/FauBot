@@ -125,6 +125,37 @@ def _insert_postlocal_bcr_context(db_path, patient_id, *, surgery_date="2024-01-
     conn.close()
 
 
+def _insert_inconsistent_postlocal_bcr_context(
+    db_path,
+    patient_id,
+    *,
+    surgery_date="2025-11-12",
+    bcr_date="2026-03-27",
+    bcr_psa=5.0,
+):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO surgical_details (
+            patient_id, surgery_date, surgery_type, pathological_stage, surgical_margin_status
+        ) VALUES (?, ?, 'RP_robotica', 'pT3a', 1)
+        """,
+        (patient_id, surgery_date),
+    )
+    cursor.execute(
+        """
+        INSERT INTO biochemical_recurrence (
+            patient_id, primary_treatment, primary_treatment_date, bcr_detected,
+            bcr_date, bcr_psa, bcr_definition, salvage_treatment
+        ) VALUES (?, 'RP', ?, 0, ?, ?, 'BCR', 'observation')
+        """,
+        (patient_id, surgery_date, bcr_date, bcr_psa),
+    )
+    conn.commit()
+    conn.close()
+
+
 def _insert_bcr_without_surgery(db_path, patient_id, *, primary_treatment="RP", bcr_date="2026-03-01", bcr_psa=0.42, psadt=8.0):
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
@@ -314,7 +345,43 @@ def test_post_rp_copilot_keeps_persistent_psa_inside_post_prostatectomy(app_clie
     assert bundle["post_prostatectomy_course"] == "persistent_psa"
     assert bundle["effective_state"] == "post_prostatectomy"
     assert bundle["effective_management_track"] == "salvage_evaluation"
-    assert bundle["salvage_window_status"] == "uncertain_missing_data"
+    assert bundle["salvage_window_status"] == "pending_inputs"
+
+
+def test_post_rp_true_bcr_missing_psadt_stays_in_salvage_family_and_derives_truth_from_postop_psa(app_client, monkeypatch):
+    _enable_post_rp_copilot(monkeypatch)
+    client, db_path = app_client
+    patient_id = _register_patient(client, nss="FABIAN-RECURR-001", full_name="Fabian Recurre")
+    _insert_inconsistent_postlocal_bcr_context(db_path, patient_id)
+    _seed_latest_assessment_state(db_path, patient_id, "post_prostatectomy")
+    _update_latest_assessment_input(
+        db_path,
+        patient_id,
+        {
+            "local_therapy_date": "2025-11-12",
+            "psa_postop": 5.0,
+            "psa": 12.0,
+            "pathologic_stage": "pT3a",
+            "surgical_margin": 1,
+            "margin_location": "base derecha",
+        },
+    )
+    _insert_psa_longitudinal_points(
+        db_path,
+        patient_id,
+        [("2026-02-12", 15.0), ("2026-03-27", 5.0)],
+    )
+
+    bundle = _build_bundle(patient_id)
+
+    assert bundle["post_prostatectomy_course"] == "true_bcr"
+    assert bundle["effective_state"] == "recurrence_bcr"
+    assert bundle["effective_management_track"] == "salvage"
+    assert bundle["salvage_window_status"] == "pending_inputs"
+    assert bundle["rule_based_recommendation"]["recommended_action"] == "Activar salvage y reestadificación dirigida"
+    assert bundle["rule_based_recommendation"]["recommendation_family"] == "salvage"
+    assert bundle["ai_advisory_overlay"]["recommendation_family"] == "salvage"
+    assert any(group.get("required_fields") for group in bundle["blocking_inputs"])
 
 
 def test_post_rp_copilot_promotes_true_bcr_and_keeps_salvage_window_visible(app_client, monkeypatch):

@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 import re
 
+from prostanet.shared.field_semantics import CAPTURE_LAYER_METADATA, field_semantics_for, semantic_option_label
 from prostanet.shared.recommendation_enrichment import normalize_legacy_result
 
 
@@ -12,6 +13,7 @@ MODULE_TITLE_MAP = {
     "localized_initial": "Diagnóstico inicial localizado o regional con ganglios regionales positivos y sin metástasis a distancia",
     "post_prostatectomy": "Seguimiento después de prostatectomía radical",
     "recurrence_bcr": "Recurrencia bioquímica y segunda recurrencia bioquímica sin metástasis",
+    "post_radiotherapy_or_local_salvage": "Recurrencia post-radioterapia y salvage local",
     "adt_progression_verification": "Progresión bajo ADT / verificación de castración",
     "mcspc_oligo_metachronous": "Enfermedad metastásica sensible a la castración oligometastásica metacrónica",
     "mcspc_low_volume_sync_oligo": "Enfermedad metastásica sensible a la castración de bajo volumen u oligometastásica sincrónica",
@@ -20,7 +22,26 @@ MODULE_TITLE_MAP = {
     "mcspc_high_volume": "Enfermedad metastásica sensible a la castración de alto volumen",
     "m0_crpc": "Enfermedad resistente a la castración sin metástasis",
     "m1_crpc": "Enfermedad resistente a la castración con metástasis",
+    "survivorship_and_toxicity_followup": "Survivorship y toxicidad por tratamiento",
     "state_classifier": "Clasificador de estado clínico",
+}
+
+STATE_SHORT_LABELS = {
+    "diagnostic_workup": "Diagnóstico inicial",
+    "post_negative_biopsy_followup": "Seguimiento tras biopsia benigna",
+    "localized_initial": "Enfermedad localizada o regional N1M0",
+    "post_prostatectomy": "Seguimiento posprostatectomía",
+    "recurrence_bcr": "Recurrencia bioquímica",
+    "post_radiotherapy_or_local_salvage": "Recurrencia post-RT",
+    "adt_progression_verification": "Progresión bajo ADT / verificación",
+    "mcspc_oligo_metachronous": "mHSPC oligometastásico metacrónico",
+    "mcspc_low_volume_sync_oligo": "mHSPC sincrónico de bajo volumen",
+    "mcspc_high_volume_sync": "mHSPC de alto volumen sincrónico",
+    "mcspc_high_volume_metachronous": "mHSPC de alto volumen metacrónico",
+    "mcspc_high_volume": "mHSPC de alto volumen",
+    "m0_crpc": "CRPC sin metástasis",
+    "m1_crpc": "CRPC metastásico",
+    "survivorship_and_toxicity_followup": "Survivorship y toxicidad",
 }
 
 OPTION_LABELS = {
@@ -134,7 +155,46 @@ OPTION_LABELS = {
     "svi_status": {"0": "No", "1": "Sí"},
     "lni_status": {"0": "No", "1": "Sí"},
     "rt_primary_received": {"0": "No", "1": "Sí"},
+    "rt_intent": {
+        "definitive": "Definitiva",
+        "adjuvant": "Adyuvante",
+        "salvage": "Salvamento",
+        "palliative": "Paliativa",
+        "MDT": "Terapia dirigida a metástasis (MDT)",
+    },
+    "modality": {
+        "EBRT_IMRT": "Radioterapia externa IMRT",
+        "EBRT_VMAT": "Radioterapia externa VMAT",
+        "SBRT": "Radioterapia estereotáctica corporal (SBRT)",
+        "LDR_brachy": "Braquiterapia de baja tasa",
+        "HDR_brachy": "Braquiterapia de alta tasa",
+        "protons": "Protones",
+        "combined": "Combinada",
+    },
+    "target_volume": {
+        "prostate_only": "Próstata solamente",
+        "prostate_sv": "Próstata y vesículas seminales",
+        "whole_pelvis": "Pelvis completa",
+        "boost_dominant": "Refuerzo a lesión dominante",
+        "metastasis_directed": "Dirigida a metástasis",
+        "prostate_pelvis_boost": "Próstata + pelvis con refuerzo",
+    },
+    "salvage_pre_imaging": {
+        "none": "Sin imagen previa",
+        "ct_bone_scan": "Tomografía y gammagrama óseo",
+        "psma_pet": "PET/CT con PSMA",
+        "mpmri": "Resonancia multiparamétrica",
+    },
 }
+
+
+def state_display_label(state: str, *, short: bool = True) -> str:
+    key = str(state or "").strip()
+    if not key:
+        return ""
+    if short:
+        return STATE_SHORT_LABELS.get(key, MODULE_TITLE_MAP.get(key, key.replace("_", " ")))
+    return MODULE_TITLE_MAP.get(key, STATE_SHORT_LABELS.get(key, key.replace("_", " ")))
 
 BOOLEAN_OPTION_LABELS = {"0": "No", "1": "Sí"}
 
@@ -148,6 +208,10 @@ BOOLEAN_CONTEXTUAL_OPTION_LABELS = {
     "dxa_baseline_done": {"0": "No realizada", "1": "Realizada"},
     "hepatic_risk_factors": {"0": "Ausentes", "1": "Presentes"},
     "micro_us_available": {"0": "No disponible", "1": "Disponible"},
+    "low_activity": {"0": "No documentada", "1": "Sí, actividad reducida"},
+    "slow_gait": {"0": "No documentada", "1": "Sí, marcha lenta"},
+    "weak_grip": {"0": "No documentada", "1": "Sí, prensión baja"},
+    "protein_supplements": {"0": "No consume", "1": "Sí consume"},
     "neuroendocrine_features": {"0": "Ausentes", "1": "Presentes"},
     "persistent_lesion_signal": {"0": "Ausente", "1": "Presente"},
     "post_biopsy_mri": {"0": "No realizada", "1": "Realizada"},
@@ -512,12 +576,16 @@ def translate_text(value):
 
 
 def _uses_boolean_option_labels(raw_options) -> bool:
-    normalized = [str(option) for option in raw_options or []]
-    return normalized in (["0", "1"], ["1", "0"])
+    normalized = [str(option).strip() for option in raw_options or []]
+    filtered = [option for option in normalized if option != ""]
+    return filtered in (["0", "1"], ["1", "0"])
 
 
 def resolve_option_label(field_name: str, option, raw_options=None):
     option_key = str(option)
+    semantic_label = semantic_option_label(field_name, option)
+    if semantic_label is not None:
+        return semantic_label
     explicit_labels = OPTION_LABELS.get(field_name, {})
     if option_key in explicit_labels:
         return explicit_labels[option_key]
@@ -528,26 +596,41 @@ def resolve_option_label(field_name: str, option, raw_options=None):
     return translate_text(option)
 
 
+def _humanize_field(field: dict, *, optional_research: bool = False) -> dict:
+    translated = deepcopy(field)
+    semantics = field_semantics_for(translated.get("name", ""), optional_research=optional_research)
+    translated["label"] = translate_text(translated.get("label", ""))
+    translated["help_text"] = translate_text(translated.get("help_text", ""))
+    translated["group"] = translate_text(translated.get("group", ""))
+    translated["unit"] = translate_text(translated.get("unit", ""))
+    translated["benchmark_note"] = translate_text(translated.get("benchmark_note", ""))
+    translated["clinical_role"] = translated.get("clinical_role") or ("required" if translated.get("required") else "optional")
+    translated["clinical_role_label"] = CLINICAL_ROLE_LABELS.get(translated["clinical_role"], translate_text(translated["clinical_role"]))
+    translated["reuse_key"] = translated.get("reuse_key") or semantics["reuse_key"]
+    translated["capture_layer"] = translated.get("capture_layer") or semantics["capture_layer"]
+    translated["capture_layer_label"] = semantics["capture_layer_label"]
+    translated["capture_layer_description"] = semantics["capture_layer_description"]
+    translated["when_to_ask"] = translate_text(translated.get("when_to_ask") or semantics["when_to_ask"])
+    translated["scale_descriptor"] = translate_text(translated.get("scale_descriptor") or semantics["scale_descriptor"])
+    translated["score_interpretation"] = translate_text(translated.get("score_interpretation") or semantics["score_interpretation"])
+    translated["reference_range_unit"] = translate_text(translated.get("reference_range_unit", ""))
+    translated["reference_range_label"] = translate_text(translated.get("reference_range_label", ""))
+    raw_options = translated.get("options", [])
+    translated["display_options"] = [
+        {
+            "value": option,
+            "label": resolve_option_label(translated.get("name"), option, raw_options),
+        }
+        for option in raw_options
+    ]
+    return translated
+
+
 def humanize_schema(schema: dict) -> dict:
     translated = deepcopy(schema)
     translated["title"] = MODULE_TITLE_MAP.get(schema.get("module"), translate_text(schema.get("title", "")))
     translated["description"] = translate_text(schema.get("description", ""))
-    for field in translated.get("fields", []):
-        field["label"] = translate_text(field.get("label", ""))
-        field["help_text"] = translate_text(field.get("help_text", ""))
-        field["group"] = translate_text(field.get("group", ""))
-        field["unit"] = translate_text(field.get("unit", ""))
-        field["benchmark_note"] = translate_text(field.get("benchmark_note", ""))
-        field["clinical_role"] = field.get("clinical_role") or ("required" if field.get("required") else "optional")
-        field["clinical_role_label"] = CLINICAL_ROLE_LABELS.get(field["clinical_role"], translate_text(field["clinical_role"]))
-        raw_options = field.get("options", [])
-        field["display_options"] = [
-            {
-                "value": option,
-                "label": resolve_option_label(field.get("name"), option, raw_options),
-            }
-            for option in raw_options
-        ]
+    translated["fields"] = [_humanize_field(field) for field in translated.get("fields", [])]
     translated["fields"] = sorted(
         translated.get("fields", []),
         key=lambda item: (item.get("group_order", 0), item.get("label", "")),
@@ -572,34 +655,72 @@ def humanize_registration_context(context: dict) -> dict:
 
     fragments = []
     for fragment in context.get("registration_fragments", []):
-        humanized_fields = humanize_schema(
-            {
-                "module": "registration",
-                "title": fragment.get("title", ""),
-                "description": "",
-                "fields": fragment.get("fields", []),
-            }
-        )["fields"]
+        humanized_fields = sorted(
+            [
+                _humanize_field(field, optional_research=fragment.get("optional_research", False))
+                for field in fragment.get("fields", [])
+            ],
+            key=lambda item: (item.get("group_order", 0), item.get("label", "")),
+        )
         fragments.append(
             {
                 **fragment,
                 "title": translate_text(fragment.get("title", "")),
                 "persist_targets": [translate_text(item) for item in fragment.get("persist_targets", [])],
                 "clinical_influence": [translate_text(item) for item in fragment.get("clinical_influence", [])],
+                "capture_layer_label": translate_text(CAPTURE_LAYER_METADATA.get(fragment.get("capture_layer", ""), {}).get("label", "")),
+                "when_to_ask": translate_text(fragment.get("when_to_ask", "")),
                 "fields": humanized_fields,
             }
         )
     translated["registration_fragments"] = fragments
+    translated["capture_layers"] = [
+        {
+            **layer,
+            "label": translate_text(layer.get("label", "")),
+            "description": translate_text(layer.get("description", "")),
+        }
+        for layer in context.get("capture_layers", [])
+    ]
+    translated["field_semantics"] = {
+        key: {
+            **value,
+            "capture_layer_label": translate_text(value.get("capture_layer_label", "")),
+            "capture_layer_description": translate_text(value.get("capture_layer_description", "")),
+            "when_to_ask": translate_text(value.get("when_to_ask", "")),
+            "scale_descriptor": translate_text(value.get("scale_descriptor", "")),
+            "score_interpretation": translate_text(value.get("score_interpretation", "")),
+        }
+        for key, value in context.get("field_semantics", {}).items()
+    }
+    translated["score_semantics"] = {
+        key: {
+            "scale_descriptor": translate_text(value.get("scale_descriptor", "")),
+            "score_interpretation": translate_text(value.get("score_interpretation", "")),
+        }
+        for key, value in context.get("score_semantics", {}).items()
+    }
+    translated["deduped_visible_fields"] = [
+        {
+            **item,
+            "label": translate_text(item.get("label", "")),
+            "capture_layer_label": translate_text(item.get("capture_layer_label", "")),
+        }
+        for item in context.get("deduped_visible_fields", [])
+    ]
 
     imported_fields = []
     for item in context.get("imported_clinical_fields", []):
+        semantics = field_semantics_for(item.get("name", ""))
         imported_fields.append(
             {
                 **item,
                 "label": translate_text(item.get("label", "")),
-                "value_label": resolve_option_label(item.get("name", ""), item.get("value"), item.get("options", [])),
+                "value_label": item.get("value_label") or resolve_option_label(item.get("name", ""), item.get("value"), item.get("options", [])),
                 "clinical_role_label": CLINICAL_ROLE_LABELS.get(item.get("clinical_role", ""), translate_text(item.get("clinical_role", ""))),
                 "persist_targets": [translate_text(value) for value in item.get("persist_targets", [])],
+                "capture_layer_label": translate_text(item.get("capture_layer_label") or semantics.get("capture_layer_label", "")),
+                "when_to_ask": translate_text(item.get("when_to_ask") or semantics.get("when_to_ask", "")),
             }
         )
     translated["imported_clinical_fields"] = imported_fields

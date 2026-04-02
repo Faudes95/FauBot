@@ -17,8 +17,12 @@ def test_run_vertical_verification_returns_seeded_and_live_coverage(app_client):
         seed_live_samples_when_missing=True,
     )
 
-    assert report["seeded"]["summary"]["total_cases"] == 22
-    assert report["current_db"]["summary"]["total_cases"] >= 2
+    assert report["seeded"]["summary"]["total_cases"] == 51
+    assert report["current_db"]["summary"]["total_cases"] >= 6
+    assert report["current_db"]["summary"]["sample_coverage"]["mhspc_first"] >= 1
+    assert report["current_db"]["summary"]["sample_coverage"]["diagnostic_to_biopsy_first"] >= 1
+    assert report["current_db"]["summary"]["sample_coverage"]["localized_surveillance_first"] >= 1
+    assert report["current_db"]["summary"]["sample_coverage"]["post_rt_salvage_first"] >= 1
     assert report["current_db"]["summary"]["sample_coverage"]["crpc_first"] >= 1
     assert report["current_db"]["summary"]["sample_coverage"]["post_rp_salvage_first"] >= 1
 
@@ -56,11 +60,11 @@ def test_vertical_audit_endpoint_returns_report(app_client):
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["success"] is True
-    assert payload["report"]["seeded"]["summary"]["total_cases"] == 22
-    assert payload["report"]["current_db"]["summary"]["sample_coverage"]["crpc_first"] >= 1
+    assert payload["report"]["seeded"]["summary"]["total_cases"] == 51
+    assert payload["report"]["current_db"]["summary"]["sample_coverage"]["mhspc_first"] >= 1
 
 
-def test_vertical_snapshot_does_not_classify_post_rt_recurrence_as_post_rp_vertical():
+def test_vertical_snapshot_classifies_post_rt_recurrence_as_post_rt_vertical():
     snapshot = {
         "signals": {"effective_state": "recurrence_bcr"},
         "longitudinal_bundle": {
@@ -76,4 +80,4 @@ def test_vertical_snapshot_does_not_classify_post_rt_recurrence_as_post_rp_verti
         },
     }
 
-    assert _vertical_from_snapshot(snapshot) == "other"
+    assert _vertical_from_snapshot(snapshot) == "post_rt_salvage_first"

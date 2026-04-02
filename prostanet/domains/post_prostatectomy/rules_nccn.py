@@ -15,20 +15,20 @@ def classify_post_rp(payload: dict) -> dict:
     if psa_postop > 0.1:
         return {
             "label": "PSA persistence/recurrence",
-            "recommendation": "Escalate to recurrence/salvage assessment rather than routine surveillance.",
+            "recommendation": "Escalar a evaluación de recurrencia o rescate en lugar de vigilancia rutinaria.",
             "adverse_features": adverse,
             "early_salvage_emphasis": eligible_pelvic_therapy,
         }
     if adverse or decipher_risk == "Alto":
         return {
             "label": "Adverse pathology under surveillance",
-            "recommendation": "Prefer close monitoring with early salvage planning; use Decipher and timing of recurrence to refine urgency instead of reflex adjuvant treatment for every patient.",
+            "recommendation": "Prefiera monitoreo estrecho con planificación temprana de rescate; use Decipher y el tiempo a recurrencia para refinar la urgencia en lugar de tratamiento adyuvante reflejo para todo paciente.",
             "adverse_features": adverse,
             "early_salvage_emphasis": eligible_pelvic_therapy and (decipher_risk == "Alto" or 0 < time_to_recurrence <= 24),
         }
     return {
         "label": "Post-RP surveillance",
-        "recommendation": "Standard postoperative surveillance is appropriate.",
+        "recommendation": "La vigilancia posoperatoria estándar es apropiada.",
         "adverse_features": adverse,
         "early_salvage_emphasis": False,
     }

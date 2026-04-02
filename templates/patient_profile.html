@@ -249,12 +249,30 @@
     {% set transition_proposals = profile.transition_proposals if profile else [] %}
     {% set transition_resolution = profile.transition_resolution if profile else {} %}
     {% set care_intent_contract = profile.care_intent_contract if profile else {} %}
+    {% set palliative_transition_bundle = profile.palliative_transition_bundle if profile and profile.palliative_transition_bundle is defined else {} %}
+    {% set palliative_monitoring_package = profile.palliative_monitoring_package if profile and profile.palliative_monitoring_package is defined else {} %}
+    {% set survivorship_transition_bundle = profile.survivorship_transition_bundle if profile and profile.survivorship_transition_bundle is defined else {} %}
+    {% set survivorship_monitoring_package = profile.survivorship_monitoring_package if profile and profile.survivorship_monitoring_package is defined else {} %}
+    {% set late_effects_profile = profile.late_effects_profile if profile and profile.late_effects_profile is defined else {} %}
+    {% set functional_recovery_profile = profile.functional_recovery_profile if profile and profile.functional_recovery_profile is defined else {} %}
+    {% set survivorship_schedule_overlay = profile.survivorship_schedule_overlay if profile and profile.survivorship_schedule_overlay is defined else {} %}
+    {% set survivorship_plan = profile.survivorship_plan if profile and profile.survivorship_plan is defined else {} %}
+    {% set symptom_burden_profile = profile.symptom_burden_profile if profile and profile.symptom_burden_profile is defined else {} %}
+    {% set advance_care_planning_status = profile.advance_care_planning_status if profile and profile.advance_care_planning_status is defined else {} %}
+    {% set hospice_eligibility = profile.hospice_eligibility if profile and profile.hospice_eligibility is defined else {} %}
+    {% set acute_palliative_alerts = profile.acute_palliative_alerts if profile and profile.acute_palliative_alerts is defined else [] %}
+    {% set recommended_supportive_referrals = profile.recommended_supportive_referrals if profile and profile.recommended_supportive_referrals is defined else [] %}
     {% set longitudinal_truth_snapshot = profile.longitudinal_truth_snapshot if profile else {} %}
     {% set decision_recalculation_trace = profile.decision_recalculation_trace if profile else {} %}
     {% set guideline_followup_plan = profile.guideline_followup_plan if profile else {} %}
     {% set crpc_copilot = profile.crpc_copilot_bundle if profile and profile.crpc_copilot_bundle is defined else {} %}
     {% set post_rp_copilot = profile.post_rp_salvage_bundle if profile and profile.post_rp_salvage_bundle is defined else {} %}
+    {% set mhspc_copilot = profile.mhspc_copilot_bundle if profile and profile.mhspc_copilot_bundle is defined else {} %}
+    {% set diagnostic_copilot = profile.diagnostic_biopsy_bundle if profile and profile.diagnostic_biopsy_bundle is defined else {} %}
+    {% set localized_copilot = profile.localized_surveillance_bundle if profile and profile.localized_surveillance_bundle is defined else {} %}
+    {% set post_rt_copilot = profile.post_rt_salvage_bundle if profile and profile.post_rt_salvage_bundle is defined else {} %}
     {% set laboratory_intelligence_profile = profile.laboratory_intelligence_profile if profile else {} %}
+    {% set copilot = profile.copilot|default({}) if profile else {} %}
     {% set latest_clinically_decisive_visit = profile.latest_clinically_decisive_visit if profile else {} %}
     {% set recommendation_audit = profile.recommendation_audit if profile else [] %}
     {% set document_board = profile.document_board if profile else {} %}
@@ -663,14 +681,33 @@
         {% endif %}
 
         {% if live_benchmark and live_benchmark.status != 'not_applicable' %}
-        <section id="profile-live-benchmark" class="pn-surface pm-section-anchor">
+        <section
+            id="profile-live-benchmark"
+            class="pn-surface pm-section-anchor"
+            data-benchmark-endpoint="/api/patients/{{ patient.identity.id }}/live-benchmark"
+        >
             <div class="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
                 <div>
                     <div class="text-xs uppercase tracking-[0.2em] text-cyan-300">Benchmark Vivo</div>
                     <h2 class="mt-2 text-lg font-bold text-white">Paciente vs cohorte institucional vs referencia publicada</h2>
-                    <p class="mt-2 text-sm text-slate-400">{{ live_benchmark.primary_endpoint_label or 'Comparación longitudinal' }}</p>
+                    <p id="liveBenchmarkPrimaryLabel" class="mt-2 text-sm text-slate-400">{{ live_benchmark.primary_endpoint_label or 'Comparación longitudinal' }}</p>
                 </div>
-                <div class="flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.18em]">
+                <div class="flex items-center gap-2">
+                    <span
+                        id="liveBenchmarkLoadingBadge"
+                        class="px-2 py-1 rounded-full border border-cyan-500/20 bg-cyan-500/10 text-[11px] uppercase tracking-[0.18em] text-cyan-200 {% if live_benchmark.status == 'ready' %}hidden{% endif %}"
+                    >
+                        {{ 'Calculando snapshot' if live_benchmark.status == 'deferred' else 'Cargando snapshot' }}
+                    </span>
+                    <button
+                        id="liveBenchmarkRefreshButton"
+                        type="button"
+                        class="pn-btn pn-btn-secondary px-3 py-2 text-xs {% if live_benchmark.status == 'ready' %}hidden{% endif %}"
+                    >
+                        Actualizar benchmark
+                    </button>
+                </div>
+                <div id="liveBenchmarkFlags" class="flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.18em]">
                     {% for flag in live_benchmark.flags or [] %}
                     <span class="px-2 py-1 rounded-full border {{ 'border-amber-500/20 bg-amber-500/10 text-amber-200' if flag == 'comparabilidad_limitada' else 'border-rose-500/20 bg-rose-500/10 text-rose-200' if flag == 'por_debajo_de_cohorte_similar' else 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200' if flag == 'dentro_de_rango_esperado' else 'border-slate-700 bg-slate-950/60 text-slate-300' }}">
                         {{ flag | replace('_', ' ') }}
@@ -681,48 +718,68 @@
             <div class="mt-5 grid grid-cols-1 xl:grid-cols-4 gap-4">
                 <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
                     <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Paciente</div>
-                    <div class="mt-3 text-sm font-semibold text-white">{{ live_benchmark.patient_endpoint.duration_months if live_benchmark.patient_endpoint and live_benchmark.patient_endpoint.duration_months is not none else 'N/D' }}</div>
-                    <div class="mt-1 text-xs text-slate-400">{{ live_benchmark.primary_endpoint_type }}{% if live_benchmark.patient_endpoint and live_benchmark.patient_endpoint.censored %} · censurado{% endif %}</div>
-                    {% if live_benchmark.patient_percentile is not none %}
-                    <div class="mt-3 text-xs text-cyan-200">Percentil institucional: {{ live_benchmark.patient_percentile }}</div>
-                    {% endif %}
+                    <div id="liveBenchmarkPatientDuration" class="mt-3 text-sm font-semibold text-white">{{ live_benchmark.patient_endpoint.duration_months if live_benchmark.patient_endpoint and live_benchmark.patient_endpoint.duration_months is not none else 'N/D' }}</div>
+                    <div id="liveBenchmarkPatientMeta" class="mt-1 text-xs text-slate-400">{{ live_benchmark.primary_endpoint_type }}{% if live_benchmark.patient_endpoint and live_benchmark.patient_endpoint.censored %} · censurado{% endif %}</div>
+                    <div
+                        id="liveBenchmarkPatientPercentile"
+                        class="mt-3 text-xs text-cyan-200 {% if live_benchmark.patient_percentile is none %}hidden{% endif %}"
+                    >
+                        Percentil institucional: {{ live_benchmark.patient_percentile }}
+                    </div>
                 </div>
                 <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
                     <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Cohorte similar</div>
-                    <div class="mt-3 text-sm font-semibold text-white">n = {{ benchmark_reliability.cohort_size if benchmark_reliability else live_benchmark.cohort_size or 0 }}</div>
-                    <div class="mt-1 text-xs text-slate-400">Tier: {{ benchmark_reliability.display_cohort_tier if benchmark_reliability else live_benchmark.cohort_tier or 'No disponible' }}</div>
-                    {% if live_benchmark.curve and live_benchmark.curve.median_survival is not none %}
-                    <div class="mt-3 text-xs text-slate-300">Mediana observada: {{ live_benchmark.curve.median_survival }} meses</div>
-                    {% endif %}
+                    <div id="liveBenchmarkCohortSize" class="mt-3 text-sm font-semibold text-white">n = {{ benchmark_reliability.cohort_size if benchmark_reliability else live_benchmark.cohort_size or 0 }}</div>
+                    <div id="liveBenchmarkCohortTier" class="mt-1 text-xs text-slate-400">Tier: {{ benchmark_reliability.display_cohort_tier if benchmark_reliability else live_benchmark.cohort_tier or 'No disponible' }}</div>
+                    <div
+                        id="liveBenchmarkMedian"
+                        class="mt-3 text-xs text-slate-300 {% if not live_benchmark.curve or live_benchmark.curve.median_survival is none %}hidden{% endif %}"
+                    >
+                        Mediana observada: {{ live_benchmark.curve.median_survival }} meses
+                    </div>
                 </div>
                 <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
                     <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Referencia publicada</div>
-                    {% if live_benchmark.published_reference and live_benchmark.published_reference.available %}
-                    <div class="mt-3 text-sm font-semibold text-white">{{ live_benchmark.published_reference.label }}</div>
-                    <div class="mt-1 text-xs text-cyan-200">Mediana: {{ live_benchmark.published_reference.median_months }} meses</div>
-                    {% if live_benchmark.published_reference.regimen_label %}
-                    <div class="mt-2 text-xs text-slate-400">Esquema actual: {{ live_benchmark.published_reference.regimen_label }}</div>
-                    {% endif %}
-                    {% else %}
-                    <div class="mt-3 text-sm text-slate-300">Sin referencia publicada específica para el esquema actual.</div>
-                    {% endif %}
+                    <div
+                        id="liveBenchmarkPublishedAvailable"
+                        class="{% if not live_benchmark.published_reference or not live_benchmark.published_reference.available %}hidden{% endif %}"
+                    >
+                        <div id="liveBenchmarkPublishedLabel" class="mt-3 text-sm font-semibold text-white">{{ live_benchmark.published_reference.label if live_benchmark.published_reference else '' }}</div>
+                        <div id="liveBenchmarkPublishedMedian" class="mt-1 text-xs text-cyan-200">Mediana: {{ live_benchmark.published_reference.median_months if live_benchmark.published_reference else '' }} meses</div>
+                        <div
+                            id="liveBenchmarkPublishedRegimen"
+                            class="mt-2 text-xs text-slate-400 {% if not live_benchmark.published_reference or not live_benchmark.published_reference.regimen_label %}hidden{% endif %}"
+                        >
+                            Esquema actual: {{ live_benchmark.published_reference.regimen_label if live_benchmark.published_reference else '' }}
+                        </div>
+                    </div>
+                    <div
+                        id="liveBenchmarkPublishedFallback"
+                        class="mt-3 text-sm text-slate-300 {% if live_benchmark.published_reference and live_benchmark.published_reference.available %}hidden{% endif %}"
+                    >
+                        Sin referencia publicada específica para el esquema actual.
+                    </div>
                 </div>
                 <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
                     <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Lectura clínica</div>
-                    <div class="mt-3 text-sm text-slate-300">{{ live_benchmark.narrative or 'Sin lectura clínica adicional.' }}</div>
-                    {% if benchmark_reliability and benchmark_reliability.confidence_label %}
-                    <div class="mt-3 text-xs text-slate-400">Confiabilidad: {{ benchmark_reliability.display_confidence_label or benchmark_reliability.confidence_label }}</div>
-                    {% endif %}
+                    <div id="liveBenchmarkNarrative" class="mt-3 text-sm text-slate-300">{{ live_benchmark.narrative or 'Sin lectura clínica adicional.' }}</div>
+                    <div
+                        id="liveBenchmarkConfidence"
+                        class="mt-3 text-xs text-slate-400 {% if not benchmark_reliability or not benchmark_reliability.confidence_label %}hidden{% endif %}"
+                    >
+                        Confiabilidad: {{ benchmark_reliability.display_confidence_label or benchmark_reliability.confidence_label }}
+                    </div>
                 </div>
             </div>
-            {% if live_benchmark.curve and live_benchmark.curve.times %}
-            <div class="mt-5 rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
+            <div
+                id="liveBenchmarkChartWrap"
+                class="mt-5 rounded-2xl border border-slate-700 bg-slate-950/40 p-4 {% if not live_benchmark.curve or not live_benchmark.curve.times %}hidden{% endif %}"
+            >
                 <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Curva institucional comparable</div>
                 <div class="mt-3 h-64 w-full relative">
                     <canvas id="liveBenchmarkChart"></canvas>
                 </div>
             </div>
-            {% endif %}
         </section>
         {% endif %}
 
@@ -1066,6 +1123,116 @@
                     </ul>
                 </div>
             </div>
+            {% if palliative_transition_bundle and palliative_transition_bundle.available %}
+            <div class="mt-5 grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <div class="rounded-xl border border-rose-500/20 bg-rose-950/10 p-4 xl:col-span-2">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Carril paliativo longitudinal</div>
+                    <div class="mt-2 flex flex-wrap items-center gap-2">
+                        <span class="rounded-full border border-rose-500/30 bg-rose-500/10 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-rose-200">{{ palliative_transition_bundle.care_mode_label or palliative_transition_bundle.care_mode or 'No activo' }}</span>
+                        <span class="rounded-full border border-slate-700 bg-slate-950/50 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-slate-300">{{ palliative_transition_bundle.trigger_status_label or palliative_transition_bundle.trigger_status or 'observe' }}</span>
+                        {% if care_intent_contract.supportive_priority %}
+                        <span class="rounded-full border border-amber-500/20 bg-amber-500/10 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-amber-200">{{ care_intent_contract.supportive_priority }}</span>
+                        {% endif %}
+                    </div>
+                    <p class="mt-3 text-sm text-slate-300">{{ care_intent_contract.care_goal or palliative_transition_bundle.care_goal or 'Sin objetivo de cuidado explícito visible.' }}</p>
+                    <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-slate-300">
+                        <div>
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Razones / alertas</div>
+                            <ul class="mt-2 space-y-2 list-disc pl-5">
+                                {% for item in palliative_transition_bundle.trigger_reasons or acute_palliative_alerts %}
+                                <li>{{ item }}</li>
+                                {% else %}
+                                <li>Sin razones paliativas activas visibles.</li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                        <div>
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Campos exactos a pedir en visita</div>
+                            <ul class="mt-2 space-y-2 list-disc pl-5">
+                                {% for field in palliative_monitoring_package.required_visit_fields or [] %}
+                                <li>{{ field }}</li>
+                                {% else %}
+                                <li>Sin bundle paliativo activo visible.</li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Referencias y hospice</div>
+                    <div class="mt-2 text-sm font-semibold text-white">{{ hospice_eligibility.recommendation or 'Sin recomendación hospice dominante' }}</div>
+                    <div class="mt-2 text-xs text-slate-400">Cadencia sugerida: {{ palliative_monitoring_package.recommended_cadence or 'No visible' }}</div>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in recommended_supportive_referrals %}
+                        <li>{{ item }}</li>
+                        {% else %}
+                        <li>Sin referrals paliativos visibles.</li>
+                        {% endfor %}
+                    </ul>
+                    {% if palliative_monitoring_package.missing_inputs or palliative_monitoring_package.stale_inputs %}
+                    <div class="mt-4 text-xs uppercase tracking-wider text-slate-500">Pendientes</div>
+                    <p class="mt-2 text-sm text-amber-200">{{ (palliative_monitoring_package.missing_inputs or palliative_monitoring_package.stale_inputs or [])|join(', ') }}</p>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+            {% if survivorship_transition_bundle and survivorship_transition_bundle.available %}
+            <div class="mt-5 grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <div class="rounded-xl border border-cyan-500/20 bg-cyan-950/10 p-4 xl:col-span-2">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Carril longitudinal de survivorship</div>
+                    <div class="mt-2 flex flex-wrap items-center gap-2">
+                        <span class="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-cyan-200">{{ survivorship_transition_bundle.survivorship_track_label or survivorship_transition_bundle.survivorship_track or 'No activo' }}</span>
+                        <span class="rounded-full border border-slate-700 bg-slate-950/50 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-slate-300">{{ survivorship_transition_bundle.trigger_status_label or survivorship_transition_bundle.trigger_status or 'observe' }}</span>
+                        {% if survivorship_transition_bundle.dominant_late_effect_domain %}
+                        <span class="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-emerald-200">{{ survivorship_transition_bundle.dominant_late_effect_domain }}</span>
+                        {% endif %}
+                    </div>
+                    <div class="mt-4 flex flex-wrap gap-3">
+                        <a href="/wizard/survivorship_and_toxicity_followup" class="pn-btn pn-btn-secondary">Abrir asistente de survivorship</a>
+                        <a href="/clinical-hub" class="pn-btn pn-btn-ghost">Ir al centro clínico</a>
+                    </div>
+                    <p class="mt-3 text-sm text-slate-300">{{ survivorship_plan.recommended_cadence or survivorship_schedule_overlay.cadence_summary or 'Seguimiento estructurado de secuelas tardías y recuperación funcional.' }}</p>
+                    <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-slate-300">
+                        <div>
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Alertas / razones</div>
+                            <ul class="mt-2 space-y-2 list-disc pl-5">
+                                {% for item in survivorship_transition_bundle.trigger_reasons or late_effects_profile.active_late_effect_alerts %}
+                                <li>{{ item }}</li>
+                                {% else %}
+                                <li>Sin alertas activas de survivorship visibles.</li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                        <div>
+                            <div class="text-xs uppercase tracking-wider text-slate-500">Campos exactos a pedir en visita</div>
+                            <ul class="mt-2 space-y-2 list-disc pl-5">
+                                {% for field in survivorship_monitoring_package.required_visit_fields or [] %}
+                                <li>{{ field }}</li>
+                                {% else %}
+                                <li>Sin bundle visible de survivorship.</li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Recuperación y referrals</div>
+                    <div class="mt-2 text-sm font-semibold text-white">{{ functional_recovery_profile.functional_recovery_status or survivorship_transition_bundle.functional_recovery_status or 'Sin dominio de recuperación dominante' }}</div>
+                    <div class="mt-2 text-xs text-slate-400">Cadencia sugerida: {{ survivorship_monitoring_package.recommended_cadence or survivorship_schedule_overlay.cadence_summary or 'No visible' }}</div>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in survivorship_transition_bundle.recommended_referrals or late_effects_profile.recommended_referrals %}
+                        <li>{{ item }}</li>
+                        {% else %}
+                        <li>Sin referencias específicas visibles.</li>
+                        {% endfor %}
+                    </ul>
+                    {% if survivorship_monitoring_package.missing_inputs or survivorship_monitoring_package.stale_inputs %}
+                    <div class="mt-4 text-xs uppercase tracking-wider text-slate-500">Pendientes</div>
+                    <p class="mt-2 text-sm text-amber-200">{{ (survivorship_monitoring_package.missing_inputs or survivorship_monitoring_package.stale_inputs or [])|join(', ') }}</p>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
             {% if transition_proposals and transition_resolution.policy == 'manual_confirmation_required' %}
             <div class="mt-5 grid grid-cols-1 xl:grid-cols-2 gap-4">
                 {% for proposal in transition_proposals[:2] %}
@@ -1073,7 +1240,7 @@
                     <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
                         <div>
                             <div class="text-xs uppercase tracking-wider text-slate-500">Transición sugerida</div>
-                            <div class="mt-2 text-sm font-semibold text-white">{{ proposal.target_state }}</div>
+                            <div class="mt-2 text-sm font-semibold text-white">{{ proposal.target_state_label or proposal.target_state }}</div>
                             {% if proposal.target_management_track %}
                             <div class="mt-1 text-xs text-slate-400">Track sugerido: {{ proposal.target_management_track }}</div>
                             {% endif %}
@@ -1104,11 +1271,19 @@
                     <div class="text-xs uppercase tracking-[0.2em] text-fuchsia-300">Copiloto CRPC</div>
                     <h2 class="mt-2 text-lg font-bold text-white">Recalculo longitudinal para progresión bajo ADT, M0-CRPC y M1-CRPC</h2>
                     <p class="mt-2 text-sm text-slate-300">{{ (crpc_copilot.why_changed_today or [])|join(' ') or 'Sin cambio longitudinal CRPC visible todavía.' }}</p>
+                    {% if crpc_copilot.metastatic_composition_summary and crpc_copilot.metastatic_composition_summary.available %}
+                    <div class="mt-3 rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/20 px-3 py-2 text-sm text-slate-200">
+                        {{ crpc_copilot.metastatic_composition_summary.narrative }}
+                    </div>
+                    {% endif %}
+                    {% if crpc_copilot.decision_delta_since_last_visit and crpc_copilot.decision_delta_since_last_visit.available %}
+                    <div class="mt-2 text-xs text-slate-400">Cambio decisivo hoy: {{ crpc_copilot.decision_delta_since_last_visit.summary }}</div>
+                    {% endif %}
                 </div>
                 <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 xl:max-w-sm">
                     <div class="text-xs uppercase tracking-wider text-slate-500">Modo / estado</div>
                     <div class="mt-2 text-sm font-semibold text-white" data-testid="crpc-runtime-mode">{{ crpc_copilot.runtime_mode or 'shadow' }}</div>
-                    <p class="mt-2 text-sm text-slate-300">{{ crpc_copilot.state_family or clinical_signals.effective_state_final or clinical_compass.current_stage_label }}</p>
+                    <p class="mt-2 text-sm text-slate-300">{{ crpc_copilot.state_family_label or crpc_copilot.state_family or clinical_signals.effective_state_final or clinical_compass.current_stage_label }}</p>
                     <div class="mt-3 text-xs text-slate-400">QA: {{ 'aprobado' if crpc_copilot.qa_validation and crpc_copilot.qa_validation.approved else 'pendiente / bloqueado' }}</div>
                     <div class="mt-1 text-xs text-slate-400">Concordancia: {{ crpc_copilot.ai_advisory_overlay.concordance_label if crpc_copilot.ai_advisory_overlay else 'rule_only' }}</div>
                 </div>
@@ -1148,6 +1323,155 @@
                 </div>
             </div>
             <div class="mt-5 grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <div class="rounded-xl border border-fuchsia-500/20 bg-fuchsia-950/20 p-4 xl:col-span-2">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Tratamiento preferente y otros elegibles</div>
+                    {% if crpc_copilot.preferred_frontline_regimen %}
+                    <div class="mt-3 rounded-2xl border border-emerald-500/20 bg-emerald-950/10 p-4">
+                        <div class="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                                <div class="text-base font-semibold text-white">{{ crpc_copilot.preferred_frontline_regimen.regimen_label or crpc_copilot.preferred_frontline_regimen.display_label or crpc_copilot.preferred_frontline_regimen.name }}</div>
+                                <div class="mt-1 text-xs uppercase tracking-[0.18em] text-emerald-300">{{ crpc_copilot.preferred_frontline_regimen.regimen_code or 'Sin código estructurado' }}</div>
+                            </div>
+                            <div class="text-right">
+                                <div class="text-xs uppercase tracking-[0.18em] text-emerald-300">
+                                    {% if crpc_copilot.preferred_frontline_regimen.is_preferred or crpc_copilot.preferred_frontline_regimen.priority in ['preferred', 'preferente'] or crpc_copilot.preferred_frontline_regimen.eligibility_status in ['preferred', 'preferente'] %}
+                                    Preferente
+                                    {% elif crpc_copilot.preferred_frontline_regimen.eligibility_status == 'eligible_with_caution' %}
+                                    Elegible con cautela
+                                    {% elif crpc_copilot.preferred_frontline_regimen.eligibility_status == 'conditional' %}
+                                    Condicionado
+                                    {% else %}
+                                    Elegible
+                                    {% endif %}
+                                </div>
+                                {% if crpc_copilot.preferred_frontline_regimen.preference_confidence %}
+                                <div class="mt-1 text-[11px] {{ 'text-amber-200' if crpc_copilot.preferred_frontline_regimen.preference_confidence == 'provisional' else 'text-emerald-200' }}">
+                                    {{ 'Preferencia provisional' if crpc_copilot.preferred_frontline_regimen.preference_confidence == 'provisional' else 'Preferencia definitiva' }}
+                                </div>
+                                {% endif %}
+                                {% if crpc_copilot.preferred_frontline_regimen.clave_imss or crpc_copilot.preferred_frontline_regimen.imss_key %}
+                                <div class="mt-1 text-[11px] text-slate-500">Clave IMSS: {{ crpc_copilot.preferred_frontline_regimen.clave_imss or crpc_copilot.preferred_frontline_regimen.imss_key }}</div>
+                                {% endif %}
+                            </div>
+                        </div>
+                        {% if crpc_copilot.preferred_frontline_regimen.description %}
+                        <p class="mt-2 text-sm text-slate-300">{{ crpc_copilot.preferred_frontline_regimen.description }}</p>
+                        {% endif %}
+                        <div class="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3 text-xs text-slate-300">
+                            <div class="rounded-xl border border-slate-700/70 bg-slate-950/40 px-3 py-2">
+                                <div class="uppercase tracking-[0.18em] text-slate-500">Dosis</div>
+                                <div class="mt-1">{{ crpc_copilot.preferred_frontline_regimen.dosis or crpc_copilot.preferred_frontline_regimen.dose or 'No visible' }}</div>
+                            </div>
+                            <div class="rounded-xl border border-slate-700/70 bg-slate-950/40 px-3 py-2">
+                                <div class="uppercase tracking-[0.18em] text-slate-500">Vía</div>
+                                <div class="mt-1">{{ crpc_copilot.preferred_frontline_regimen.via or crpc_copilot.preferred_frontline_regimen.route or 'No visible' }}</div>
+                            </div>
+                            <div class="rounded-xl border border-slate-700/70 bg-slate-950/40 px-3 py-2">
+                                <div class="uppercase tracking-[0.18em] text-slate-500">Esquema</div>
+                                <div class="mt-1">{{ crpc_copilot.preferred_frontline_regimen.schedule or crpc_copilot.preferred_frontline_regimen.duration or 'No visible' }}</div>
+                            </div>
+                        </div>
+                        {% if crpc_copilot.preferred_frontline_regimen.benefit_endpoint_used or crpc_copilot.preferred_frontline_regimen.benefit_basis %}
+                        <div class="mt-3 rounded-xl border border-cyan-500/20 bg-cyan-950/10 p-3">
+                            <div class="text-[11px] uppercase tracking-[0.18em] text-cyan-300">Base de beneficio</div>
+                            {% if crpc_copilot.preferred_frontline_regimen.benefit_endpoint_used %}
+                            <div class="mt-1 text-xs text-slate-300">Endpoint decisivo: {{ crpc_copilot.preferred_frontline_regimen.benefit_endpoint_used }}</div>
+                            {% endif %}
+                            {% if crpc_copilot.preferred_frontline_regimen.benefit_basis %}
+                            <div class="mt-1 text-xs text-slate-400">{{ crpc_copilot.preferred_frontline_regimen.benefit_basis }}</div>
+                            {% endif %}
+                        </div>
+                        {% endif %}
+                        {% if crpc_copilot.preferred_frontline_regimen.required_missing_fields or crpc_copilot.preferred_frontline_regimen.stale_inputs %}
+                        <div class="mt-3 rounded-xl border border-amber-500/20 bg-amber-950/10 p-3">
+                            <div class="text-[11px] uppercase tracking-[0.18em] text-amber-200">Cierre pendiente del ranking</div>
+                            {% if crpc_copilot.preferred_frontline_regimen.required_missing_fields %}
+                            <div class="mt-1 text-xs text-slate-300">Faltan: {{ (crpc_copilot.preferred_frontline_regimen.required_missing_fields or [])|join(', ') }}</div>
+                            {% endif %}
+                            {% if crpc_copilot.preferred_frontline_regimen.stale_inputs %}
+                            <div class="mt-1 text-xs text-slate-300">Vencidos: {{ (crpc_copilot.preferred_frontline_regimen.stale_inputs or [])|join(', ') }}</div>
+                            {% endif %}
+                        </div>
+                        {% endif %}
+                        {% if crpc_copilot.preferred_frontline_regimen.selection_rationale %}
+                        <ul class="mt-3 space-y-2 text-sm text-emerald-100 list-disc pl-5">
+                            {% for item in crpc_copilot.preferred_frontline_regimen.selection_rationale[:3] %}
+                            <li>{{ item }}</li>
+                            {% endfor %}
+                        </ul>
+                        {% endif %}
+                        {% if crpc_copilot.preferred_frontline_regimen.contraindication_reasons %}
+                        <ul class="mt-3 space-y-2 text-sm text-amber-200 list-disc pl-5">
+                            {% for item in crpc_copilot.preferred_frontline_regimen.contraindication_reasons[:3] %}
+                            <li>{{ item }}</li>
+                            {% endfor %}
+                        </ul>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                    <div class="mt-4">
+                        <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Otros elegibles ordenados</div>
+                        <div class="mt-3 space-y-3">
+                            {% for item in (crpc_copilot.eligible_treatments or [])[1:4] %}
+                            <div class="rounded-xl border border-slate-700/70 bg-slate-950/40 p-3">
+                                <div class="flex flex-wrap items-start justify-between gap-3">
+                                    <div>
+                                        <div class="text-sm font-semibold text-white">{{ item.regimen_label or item.display_label or item.name }}</div>
+                                        <div class="mt-1 text-[11px] uppercase tracking-[0.18em] text-cyan-300">{{ item.regimen_code or 'Sin código estructurado' }}</div>
+                                    </div>
+                                    <div class="text-right">
+                                        <div class="text-xs uppercase tracking-[0.18em] {{ 'text-emerald-300' if item.is_preferred or item.priority in ['preferred', 'preferente'] or item.eligibility_status in ['preferred', 'preferente'] else 'text-slate-400' }}">
+                                            {% if item.is_preferred or item.priority in ['preferred', 'preferente'] or item.eligibility_status in ['preferred', 'preferente'] %}
+                                            Preferente
+                                            {% elif item.eligibility_status == 'eligible_with_caution' %}
+                                            Elegible con cautela
+                                            {% elif item.eligibility_status == 'conditional' %}
+                                            Condicionado
+                                            {% else %}
+                                            Elegible
+                                            {% endif %}
+                                        </div>
+                                        {% if item.preference_confidence %}
+                                        <div class="mt-1 text-[11px] {{ 'text-amber-200' if item.preference_confidence == 'provisional' else 'text-slate-400' }}">
+                                            {{ 'ranking provisional' if item.preference_confidence == 'provisional' else 'ranking definitivo' }}
+                                        </div>
+                                        {% endif %}
+                                        {% if item.clave_imss or item.imss_key %}
+                                        <div class="mt-1 text-[11px] text-slate-500">Clave IMSS: {{ item.clave_imss or item.imss_key }}</div>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                                <p class="mt-2 text-xs text-slate-300">{{ item.dosis or item.dose or 'Dosis no visible' }} · {{ item.via or item.route or 'Vía no visible' }} · {{ item.schedule or item.duration or 'Esquema no visible' }}</p>
+                                {% if item.benefit_endpoint_used or item.benefit_basis %}
+                                <p class="mt-2 text-[11px] text-cyan-200">{{ item.benefit_endpoint_used or 'Beneficio clínico' }} · {{ item.benefit_basis or 'Sin base visible' }}</p>
+                                {% endif %}
+                                {% if item.required_missing_fields or item.stale_inputs %}
+                                <p class="mt-2 text-[11px] text-amber-200">Pendiente: {{ (item.required_missing_fields or item.stale_inputs or [])|join(', ') }}</p>
+                                {% endif %}
+                                {% if item.why_this_rank %}
+                                <p class="mt-2 text-xs text-slate-400">{{ (item.why_this_rank[:2])|join(' · ') }}</p>
+                                {% endif %}
+                            </div>
+                            {% else %}
+                            <div class="rounded-xl border border-slate-700/70 bg-slate-950/40 p-3 text-sm text-slate-400">Sin otros elegibles estructurados visibles.</div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Monitorización activa y gatillo</div>
+                    <div class="mt-2 text-sm font-semibold text-white">{{ crpc_copilot.active_regimen_monitoring_package.monitoring_focus or 'Sin paquete activo visible' }}</div>
+                    <div class="mt-3 text-xs text-slate-400">Trigger actual: {{ crpc_copilot.sequence_transition_bundle.trigger_status or 'sin trigger' }}</div>
+                    <div class="mt-1 text-xs text-slate-400">Razón: {{ crpc_copilot.sequence_transition_bundle.line_change_reason or 'Sin razón estructurada' }}</div>
+                    <div class="mt-1 text-xs text-slate-400">Cadencia sugerida: {{ crpc_copilot.active_regimen_monitoring_package.recommended_cadence or 'No visible' }}</div>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for field in crpc_copilot.active_regimen_monitoring_package.required_visit_fields or [] %}
+                        <li>{{ field }}</li>
+                        {% else %}
+                        <li>Sin campos exactos de monitorización visibles.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
                 <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
                     <div class="text-xs uppercase tracking-wider text-slate-500">Secuencia priorizada</div>
                     <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
@@ -1189,6 +1513,14 @@
                     <div class="text-xs uppercase tracking-[0.2em] text-cyan-300">Copiloto post-RP</div>
                     <h2 class="mt-2 text-lg font-bold text-white">Recalculo longitudinal para PSA persistente, BCR verdadera y ventana de salvage</h2>
                     <p class="mt-2 text-sm text-slate-300">{{ (post_rp_copilot.why_changed_today or [])|join(' ') or 'Sin cambio longitudinal post-RP visible todavía.' }}</p>
+                    {% if post_rp_copilot.metastatic_composition_summary and post_rp_copilot.metastatic_composition_summary.available %}
+                    <div class="mt-3 rounded-2xl border border-cyan-500/20 bg-cyan-950/20 px-3 py-2 text-sm text-slate-200">
+                        {{ post_rp_copilot.metastatic_composition_summary.narrative }}
+                    </div>
+                    {% endif %}
+                    {% if post_rp_copilot.decision_delta_since_last_visit and post_rp_copilot.decision_delta_since_last_visit.available %}
+                    <div class="mt-2 text-xs text-slate-400">Cambio decisivo hoy: {{ post_rp_copilot.decision_delta_since_last_visit.summary }}</div>
+                    {% endif %}
                 </div>
                 <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 xl:max-w-sm">
                     <div class="text-xs uppercase tracking-wider text-slate-500">Curso / ventana</div>
@@ -1256,6 +1588,251 @@
                         <li>{{ item.group_label }}{% if item.required_fields %} · Requiere {{ (item.required_fields or [])|join(', ') }}{% endif %}</li>
                         {% else %}
                         <li>Sin blockers post-RP visibles.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+        </section>
+        {% endif %}
+
+        {% if mhspc_copilot and mhspc_copilot.show_card %}
+        <section id="profile-mhspc-copilot" class="pn-surface border border-indigo-700/30 bg-indigo-950/10" data-testid="mhspc-copilot-card">
+            <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
+                <div>
+                    <div class="text-xs uppercase tracking-[0.2em] text-indigo-300">Copiloto mHSPC</div>
+                    <h2 class="mt-2 text-lg font-bold text-white">Recalculo longitudinal para fenotipo, volumen y frontline en mHSPC</h2>
+                    <p class="mt-2 text-sm text-slate-300">{{ (mhspc_copilot.why_changed_today or [])|join(' ') or 'Sin cambio longitudinal mHSPC visible todavía.' }}</p>
+                    {% if mhspc_copilot.metastatic_composition_summary and mhspc_copilot.metastatic_composition_summary.available %}
+                    <div class="mt-3 rounded-2xl border border-indigo-500/20 bg-indigo-950/20 px-3 py-2 text-sm text-slate-200">
+                        {{ mhspc_copilot.metastatic_composition_summary.narrative }}
+                    </div>
+                    {% endif %}
+                    {% if mhspc_copilot.decision_delta_since_last_visit and mhspc_copilot.decision_delta_since_last_visit.available %}
+                    <div class="mt-2 text-xs text-slate-400">Cambio decisivo hoy: {{ mhspc_copilot.decision_delta_since_last_visit.summary }}</div>
+                    {% endif %}
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 xl:max-w-sm">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Fenotipo / modo</div>
+                    <div class="mt-2 text-sm font-semibold text-white">{{ mhspc_copilot.phenotype_summary.label or mhspc_copilot.state_family_label or mhspc_copilot.state_family or clinical_signals.effective_state_final }}</div>
+                    <p class="mt-2 text-sm text-slate-300">{{ mhspc_copilot.phenotype_summary.volume_disease_label or mhspc_copilot.volume_disease or 'No resuelto' }} · {{ mhspc_copilot.phenotype_summary.temporality_label or mhspc_copilot.temporality or 'temporalidad no visible' }}</p>
+                    <div class="mt-3 text-xs text-slate-400">QA: {{ 'aprobado' if mhspc_copilot.qa_validation and mhspc_copilot.qa_validation.approved else 'pendiente / bloqueado' }}</div>
+                    <div class="mt-1 text-xs text-slate-400">Docetaxel fit: {{ 'sí' if mhspc_copilot.docetaxel_fitness and mhspc_copilot.docetaxel_fitness.eligible else 'no / incierto' }}</div>
+                    {% if mhspc_copilot.progression_gate_active %}
+                    <div class="mt-3 rounded-2xl border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-xs text-amber-100">
+                        {{ mhspc_copilot.progression_gate_reason or 'La intensificación resistente sigue bloqueada hasta confirmar castración y reestadificación convencional.' }}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="mt-5 grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <div class="rounded-xl border border-emerald-500/20 bg-emerald-950/10 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Decisión primaria NCCN/EAU</div>
+                    <div class="mt-2 text-base font-semibold text-white">{{ mhspc_copilot.rule_based_recommendation.recommended_action or 'Sin recomendación primaria estructurada' }}</div>
+                    <p class="mt-2 text-sm text-slate-300">{{ mhspc_copilot.rule_based_recommendation.rationale or 'La capa rule-based sigue siendo la fuente primaria de verdad clínica.' }}</p>
+                </div>
+                <div class="rounded-xl border border-indigo-500/20 bg-indigo-950/20 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">{{ 'Gate de progresión / recomendación final' if mhspc_copilot.progression_gate_active else 'Frontline preferente' }}</div>
+                    <div class="mt-2 text-base font-semibold text-white">{{ (mhspc_copilot.final_presented_recommendation.recommended_action if mhspc_copilot.progression_gate_active else (mhspc_copilot.preferred_frontline_regimen.regimen_label or mhspc_copilot.preferred_frontline_regimen.display_label)) or 'Sin régimen preferente visible' }}</div>
+                    <p class="mt-2 text-sm text-slate-300">{{ (mhspc_copilot.final_presented_recommendation.rationale if mhspc_copilot.progression_gate_active else (mhspc_copilot.triplet_decision.summary or mhspc_copilot.ai_advisory_overlay.recommended_action)) or 'Sin overlay elegible todavía.' }}</p>
+                    <div class="mt-3 text-xs text-slate-400">RT primario: {{ 'sí' if mhspc_copilot.rt_primary_candidate else 'no' }} · MDT: {{ 'sí' if mhspc_copilot.mdt_candidate else 'no' }}</div>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Datos que cambian elegibilidad</div>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in mhspc_copilot.blocking_inputs or [] %}
+                        <li>{{ item.group_label }}{% if item.required_fields %} · Requiere {{ (item.required_fields or [])|join(', ') }}{% endif %}</li>
+                        {% else %}
+                        <li>Sin blockers mHSPC visibles.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+        </section>
+        {% endif %}
+
+        {% if diagnostic_copilot and diagnostic_copilot.show_card %}
+        <section id="profile-diagnostic-copilot" class="pn-surface border border-amber-700/30 bg-amber-950/10" data-testid="diagnostic-copilot-card">
+            <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
+                <div>
+                    <div class="text-xs uppercase tracking-[0.2em] text-amber-300">Copiloto diagnóstico</div>
+                    <h2 class="mt-2 text-lg font-bold text-white">Recalculo longitudinal para sospecha, MRI y decisión de biopsia</h2>
+                    <p class="mt-2 text-sm text-slate-300">{{ (diagnostic_copilot.why_changed_today or [])|join(' ') or 'Sin cambio diagnóstico longitudinal visible todavía.' }}</p>
+                    {% if diagnostic_copilot.decision_delta_since_last_visit and diagnostic_copilot.decision_delta_since_last_visit.available %}
+                    <div class="mt-2 text-xs text-slate-400">Cambio decisivo hoy: {{ diagnostic_copilot.decision_delta_since_last_visit.summary }}</div>
+                    {% endif %}
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 xl:max-w-sm">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Track diagnóstico</div>
+                    <div class="mt-2 text-sm font-semibold text-white">{{ diagnostic_copilot.diagnostic_track or 'no definido' }}</div>
+                    <p class="mt-2 text-sm text-slate-300">{{ diagnostic_copilot.biopsy_readiness.label or diagnostic_copilot.biopsy_readiness.status or 'Readiness no disponible' }}</p>
+                    <div class="mt-3 text-xs text-slate-400">QA: {{ 'aprobado' if diagnostic_copilot.qa_validation and diagnostic_copilot.qa_validation.approved else 'pendiente / bloqueado' }}</div>
+                </div>
+            </div>
+            <div class="mt-5 grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <div class="rounded-xl border border-emerald-500/20 bg-emerald-950/10 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Decisión primaria</div>
+                    <div class="mt-2 text-base font-semibold text-white">{{ diagnostic_copilot.rule_based_recommendation.recommended_action or 'Sin recomendación primaria estructurada' }}</div>
+                    <p class="mt-2 text-sm text-slate-300">{{ diagnostic_copilot.rule_based_recommendation.rationale or 'La capa rule-based sigue siendo la fuente primaria de verdad clínica.' }}</p>
+                </div>
+                <div class="rounded-xl border border-amber-500/20 bg-amber-950/20 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">MRI / refinadores</div>
+                    <div class="mt-2 text-base font-semibold text-white">{{ diagnostic_copilot.mri_quality_or_repeat_need.label or diagnostic_copilot.mri_quality_or_repeat_need.status or 'Sin necesidad estructurada visible' }}</div>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in diagnostic_copilot.risk_refiners or [] %}
+                        <li>{{ item.label or item.name }}{% if item.status %} · {{ item.status }}{% endif %}</li>
+                        {% else %}
+                        <li>Sin refinadores visibles.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Datos que cierran la decisión</div>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in diagnostic_copilot.blocking_inputs or [] %}
+                        <li>{{ item.group_label }}{% if item.required_fields %} · Requiere {{ (item.required_fields or [])|join(', ') }}{% endif %}</li>
+                        {% else %}
+                        <li>Sin blockers diagnósticos visibles.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+        </section>
+        {% endif %}
+
+        {% if localized_copilot and localized_copilot.show_card %}
+        <section id="profile-localized-copilot" class="pn-surface border border-emerald-700/30 bg-emerald-950/10" data-testid="localized-copilot-card">
+            <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
+                <div>
+                    <div class="text-xs uppercase tracking-[0.2em] text-emerald-300">Copiloto localizado / vigilancia activa</div>
+                    <h2 class="mt-2 text-lg font-bold text-white">Recalculo longitudinal para AS, upgrade y estrategia local preferente</h2>
+                    <p class="mt-2 text-sm text-slate-300">{{ (localized_copilot.why_changed_today or [])|join(' ') or 'Sin cambio localizado longitudinal visible todavía.' }}</p>
+                    {% if localized_copilot.decision_delta_since_last_visit and localized_copilot.decision_delta_since_last_visit.available %}
+                    <div class="mt-2 text-xs text-slate-400">Cambio decisivo hoy: {{ localized_copilot.decision_delta_since_last_visit.summary }}</div>
+                    {% endif %}
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 xl:max-w-sm">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Track / curso AS</div>
+                    <div class="mt-2 text-sm font-semibold text-white">{{ localized_copilot.localized_track or 'no definido' }}</div>
+                    <p class="mt-2 text-sm text-slate-300">{{ localized_copilot.active_surveillance_course.status_label or localized_copilot.active_surveillance_course.status or 'Sin curso AS visible' }}</p>
+                    <div class="mt-3 text-xs text-slate-400">QA: {{ 'aprobado' if localized_copilot.qa_validation and localized_copilot.qa_validation.approved else 'pendiente / bloqueado' }}</div>
+                </div>
+            </div>
+            <div class="mt-5 grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <div class="rounded-xl border border-emerald-500/20 bg-emerald-950/10 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Decisión primaria</div>
+                    <div class="mt-2 text-base font-semibold text-white">{{ localized_copilot.rule_based_recommendation.recommended_action or 'Sin recomendación primaria estructurada' }}</div>
+                    <p class="mt-2 text-sm text-slate-300">{{ localized_copilot.rule_based_recommendation.rationale or 'La capa rule-based sigue siendo la fuente primaria de verdad clínica.' }}</p>
+                </div>
+                <div class="rounded-xl border border-emerald-500/20 bg-emerald-950/20 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Estrategia local preferente</div>
+                    <div class="mt-2 text-base font-semibold text-white">{{ localized_copilot.preferred_local_strategy.label or localized_copilot.preferred_local_strategy.name or 'Sin estrategia preferente visible' }}</div>
+                    <div class="mt-3 text-xs text-slate-400">Triggers activos: {{ (localized_copilot.upgrade_triggers or [])|length }}</div>
+                    <div class="mt-1 text-xs text-slate-400">Elegibilidad AS: {{ (localized_copilot.active_surveillance_eligibility or [])|length }} protocolos</div>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Datos que cambian conducta</div>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in localized_copilot.blocking_inputs or [] %}
+                        <li>{{ item.group_label }}{% if item.required_fields %} · Requiere {{ (item.required_fields or [])|join(', ') }}{% endif %}</li>
+                        {% else %}
+                        <li>Sin blockers localizados visibles.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+        </section>
+        {% endif %}
+
+        {% if post_rt_copilot and post_rt_copilot.show_card %}
+        <section id="profile-post-rt-copilot" class="pn-surface border border-sky-700/30 bg-sky-950/10" data-testid="post-rt-copilot-card">
+            <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
+                <div>
+                    <div class="text-xs uppercase tracking-[0.2em] text-sky-300">Copiloto post-RT</div>
+                    <h2 class="mt-2 text-lg font-bold text-white">Recalculo longitudinal para rescate post-radioterapia y redirección sistémica</h2>
+                    <p class="mt-2 text-sm text-slate-300">{{ (post_rt_copilot.why_changed_today or [])|join(' ') or 'Sin cambio longitudinal post-RT visible todavía.' }}</p>
+                    {% if post_rt_copilot.metastatic_composition_summary and post_rt_copilot.metastatic_composition_summary.available %}
+                    <div class="mt-3 rounded-2xl border border-sky-500/20 bg-sky-950/20 px-3 py-2 text-sm text-slate-200">
+                        {{ post_rt_copilot.metastatic_composition_summary.narrative }}
+                    </div>
+                    {% endif %}
+                    {% if post_rt_copilot.decision_delta_since_last_visit and post_rt_copilot.decision_delta_since_last_visit.available %}
+                    <div class="mt-2 text-xs text-slate-400">Cambio decisivo hoy: {{ post_rt_copilot.decision_delta_since_last_visit.summary }}</div>
+                    {% endif %}
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 xl:max-w-sm">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Curso / ventana</div>
+                    <div class="mt-2 text-sm font-semibold text-white">{{ post_rt_copilot.post_rt_course or 'no definido' }}</div>
+                    <p class="mt-2 text-sm text-slate-300">{{ post_rt_copilot.post_rt_salvage_window_status or 'sin ventana visible' }}</p>
+                    {% if post_rt_copilot.post_rt_failure_definition %}
+                    <div class="mt-3 space-y-1 text-xs text-slate-300">
+                        <div>Phoenix: <span class="font-semibold text-white">{{ post_rt_copilot.post_rt_failure_definition.phoenix_status or 'no evaluable' }}</span></div>
+                        <div>Base de confirmación: <span class="font-semibold text-white">{{ post_rt_copilot.post_rt_failure_definition.failure_confirmation_basis or 'indeterminada' }}</span></div>
+                    </div>
+                    {% endif %}
+                    <div class="mt-3 text-xs text-slate-400">QA: {{ 'aprobado' if post_rt_copilot.qa_validation and post_rt_copilot.qa_validation.approved else 'pendiente / bloqueado' }}</div>
+                </div>
+            </div>
+            <div class="mt-5 grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <div class="rounded-xl border border-emerald-500/20 bg-emerald-950/10 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Decisión primaria</div>
+                    <div class="mt-2 text-base font-semibold text-white">{{ post_rt_copilot.rule_based_recommendation.recommended_action or 'Sin recomendación primaria estructurada' }}</div>
+                    <p class="mt-2 text-sm text-slate-300">{{ post_rt_copilot.rule_based_recommendation.rationale or 'La capa rule-based sigue siendo la fuente primaria de verdad clínica.' }}</p>
+                </div>
+                <div class="rounded-xl border border-sky-500/20 bg-sky-950/20 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Ruta visible</div>
+                    <div class="mt-2 text-base font-semibold text-white">{{ post_rt_copilot.local_salvage_pathway.recommended_path or post_rt_copilot.systemic_redirection_status.reason or 'Sin ruta visible' }}</div>
+                    <div class="mt-3 text-xs text-slate-400">Reestadificación: {{ post_rt_copilot.restaging_strategy.label or post_rt_copilot.restaging_strategy.status or 'No estructurada' }}</div>
+                    {% if post_rt_copilot.local_salvage_pathway.dominant_local_option %}
+                    <div class="mt-3 text-xs text-slate-300">Modalidad dominante: <span class="font-semibold text-white">{{ post_rt_copilot.local_salvage_pathway.dominant_local_option.name or post_rt_copilot.local_salvage_pathway.dominant_local_option.regimen_code }}</span></div>
+                    {% endif %}
+                    {% if post_rt_copilot.post_rt_transition_bundle and post_rt_copilot.post_rt_transition_bundle.trigger_reasons %}
+                    <p class="mt-3 text-sm text-slate-300">{{ (post_rt_copilot.post_rt_transition_bundle.trigger_reasons or [])|join(' ') }}</p>
+                    {% endif %}
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Datos que cambian conducta</div>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for item in post_rt_copilot.blocking_inputs or [] %}
+                        <li>{{ item.group_label }}{% if item.required_fields %} · Requiere {{ (item.required_fields or [])|join(', ') }}{% endif %}</li>
+                        {% else %}
+                        <li>Sin blockers post-RT visibles.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+            <div class="mt-5 grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <div class="rounded-xl border border-violet-500/20 bg-violet-950/10 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Ranking de salvage local</div>
+                    <ul class="mt-3 space-y-3">
+                        {% for item in post_rt_copilot.post_rt_local_salvage_ranking[:5] or [] %}
+                        <li class="rounded-lg border border-slate-700/70 bg-slate-900/40 px-3 py-3">
+                            <div class="flex items-center justify-between gap-3">
+                                <div class="text-sm font-semibold text-white">{{ item.name or item.regimen_code }}</div>
+                                <div class="text-[11px] uppercase tracking-wider {% if item.eligibility_status == 'preferred' %}text-emerald-300{% elif item.eligibility_status == 'ineligible' %}text-rose-300{% else %}text-slate-400{% endif %}">
+                                    {{ item.eligibility_status or 'sin estatus' }}
+                                </div>
+                            </div>
+                            {% if item.why_this_rank %}
+                            <div class="mt-2 text-xs text-slate-300">{{ (item.why_this_rank or [])|join(' ') }}</div>
+                            {% endif %}
+                            {% if item.hard_blocks %}
+                            <div class="mt-2 text-xs text-rose-300">Bloqueos: {{ (item.hard_blocks or [])|join(', ') }}</div>
+                            {% elif item.caution_flags %}
+                            <div class="mt-2 text-xs text-amber-300">Cautelas: {{ (item.caution_flags or [])|join(', ') }}</div>
+                            {% endif %}
+                        </li>
+                        {% else %}
+                        <li class="text-sm text-slate-400">Sin ranking post-RT visible todavía.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                    <div class="text-xs uppercase tracking-wider text-slate-500">Campos faltantes para cerrar la ruta</div>
+                    <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
+                        {% for field in post_rt_copilot.required_missing_fields or post_rt_copilot.post_rt_failure_definition.required_missing_fields or [] %}
+                        <li>{{ field }}</li>
+                        {% else %}
+                        <li>Sin pendientes críticos post-RT visibles.</li>
                         {% endfor %}
                     </ul>
                 </div>
@@ -2569,7 +3146,7 @@
                     {% endif %}
                     {% if supportive_evidence_context %}
                     <details class="pn-accordion mt-4 rounded-xl border border-slate-700 bg-slate-950/30 p-3">
-                        <summary class="text-xs uppercase tracking-wider text-slate-400">Contexto supportive</summary>
+                        <summary class="text-xs uppercase tracking-wider text-slate-400">Contexto de soporte</summary>
                         <ul class="mt-3 space-y-2 text-sm text-slate-300 list-disc pl-5">
                             {% for item in supportive_evidence_context %}
                             <li>{{ item }}</li>
@@ -2610,7 +3187,7 @@
                             <div class="rounded-xl border border-slate-700/80 bg-slate-950/40 p-3">
                                 <div class="flex justify-between items-start gap-3">
                                     <span class="font-bold text-white text-sm">{{ item.study_name }}</span>
-                                    <span class="text-xs px-2 py-0.5 rounded {{ 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20' if item.status == 'Aplicable' else 'bg-amber-500/10 text-amber-300 border border-amber-500/20' }}">{{ item.status }}</span>
+                                    <span class="text-xs px-2 py-0.5 rounded {% if item.status == 'Aplicable' %}bg-emerald-500/10 text-emerald-300 border border-emerald-500/20{% elif item.status == 'Contextual' %}bg-cyan-500/10 text-cyan-300 border border-cyan-500/20{% else %}bg-amber-500/10 text-amber-300 border border-amber-500/20{% endif %}">{{ item.status }}</span>
                                 </div>
                                 {% if item.decision_supported %}
                                 <div class="mt-2 text-xs uppercase tracking-wider text-slate-500">Decisión que respalda</div>
@@ -2626,6 +3203,19 @@
                                 <div class="mt-3 text-xs uppercase tracking-wider text-slate-500">Backbone del estudio</div>
                                 <div class="mt-1 text-sm text-cyan-200">{{ item.recommended_trial_backbone_label }}</div>
                                 <div class="mt-1 text-xs text-slate-400">{{ item.recommended_trial_backbone_note }}</div>
+                                {% if item.recommended_trial_backbone_description %}
+                                <div class="mt-1 text-xs text-slate-300">{{ item.recommended_trial_backbone_description }}</div>
+                                {% endif %}
+                                {% if item.recommended_trial_backbone_dose or item.recommended_trial_backbone_route or item.recommended_trial_backbone_schedule or item.recommended_trial_backbone_duration or item.recommended_trial_backbone_total_dose_gy or item.recommended_trial_backbone_fractions %}
+                                <div class="mt-2 grid grid-cols-1 gap-1 text-xs text-slate-300">
+                                    {% if item.recommended_trial_backbone_dose %}<div><span class="text-slate-500">Dosis:</span> {{ item.recommended_trial_backbone_dose }}</div>{% endif %}
+                                    {% if item.recommended_trial_backbone_route %}<div><span class="text-slate-500">Vía:</span> {{ item.recommended_trial_backbone_route }}</div>{% endif %}
+                                    {% if item.recommended_trial_backbone_schedule %}<div><span class="text-slate-500">Esquema:</span> {{ item.recommended_trial_backbone_schedule }}</div>{% endif %}
+                                    {% if item.recommended_trial_backbone_duration %}<div><span class="text-slate-500">Duración:</span> {{ item.recommended_trial_backbone_duration }}</div>{% endif %}
+                                    {% if item.recommended_trial_backbone_total_dose_gy %}<div><span class="text-slate-500">Dosis RT:</span> {{ item.recommended_trial_backbone_total_dose_gy }}</div>{% endif %}
+                                    {% if item.recommended_trial_backbone_fractions %}<div><span class="text-slate-500">Fraccionamiento:</span> {{ item.recommended_trial_backbone_fractions }}</div>{% endif %}
+                                </div>
+                                {% endif %}
                                 {% endif %}
                                 {% if item.clinical_takeaway %}
                                 <div class="mt-2 text-xs text-amber-200">{{ item.clinical_takeaway }}</div>
@@ -2666,6 +3256,13 @@
                                 <div class="mt-2 text-xs uppercase tracking-wider text-slate-500">Backbone del estudio</div>
                                 <div class="mt-1 text-sm text-cyan-200">{{ match.recommended_trial_backbone_label }}</div>
                                 <div class="mt-1 text-xs text-slate-400">{{ match.recommended_trial_backbone_note }}</div>
+                                {% if match.recommended_trial_backbone_dose or match.recommended_trial_backbone_schedule %}
+                                <div class="mt-2 grid grid-cols-1 gap-1 text-xs text-slate-300">
+                                    {% if match.recommended_trial_backbone_dose %}<div><span class="text-slate-500">Dosis:</span> {{ match.recommended_trial_backbone_dose }}</div>{% endif %}
+                                    {% if match.recommended_trial_backbone_schedule %}<div><span class="text-slate-500">Esquema:</span> {{ match.recommended_trial_backbone_schedule }}</div>{% endif %}
+                                    {% if match.recommended_trial_backbone_duration %}<div><span class="text-slate-500">Duración:</span> {{ match.recommended_trial_backbone_duration }}</div>{% endif %}
+                                </div>
+                                {% endif %}
                                 {% endif %}
                                 {% if match.criteria_met %}
                                 <div class="mt-2 text-xs text-slate-300">Elegible porque cumple: {{ match.criteria_met[:3]|join(', ') }}</div>
@@ -2695,6 +3292,12 @@
                                 {% if match.recommended_trial_backbone_label %}
                                 <div class="mt-2 text-xs uppercase tracking-wider text-slate-500">Backbone del estudio</div>
                                 <div class="mt-1 text-sm text-cyan-200">{{ match.recommended_trial_backbone_label }}</div>
+                                {% if match.recommended_trial_backbone_dose or match.recommended_trial_backbone_schedule %}
+                                <div class="mt-2 grid grid-cols-1 gap-1 text-xs text-slate-300">
+                                    {% if match.recommended_trial_backbone_dose %}<div><span class="text-slate-500">Dosis:</span> {{ match.recommended_trial_backbone_dose }}</div>{% endif %}
+                                    {% if match.recommended_trial_backbone_schedule %}<div><span class="text-slate-500">Esquema:</span> {{ match.recommended_trial_backbone_schedule }}</div>{% endif %}
+                                </div>
+                                {% endif %}
                                 {% endif %}
                             </div>
                             {% endfor %}
@@ -3159,7 +3762,7 @@
         <!-- ═══════════════════════════════════════════════════════════════════ -->
         <!-- 5. WATERFALL CHART (Respuesta PSA a tratamientos)                 -->
         <!-- ═══════════════════════════════════════════════════════════════════ -->
-        {% if patient.treatments|length > 0 and not diagnostic_state %}
+        {% if copilot.response_visualization and copilot.response_visualization.waterfall and not diagnostic_state %}
         <section class="pn-surface">
             <h2 class="text-lg font-bold text-white mb-4 flex items-center gap-2">
                 📉 Respuesta del antígeno prostático específico por línea de tratamiento en gráfico de cascada
@@ -3588,8 +4191,6 @@
         <!-- ═══════════════════════════════════════════════════════════════════ -->
         <!-- 11. COPILOTO CLÍNICO — Alertas, Schedule, Comorbilidad, ADT       -->
         <!-- ═══════════════════════════════════════════════════════════════════ -->
-        {% set copilot = profile.copilot|default({}) %}
-
         {% if copilot.clinical_alerts or copilot.overdue_alerts %}
         <details id="copilot-alerts-panel" class="pn-accordion pn-surface border border-red-700/30" open>
             <summary class="flex items-center justify-between gap-3">
@@ -4402,6 +5003,19 @@
                 <input type="hidden" id="visitAlertKeysInput" name="alert_keys_resolved" value="[]">
 
                 <div id="visitSchemaSections" class="space-y-4"></div>
+                <details id="visitOptionalNotesWrap" class="hidden rounded-xl border border-slate-700 bg-slate-950/30 p-4">
+                    <summary class="text-xs uppercase tracking-[0.18em] text-slate-400">Notas clínicas opcionales</summary>
+                    <div class="mt-3">
+                        <textarea
+                            id="visitOptionalNotesInput"
+                            name="clinician_notes"
+                            rows="3"
+                            class="w-full bg-slate-800 border border-slate-700 rounded text-white px-3 py-2"
+                            placeholder="Anotar contexto adicional si aplica"
+                            disabled
+                        ></textarea>
+                    </div>
+                </details>
 
                 <div class="flex justify-end gap-3 mt-6">
                     <button type="button" onclick="closeVisitModal()" class="pn-btn pn-btn-secondary px-4 py-2">Cancelar</button>
@@ -4607,7 +5221,9 @@
         // ── Datos longitudinales reales ──────────────────────────────────────
         const psaObservability = {{ psa_observability|default({}, true)|tojson }};
         const psaForecast = {{ psa_forecast|default({}, true)|tojson }};
-        const liveBenchmark = {{ live_benchmark|default({}, true)|tojson }};
+        let liveBenchmark = {{ live_benchmark|default({}, true)|tojson }};
+        let benchmarkReliability = {{ benchmark_reliability|default({}, true)|tojson }};
+        let liveBenchmarkChartInstance = null;
         const psaTrajectory = {{ (copilot.response_visualization.psa_trajectory if copilot.response_visualization else {}) | default({}, true) | tojson }};
         const psaPoints = (psaObservability.points || []);
         const forecastCurve = (psaForecast.forecast_curve || []);
@@ -4888,8 +5504,34 @@
             }
         }
 
-        const liveBenchmarkCanvas = document.getElementById('liveBenchmarkChart');
-        if (liveBenchmarkCanvas && liveBenchmark.curve && (liveBenchmark.curve.times || []).length) {
+        function benchmarkFlagClass(flag) {
+            if (flag === 'comparabilidad_limitada' || flag === 'snapshot_pending') {
+                return 'border-amber-500/20 bg-amber-500/10 text-amber-200';
+            }
+            if (flag === 'por_debajo_de_cohorte_similar') {
+                return 'border-rose-500/20 bg-rose-500/10 text-rose-200';
+            }
+            if (flag === 'dentro_de_rango_esperado') {
+                return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200';
+            }
+            return 'border-slate-700 bg-slate-950/60 text-slate-300';
+        }
+
+        function renderLiveBenchmarkChart() {
+            const liveBenchmarkCanvas = document.getElementById('liveBenchmarkChart');
+            const chartWrap = document.getElementById('liveBenchmarkChartWrap');
+            if (!liveBenchmarkCanvas) {
+                return;
+            }
+            if (liveBenchmarkChartInstance) {
+                liveBenchmarkChartInstance.destroy();
+                liveBenchmarkChartInstance = null;
+            }
+            if (!(liveBenchmark?.curve && (liveBenchmark.curve.times || []).length)) {
+                chartWrap?.classList.add('hidden');
+                return;
+            }
+            chartWrap?.classList.remove('hidden');
             const benchmarkCtx = liveBenchmarkCanvas.getContext('2d');
             const patientDuration = liveBenchmark.patient_endpoint?.duration_months;
             const benchmarkAnnotations = {};
@@ -4911,7 +5553,7 @@
                     }
                 };
             }
-            new Chart(benchmarkCtx, {
+            liveBenchmarkChartInstance = new Chart(benchmarkCtx, {
                 type: 'line',
                 data: {
                     labels: liveBenchmark.curve.times,
@@ -4951,22 +5593,146 @@
             });
         }
 
+        function renderLiveBenchmarkSection() {
+            const section = document.getElementById('profile-live-benchmark');
+            if (!section) {
+                return;
+            }
+            const flagsWrap = document.getElementById('liveBenchmarkFlags');
+            const loadingBadge = document.getElementById('liveBenchmarkLoadingBadge');
+            const refreshButton = document.getElementById('liveBenchmarkRefreshButton');
+            const reliability = benchmarkReliability || liveBenchmark?.reliability || {};
+            document.getElementById('liveBenchmarkPrimaryLabel').textContent = humanizeClinicalText(
+                liveBenchmark?.primary_endpoint_label || 'Comparación longitudinal'
+            );
+            if (flagsWrap) {
+                flagsWrap.innerHTML = (liveBenchmark?.flags || []).map((flag) => `
+                    <span class="px-2 py-1 rounded-full border ${benchmarkFlagClass(flag)}">${escapeHtml(String(flag).replaceAll('_', ' '))}</span>
+                `).join('');
+            }
+            if (loadingBadge) {
+                const deferred = liveBenchmark?.status && liveBenchmark.status !== 'ready' && liveBenchmark.status !== 'not_applicable';
+                loadingBadge.classList.toggle('hidden', !deferred);
+                loadingBadge.textContent = liveBenchmark?.status === 'deferred' ? 'Snapshot diferido' : 'Cargando snapshot';
+            }
+            if (refreshButton) {
+                refreshButton.classList.toggle('hidden', liveBenchmark?.status === 'ready' || liveBenchmark?.status === 'not_applicable');
+            }
+            document.getElementById('liveBenchmarkPatientDuration').textContent =
+                liveBenchmark?.patient_endpoint?.duration_months ?? 'N/D';
+            document.getElementById('liveBenchmarkPatientMeta').textContent = humanizeClinicalText(
+                `${liveBenchmark?.primary_endpoint_type || ''}${liveBenchmark?.patient_endpoint?.censored ? ' · censurado' : ''}`.trim()
+            ) || 'Sin evento adjudicado';
+            const patientPercentile = document.getElementById('liveBenchmarkPatientPercentile');
+            if (patientPercentile) {
+                const percentile = liveBenchmark?.patient_percentile;
+                patientPercentile.classList.toggle('hidden', percentile === null || percentile === undefined);
+                patientPercentile.textContent = percentile === null || percentile === undefined
+                    ? ''
+                    : `Percentil institucional: ${percentile}`;
+            }
+            document.getElementById('liveBenchmarkCohortSize').textContent =
+                `n = ${reliability?.cohort_size ?? liveBenchmark?.cohort_size ?? 0}`;
+            document.getElementById('liveBenchmarkCohortTier').textContent =
+                `Tier: ${humanizeClinicalText(reliability?.display_cohort_tier || reliability?.cohort_tier || liveBenchmark?.cohort_tier || 'No disponible')}`;
+            const benchmarkMedian = document.getElementById('liveBenchmarkMedian');
+            if (benchmarkMedian) {
+                const median = liveBenchmark?.curve?.median_survival;
+                benchmarkMedian.classList.toggle('hidden', median === null || median === undefined);
+                benchmarkMedian.textContent = median === null || median === undefined ? '' : `Mediana observada: ${median} meses`;
+            }
+            const publishedAvailable = document.getElementById('liveBenchmarkPublishedAvailable');
+            const publishedFallback = document.getElementById('liveBenchmarkPublishedFallback');
+            const reference = liveBenchmark?.published_reference || {};
+            const referenceAvailable = Boolean(reference?.available);
+            publishedAvailable?.classList.toggle('hidden', !referenceAvailable);
+            publishedFallback?.classList.toggle('hidden', referenceAvailable);
+            document.getElementById('liveBenchmarkPublishedLabel').textContent = referenceAvailable ? humanizeClinicalText(reference.label || '') : '';
+            document.getElementById('liveBenchmarkPublishedMedian').textContent = referenceAvailable && reference.median_months !== null && reference.median_months !== undefined
+                ? `Mediana: ${reference.median_months} meses`
+                : '';
+            const publishedRegimen = document.getElementById('liveBenchmarkPublishedRegimen');
+            if (publishedRegimen) {
+                const regimenLabel = reference?.regimen_label || '';
+                publishedRegimen.classList.toggle('hidden', !referenceAvailable || !regimenLabel);
+                publishedRegimen.textContent = regimenLabel ? `Esquema actual: ${humanizeClinicalText(regimenLabel)}` : '';
+            }
+            document.getElementById('liveBenchmarkNarrative').textContent = humanizeClinicalText(
+                liveBenchmark?.narrative || 'Sin lectura clínica adicional.'
+            );
+            const confidence = document.getElementById('liveBenchmarkConfidence');
+            if (confidence) {
+                const label = reliability?.display_confidence_label || reliability?.confidence_label || '';
+                confidence.classList.toggle('hidden', !label);
+                confidence.textContent = label ? `Confiabilidad: ${humanizeClinicalText(label)}` : '';
+            }
+            renderLiveBenchmarkChart();
+        }
+
+        async function hydrateLiveBenchmark({ refresh = false } = {}) {
+            const section = document.getElementById('profile-live-benchmark');
+            if (!section || !section.dataset.benchmarkEndpoint) {
+                return;
+            }
+            const refreshButton = document.getElementById('liveBenchmarkRefreshButton');
+            const loadingBadge = document.getElementById('liveBenchmarkLoadingBadge');
+            const endpoint = new URL(section.dataset.benchmarkEndpoint, window.location.origin);
+            if (refresh) {
+                endpoint.searchParams.set('refresh', '1');
+            }
+            if (loadingBadge) {
+                loadingBadge.classList.remove('hidden');
+                loadingBadge.textContent = refresh ? 'Actualizando benchmark' : 'Cargando snapshot';
+            }
+            if (refreshButton) {
+                refreshButton.disabled = true;
+            }
+            try {
+                const response = await fetch(endpoint.toString());
+                const payload = await response.json();
+                if (!response.ok || !payload?.success) {
+                    throw new Error(payload?.error || 'No fue posible cargar el benchmark vivo.');
+                }
+                liveBenchmark = payload.live_benchmark || {};
+                benchmarkReliability = payload.benchmark_reliability || {};
+                renderLiveBenchmarkSection();
+            } catch (error) {
+                console.warn('No fue posible hidratar el benchmark vivo.', error);
+            } finally {
+                if (refreshButton) {
+                    refreshButton.disabled = false;
+                }
+                if (loadingBadge && liveBenchmark?.status === 'ready') {
+                    loadingBadge.classList.add('hidden');
+                }
+            }
+        }
+
+        function bindLiveBenchmarkActions() {
+            const refreshButton = document.getElementById('liveBenchmarkRefreshButton');
+            if (!refreshButton || refreshButton.dataset.bound === 'true') {
+                return;
+            }
+            refreshButton.dataset.bound = 'true';
+            refreshButton.addEventListener('click', () => {
+                hydrateLiveBenchmark({ refresh: true });
+            });
+        }
+
+        renderLiveBenchmarkSection();
+        bindLiveBenchmarkActions();
+        if (document.getElementById('profile-live-benchmark') && liveBenchmark?.status !== 'ready') {
+            hydrateLiveBenchmark();
+        }
+
         // ── Waterfall Chart ───────────────────────────────────────────────────
-        {% if patient.treatments|length > 0 and not diagnostic_state %}
+        {% if copilot.response_visualization and copilot.response_visualization.waterfall and not diagnostic_state %}
         const waterfallCtx = document.getElementById('waterfallChart')?.getContext('2d');
         if (waterfallCtx) {
-            const txLabels = [];
-            const txChanges = [];
-            const txColors = [];
-            const baselinePSA = {{ patient.baseline.baseline_psa or 10 }};
-
-            {% for tx in patient.treatments %}
-            txLabels.push(humanizeClinicalText('{{ tx.drug_scheme_label or tx.drug_scheme }}'));
-            const nadir = {{ tx.nadir_psa or 0 }};
-            const change = nadir > 0 ? ((nadir - baselinePSA) / baselinePSA * 100) : -50;
-            txChanges.push(change.toFixed(1));
-            txColors.push(change < -50 ? '#10b981' : change < 0 ? '#3b82f6' : '#ef4444');
-            {% endfor %}
+            const waterfallData = {{ copilot.response_visualization.waterfall | default([], true) | tojson }};
+            const txLabels = waterfallData.map(item => humanizeClinicalText(item.label || `Línea ${item.line_of_therapy || ''}`));
+            const txChanges = waterfallData.map(item => Number(item.psa_change_pct || 0));
+            const txColors = waterfallData.map(item => item.color || '#3b82f6');
 
             new Chart(waterfallCtx, {
                 type: 'bar',
@@ -5254,6 +6020,9 @@
             const required = field.required ? 'required' : '';
             const defaultValue = field.default ?? '';
             const conditions = field.conditional_visibility ? `data-conditions='${escapeHtml(JSON.stringify(field.conditional_visibility))}'` : '';
+            const referenceRange = field.reference_range_label
+                ? `<div class="mt-1 text-[11px] text-emerald-300">${escapeHtml(field.reference_range_label)}</div>`
+                : '';
             const label = `
                 <label class="block text-xs font-medium text-slate-400 mb-1">
                     ${escapeHtml(field.label || '')}
@@ -5296,12 +6065,22 @@
                 <div ${conditions} class="${['textarea', 'multi_select'].includes(field.field_type) ? 'md:col-span-2' : ''}">
                     ${label}
                     ${control}
+                    ${referenceRange}
                     ${help}
                 </div>
             `;
         }
 
         function evaluateConditionalVisibility(form, conditions = {}) {
+            if (!conditions || typeof conditions !== 'object') {
+                return true;
+            }
+            if (Array.isArray(conditions.__any__)) {
+                return conditions.__any__.some((branch) => evaluateConditionalVisibility(form, branch));
+            }
+            if (Array.isArray(conditions.__all__)) {
+                return conditions.__all__.every((branch) => evaluateConditionalVisibility(form, branch));
+            }
             return Object.entries(conditions || {}).every(([fieldName, accepted]) => {
                 const fieldNodes = Array.from(form.querySelectorAll(`[name="${fieldName}"]`));
                 if (!fieldNodes.length) return false;
@@ -5326,7 +6105,11 @@
                 } catch (error) {
                     conditions = {};
                 }
-                wrapper.classList.toggle('hidden', !evaluateConditionalVisibility(form, conditions));
+                const visible = evaluateConditionalVisibility(form, conditions);
+                wrapper.classList.toggle('hidden', !visible);
+                wrapper.querySelectorAll('input, select, textarea').forEach((node) => {
+                    node.disabled = !visible;
+                });
             });
         }
 
@@ -5357,6 +6140,8 @@
             const contextTargets = document.getElementById('visitModalContextTargets');
             const contextReasoning = document.getElementById('visitModalContextReasoning');
             const submitButton = document.getElementById('visitSubmitButton');
+            const optionalNotesWrap = document.getElementById('visitOptionalNotesWrap');
+            const optionalNotesInput = document.getElementById('visitOptionalNotesInput');
 
             if (stateInput) stateInput.value = schema.state || '{{ latest_assessment.state if latest_assessment else patient.prior_history.current_state }}';
             if (trackInput) trackInput.value = schema.management_track || '{{ agenda_board.management_track }}';
@@ -5390,9 +6175,12 @@
                     targets.push(`<div class="rounded-lg border border-slate-700 bg-slate-950/40 p-3"><div class="text-slate-500 uppercase tracking-wider mb-1">Persistencia</div><div class="text-slate-200">${escapeHtml((agendaContext.write_targets || []).join(', '))}</div></div>`);
                 }
                 contextTargets.innerHTML = targets.join('');
-                if ((agendaContext.reasoning || []).length || (agendaContext.required_inputs || []).length) {
+                const expectedInputs = (agendaContext.capture_fields || []).length
+                    ? (agendaContext.capture_fields || [])
+                    : (agendaContext.required_inputs || []);
+                if ((agendaContext.reasoning || []).length || expectedInputs.length) {
                     contextReasoning.classList.remove('hidden');
-                    contextReasoning.textContent = `Inputs esperados: ${(agendaContext.required_inputs || []).join(', ') || 'captura contextual'}${(agendaContext.reasoning || []).length ? ' · ' + (agendaContext.reasoning || []).join(' ') : ''}`;
+                    contextReasoning.textContent = `Campos a capturar: ${expectedInputs.join(', ') || 'captura contextual'}${(agendaContext.reasoning || []).length ? ' · ' + (agendaContext.reasoning || []).join(' ') : ''}`;
                 } else {
                     contextReasoning.classList.add('hidden');
                     contextReasoning.textContent = '';
@@ -5406,6 +6194,17 @@
                 contextReasoning.classList.add('hidden');
                 contextReasoning.textContent = '';
                 if (submitButton) submitButton.textContent = 'Guardar visita por etapa';
+            }
+
+            const showOptionalNotes = schema.schema_scope !== 'full_track' && !(schema.focus_fields || []).includes('clinician_notes');
+            if (optionalNotesWrap) {
+                optionalNotesWrap.classList.toggle('hidden', !showOptionalNotes);
+            }
+            if (optionalNotesInput) {
+                optionalNotesInput.disabled = !showOptionalNotes;
+                if (!showOptionalNotes) {
+                    optionalNotesInput.value = '';
+                }
             }
         }
 
@@ -5561,14 +6360,28 @@
         }
 
         async function openVisitModal(agendaId = null, captureContext = null) {
+            const useCaptureContext = Boolean(
+                captureContext
+                && (
+                    (captureContext.form_scope && captureContext.form_scope.mode === 'capture_block')
+                    || (captureContext.raw_fields || []).length
+                )
+            );
+            const resolvedAgendaIds = (captureContext?.linked_agenda_ids || []).length
+                ? captureContext.linked_agenda_ids
+                : (agendaId ? [agendaId] : []);
             setVisitHiddenContext({
-                agendaIds: agendaId ? [agendaId] : [],
+                agendaIds: resolvedAgendaIds,
                 encounterKey: '',
                 planKey: defaultPlanKey,
                 alertKeys: [],
             });
             try {
-                await loadVisitSchema({ agendaId, captureContext, renderMode: 'full' });
+                await loadVisitSchema({
+                    agendaId: useCaptureContext ? null : agendaId,
+                    captureContext,
+                    renderMode: 'full',
+                });
             } catch (err) {
                 alert('Error: ' + err.message);
                 return;
@@ -5650,6 +6463,7 @@
                 'profile-decision-trace',
                 'profile-labs-intelligence',
                 'profile-agenda',
+                'profile-live-benchmark',
                 'profile-prognostic-impact',
                 'profile-risk-tools',
                 'copilot-alerts-panel',
@@ -5657,6 +6471,11 @@
             ].forEach((sectionId) => syncSectionFromDocument(doc, sectionId));
             initializeFocusTabs();
             initializeDocumentUploadForm();
+            renderLiveBenchmarkSection();
+            bindLiveBenchmarkActions();
+            if (document.getElementById('profile-live-benchmark') && liveBenchmark?.status !== 'ready') {
+                hydrateLiveBenchmark();
+            }
 
             try {
                 const signalsResp = await fetch(`/api/patients/{{ patient.identity.id }}/signals`);

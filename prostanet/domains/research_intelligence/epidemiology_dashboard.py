@@ -99,6 +99,10 @@ def build_epidemiology_dashboard_payload() -> dict[str, Any]:
     validation = get_latest_validation_summary()
     crpc_copilot = tracking_db.get_crpc_copilot_dashboard_summary()
     post_rp_salvage_copilot = tracking_db.get_post_rp_salvage_dashboard_summary()
+    mhspc_copilot = tracking_db.get_mhspc_copilot_dashboard_summary()
+    diagnostic_biopsy_copilot = tracking_db.get_diagnostic_biopsy_dashboard_summary()
+    localized_surveillance_copilot = tracking_db.get_localized_surveillance_dashboard_summary()
+    post_rt_salvage_copilot = tracking_db.get_post_rt_salvage_dashboard_summary()
     return {
         "survival": survival,
         "multivariate": multivariate,
@@ -119,4 +123,8 @@ def build_epidemiology_dashboard_payload() -> dict[str, Any]:
         "longitudinal_validation": validation,
         "crpc_copilot": crpc_copilot,
         "post_rp_salvage_copilot": post_rp_salvage_copilot,
+        "mhspc_copilot": mhspc_copilot,
+        "diagnostic_biopsy_copilot": diagnostic_biopsy_copilot,
+        "localized_surveillance_copilot": localized_surveillance_copilot,
+        "post_rt_salvage_copilot": post_rt_salvage_copilot,
     }

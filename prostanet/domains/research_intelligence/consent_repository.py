@@ -176,7 +176,7 @@ def finalize_intake_draft(draft_id: int) -> dict[str, Any]:
         from prostanet.domains.clinical_assessments.service import ClinicalAssessmentService
 
         assessment = ClinicalAssessmentService().get_draft(int(float(payload["assessment_id"])))
-    patient_id, message = tracking_db.register_new_patient(payload, assessment=assessment)
+    patient_id, message, _registration_metadata = tracking_db.register_new_patient(payload, assessment=assessment)
     if patient_id is None:
         raise ValueError(message or "No fue posible registrar al paciente.")
     if assessment and payload.get("assessment_id") not in (None, ""):

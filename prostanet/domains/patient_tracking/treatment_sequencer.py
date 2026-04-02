@@ -97,6 +97,9 @@ class SequencePlan:
     cross_resistance_flags: list[str]
     rationale: str
     sequence_confidence: float
+    preferred_regimen: dict[str, Any] = field(default_factory=dict)
+    transition_bundle: dict[str, Any] = field(default_factory=dict)
+    comparative_eligibility_matrix: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -276,6 +279,8 @@ class TreatmentSequencer:
         latest_fu = follow_ups[-1] if follow_ups else {}
         treatments = patient.get("treatments", []) or []
         genomic = patient.get("genomic_profile", {}) or {}
+        latest_assessment = patient.get("latest_assessment", {}) or {}
+        latest_result = dict(latest_assessment.get("result_snapshot") or {})
         patient_id = int(identity.get("id", 0))
 
         state = (
@@ -320,6 +325,9 @@ class TreatmentSequencer:
             cross_resistance_flags=cr_flags,
             rationale=rationale,
             sequence_confidence=confidence,
+            preferred_regimen=dict(latest_result.get("preferred_frontline_regimen") or {}),
+            transition_bundle=dict(latest_result.get("sequence_transition_bundle") or {}),
+            comparative_eligibility_matrix=dict(latest_result.get("comparative_eligibility_matrix") or {}),
         )
 
     def _extract_biomarkers(
@@ -379,8 +387,12 @@ class TreatmentSequencer:
         if hepatic_risk in ("alto", "severe", "Child-Pugh B", "Child-Pugh C"):
             constraints.append("Riesgo hepático alto: contraindicado abiraterona")
         neuro = latest_fu.get("peripheral_neuropathy_grade")
-        if neuro and int(neuro) >= 2:
-            constraints.append("Neuropatía periférica ≥2: evitar taxanos")
+        if neuro:
+            neuro_grade = int(neuro)
+            if neuro_grade >= 3:
+                constraints.append("Neuropatía periférica ≥3: evitar taxanos")
+            elif neuro_grade == 2:
+                constraints.append("Neuropatía periférica grado 2: taxanos solo con cautela")
         hgb = latest_fu.get("hemoglobin_current") or latest_fu.get("hemoglobin")
         if hgb and float(hgb) < 9:
             constraints.append("Hemoglobina <9 g/dL: revisar elegibilidad para Lu-177")

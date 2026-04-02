@@ -75,7 +75,7 @@ def build_decision_quality(module_id: str, payload: dict[str, Any], result: dict
             "La elegibilidad PSMA no es limpia porque existen lesiones dominantes PSMA-negativas."
         )
 
-    if module_id in {"localized_initial", "post_prostatectomy", "recurrence_bcr"} and primary.get("risk_group") in {"HIGH", "VERY HIGH", "REGIONAL N1M0"} and not _present(payload.get("life_expectancy_years")):
+    if module_id in {"localized_initial", "post_prostatectomy", "recurrence_bcr", "post_radiotherapy_or_local_salvage"} and primary.get("risk_group") in {"HIGH", "VERY HIGH", "REGIONAL N1M0"} and not _present(payload.get("life_expectancy_years")):
         why_not_more_confident.append(
             "La expectativa de vida no esta estructurada y sigue siendo importante para modular la intensidad del tratamiento."
         )

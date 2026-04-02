@@ -22,6 +22,8 @@ import logging
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from prostanet.shared.presentation_text import resolve_option_label
+
 logger = logging.getLogger(__name__)
 
 
@@ -537,16 +539,27 @@ class RadiotherapyDetailService:
                 "definitive": "Definitiva", "adjuvant": "Adyuvante",
                 "salvage": "Salvamento", "palliative": "Paliativa", "MDT": "MDT",
             }.get(course.rt_intent, course.rt_intent)
+            target_label = resolve_option_label(
+                "target_volume",
+                course.target_volume,
+                ["", "prostate_only", "prostate_sv", "whole_pelvis", "boost_dominant", "metastasis_directed", "prostate_pelvis_boost"],
+            )
+            salvage_pre_imaging_label = resolve_option_label(
+                "salvage_pre_imaging",
+                course.salvage_pre_imaging,
+                ["", "none", "ct_bone_scan", "psma_pet", "mpmri"],
+            ) if course.salvage_pre_imaging else ""
 
             course_summaries.append({
                 "intent": intent_label,
                 "modality": modality_label,
                 "dose": f"{course.total_dose_gy} Gy / {course.fractions} fx" if course.fractions else "",
-                "target": course.target_volume,
+                "target": target_label,
                 "dates": f"{course.rt_start_date} — {course.rt_end_date}" if course.rt_start_date else "",
                 "concurrent_adt": course.concurrent_adt,
                 "adt_planned_months": course.adt_total_planned_months,
                 "salvage_psa": course.salvage_psa_at_start,
+                "salvage_pre_imaging": salvage_pre_imaging_label,
                 "mdt_sites": course.mdt_sites_treated,
             })
 

@@ -155,6 +155,7 @@ FIELD_REGISTRY: dict[str, dict[str, Any]] = {
 SCORE_REQUIREMENTS = {
     "erspc": ["psa", "dre_suspicious"],
     "capra": ["psa", "clinical_tstage", "gleason_primary", "gleason_secondary", "num_cores_positive", "total_cores"],
+    "briganti": ["psa", "clinical_tstage", "gleason_primary", "gleason_secondary", "num_cores_positive", "total_cores"],
     "damico": ["psa", "clinical_tstage", "gleason_primary", "gleason_secondary"],
     "predict_prostate": ["psa", "clinical_tstage", "isup_grade", "life_expectancy_years"],
     "mskcc_preop": ["psa", "clinical_tstage", "isup_grade"],
@@ -275,6 +276,8 @@ def _score_missing_inputs(payload: dict[str, Any], score_key: str) -> list[str]:
     for field in SCORE_REQUIREMENTS.get(score_key, []):
         if field == "psa" and _is_present(payload.get("baseline_psa")):
             continue
+        if field == "num_cores_positive" and _is_present(payload.get("positive_cores")):
+            continue
         if field in {"gleason_primary", "gleason_secondary"} and _is_present(payload.get(f"pathology_{field}")):
             continue
         if score_key == "damico" and field in {"gleason_primary", "gleason_secondary"} and _is_present(payload.get("isup_grade")):
@@ -307,6 +310,8 @@ def _normalize_payload(
 
     if not _is_present(merged.get("psa")):
         merged["psa"] = merged.get("baseline_psa") or baseline.get("baseline_psa")
+    if not _is_present(merged.get("num_cores_positive")) and _is_present(merged.get("positive_cores")):
+        merged["num_cores_positive"] = merged.get("positive_cores")
     if not _is_present(merged.get("age")):
         merged["age"] = _calculate_age_from_dob(identity.get("dob")) or _calculate_age_from_dob(merged.get("dob"))
     if not _is_present(merged.get("pct_cores_positive")):
@@ -516,6 +521,22 @@ def _capra_card(payload: dict[str, Any], *, historical: bool = False) -> dict[st
             group_key="baseline_risk",
         )
     result = capra_score(payload)
+    if result.get("score") is None:
+        missing = list(dict.fromkeys(result.get("missing_inputs") or missing))
+        return _tool_card(
+            tool_key="capra",
+            title="CAPRA" if not historical else "CAPRA basal",
+            clinical_scope="Enfermedad localizada candidata a tratamiento radical",
+            status="ready_missing_inputs",
+            fidelity="ready_missing_inputs",
+            primary_result="CAPRA pendiente de biopsia estructurada",
+            meaning="Requiere patología basal suficiente antes de estratificar riesgo.",
+            clinical_relation="No debe calcularse con Gleason implícito o carga de cilindros no documentada.",
+            missing_inputs=[_field_label(item) for item in missing],
+            missing_input_keys=missing,
+            required_at_intake=True,
+            group_key="baseline_risk",
+        )
     return _tool_card(
         tool_key="capra",
         title="CAPRA" if not historical else "CAPRA basal",

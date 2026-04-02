@@ -52,6 +52,7 @@ _FIELD_LABEL_MAP = {
     "psma_pet_done": "Disponibilidad de PSMA-PET",
     "psma_positive": "Expresión global de PSMA",
     "psma_rads_score": "PSMA-RADS",
+    "bone_distribution_documented": "Distribución ósea documentada",
     "psma_radioligand": "Radioligando PSMA",
     "psma_uptake_pattern": "Patrón de captación PSMA",
     "salvage_local_feasible": "Factibilidad de rescate local",

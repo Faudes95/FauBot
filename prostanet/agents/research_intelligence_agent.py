@@ -12,6 +12,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from clinical_scores import docetaxel_fitness
+
 from prostanet.agents.base import AgentBase
 from prostanet.agents.contracts import (
     AgentInput,
@@ -145,6 +147,9 @@ class ResearchIntelligenceAgent(AgentBase):
         matched: list[dict[str, Any]] = []
         baseline = record.get("baseline", {}) or {}
         genomic = record.get("genomic_profile", {}) or {}
+        latest_followup = record.get("latest_followup", {}) or {}
+        trial_context = {**baseline, **latest_followup}
+        docetaxel_bundle = docetaxel_fitness(trial_context)
 
         for trial in ACTIVE_TRIALS:
             if state not in trial["target_states"]:
@@ -166,6 +171,8 @@ class ResearchIntelligenceAgent(AgentBase):
                             eligible = False
                     except (TypeError, ValueError):
                         pass
+            if trial.get("trial_id") == "ARASENS-like":
+                eligible = eligible and str((docetaxel_bundle.get("docetaxel_trial_fit") or {}).get("arasens_like") or "no") == "matched"
             if required.get("metastasis_count_le_5"):
                 count = baseline.get("metastasis_count")
                 if count is not None:

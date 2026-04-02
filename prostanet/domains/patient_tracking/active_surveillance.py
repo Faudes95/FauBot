@@ -55,6 +55,7 @@ AS_PROTOCOLS = {
             "max_involvement_pct": 50,
             "psa_max": 10,
             "tstage_max": "T2a",
+            "psad_max": 0.15,
         },
         "schedule": {
             "psa_interval_months": 6,
@@ -374,6 +375,7 @@ class ActiveSurveillanceService:
         enrollment_date: str,
         protocol: str,
         confirmatory_done: bool = False,
+        payload: dict | None = None,
     ) -> list[ASScheduleItem]:
         """Construye calendario de seguimiento para el protocolo de VA seleccionado."""
         protocol_config = AS_PROTOCOLS.get(protocol)
@@ -385,6 +387,7 @@ class ActiveSurveillanceService:
         if not enrollment:
             return []
 
+        payload = payload or {}
         items: list[ASScheduleItem] = []
         today = date.today()
 
@@ -427,8 +430,24 @@ class ActiveSurveillanceService:
                 priority="mandatory",
             ))
 
-        # MRI periódica
-        mri_interval = schedule_config["mri_interval_months"]
+        # MRI periódica — ajuste dinámico por PI-RADS (NCCN 2026 / PRECISE)
+        latest_pirads = int(payload.get("latest_pirads", 0) or 0) if isinstance(payload, dict) else 0
+        if latest_pirads >= 4:
+            # PI-RADS 4-5: biopsia dirigida urgente, no esperar MRI de rutina
+            items.append(ASScheduleItem(
+                item_type="mri",
+                title="RMmp + biopsia dirigida URGENTE (PI-RADS ≥4)",
+                due_date=date(
+                    enrollment.year + (enrollment.month + 2) // 12,
+                    (enrollment.month + 2) % 12 + 1,
+                    min(enrollment.day, 28),
+                ).isoformat(),
+                interval_months=3,
+                status="scheduled",
+                evidence_basis=protocol_config["evidence_tags"] + ["PRECISE recommendations", "PI-RADS ≥4 mandates targeted biopsy"],
+                priority="urgent",
+            ))
+        mri_interval = 6 if latest_pirads == 3 else schedule_config["mri_interval_months"]
         for i in range(1, 6):  # 5 MRIs
             months_offset = mri_interval * i
             due = date(
@@ -439,12 +458,12 @@ class ActiveSurveillanceService:
             status = "completed" if due < today else "scheduled"
             items.append(ASScheduleItem(
                 item_type="mri",
-                title=f"RMmp #{i}",
+                title=f"RMmp #{i}" + (" (intervalo acortado por PI-RADS 3)" if latest_pirads == 3 else ""),
                 due_date=due.isoformat(),
                 interval_months=mri_interval,
                 status=status,
                 evidence_basis=protocol_config["evidence_tags"] + ["PRECISE recommendations"],
-                priority="routine",
+                priority="routine" if latest_pirads < 3 else "high",
             ))
 
         # DRE periódico
@@ -529,7 +548,7 @@ class ActiveSurveillanceService:
 
             if upgrade.get("upgrade"):
                 to_isup = upgrade.get("to_isup", 0)
-                severity = "reclassification" if (to_isup or 0) >= 3 else "monitoring_intensification"
+                severity = "reclassification" if (to_isup or 0) >= 2 else "monitoring_intensification"
                 triggers.append(ASReclassificationTrigger(
                     trigger_type="gleason_upgrade",
                     detected=True,

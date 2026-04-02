@@ -17,7 +17,7 @@
                 </div>
                 <div class="flex items-center gap-3">
                     <a href="/clinical-hub" class="pn-btn pn-btn-ghost">Volver al centro clínico</a>
-                    <button id="submitWizard" class="pn-btn pn-btn-primary">Evaluar módulo</button>
+                    <button type="button" id="submitWizard" class="pn-btn pn-btn-primary">Evaluar módulo</button>
                 </div>
             </div>
             <div class="mb-5 grid gap-3 md:grid-cols-3">
@@ -42,7 +42,7 @@
                                 </div>
                             </section>
                         {% endif %}
-                        <section class="rounded-3xl border border-slate-800 bg-slate-950/40 p-5">
+                        <section class="rounded-3xl border border-slate-800 bg-slate-950/40 p-5" data-field-section="1">
                             <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
                                 <div>
                                     <p class="text-xs uppercase tracking-[0.2em] text-slate-500">{{ field.group or 'Datos clínicos' }}</p>
@@ -52,43 +52,203 @@
                             <div class="grid gap-4 md:grid-cols-2">
                         {% set ns.current_group = field.group %}
                     {% endif %}
-                    <label
+                    {% set is_complex_widget = field.field_type in ['metastatic_components', 'gleason_profile'] %}
+                    <div
                         class="text-sm"
                         data-field-wrapper
                         data-field-name="{{ field.name }}"
                         {% if field.conditional_visibility %}data-conditions='{{ field.conditional_visibility | tojson }}'{% endif %}
                     >
-                        <div class="mb-1 flex flex-wrap items-center justify-between gap-2">
-                            <span class="block text-slate-300">{{ field.label }}{% if field.required %} *{% endif %}</span>
-                            {{ badge(field.clinical_role_label, role_tones.get(field.clinical_role, 'muted')) }}
-                        </div>
-                        {% if field.field_type == 'select' %}
-                            <select name="{{ field.name }}" class="pn-input w-full px-3 py-2">
-                                {% for option in field.display_options %}
-                                    <option value="{{ option.value }}" {% if option.value == field.default %}selected{% endif %}>{{ option.label }}</option>
-                                {% endfor %}
-                            </select>
+                        {% if field.field_type == 'metastatic_components' %}
+                            <div class="rounded-2xl border border-cyan-500/20 bg-cyan-500/5 p-4" data-metastatic-widget="1" data-field-name="{{ field.name }}">
+                                <div class="flex flex-wrap items-start justify-between gap-3">
+                                    <div>
+                                        <p class="pm-field-label">{{ field.label }}{% if field.required %} *{% endif %}</p>
+                                        {% if field.help_text %}
+                                            <p class="mt-2 text-xs text-slate-400">{{ field.help_text }}</p>
+                                        {% endif %}
+                                        {% if field.benchmark_note %}
+                                            <p class="mt-2 rounded-2xl border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-xs text-cyan-200">{{ field.benchmark_note }}</p>
+                                        {% endif %}
+                                    </div>
+                                    {{ badge(field.clinical_role_label, role_tones.get(field.clinical_role, 'muted')) }}
+                                </div>
+                                <label class="mt-4 block text-sm">
+                                    <span class="block text-slate-300">Enfermedad metastásica conocida</span>
+                                    <select class="pn-input mt-2 w-full px-3 py-2" data-role="metastatic-known-select">
+                                        <option value="0">No</option>
+                                        <option value="1">Sí</option>
+                                    </select>
+                                    <span class="mt-2 block text-xs text-slate-500">Si selecciona Sí, documente la composición metastásica real para conservar el contexto anatómico y alimentar la lógica clínica.</span>
+                                </label>
+                                <div class="mt-4 hidden" data-role="components-shell">
+                                    <div class="grid gap-3 md:grid-cols-3">
+                                        <label class="rounded-2xl border border-slate-700/70 bg-slate-950/70 p-3">
+                                            <span class="flex items-center gap-3">
+                                                <input type="checkbox" data-role="component-toggle" value="nodes" class="h-4 w-4 rounded border-slate-600 bg-slate-900 text-cyan-400">
+                                                <span class="text-sm text-slate-200">Ganglionares no regionales</span>
+                                            </span>
+                                        </label>
+                                        <label class="rounded-2xl border border-slate-700/70 bg-slate-950/70 p-3">
+                                            <span class="flex items-center gap-3">
+                                                <input type="checkbox" data-role="component-toggle" value="bone" class="h-4 w-4 rounded border-slate-600 bg-slate-900 text-cyan-400">
+                                                <span class="text-sm text-slate-200">Óseas</span>
+                                            </span>
+                                        </label>
+                                        <label class="rounded-2xl border border-slate-700/70 bg-slate-950/70 p-3">
+                                            <span class="flex items-center gap-3">
+                                                <input type="checkbox" data-role="component-toggle" value="visceral" class="h-4 w-4 rounded border-slate-600 bg-slate-900 text-cyan-400">
+                                                <span class="text-sm text-slate-200">Viscerales</span>
+                                            </span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="mt-4 hidden" data-role="nodal-block">
+                                    <div class="flex flex-wrap items-start justify-between gap-3">
+                                        <div>
+                                            <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Distribución ganglionar no regional</p>
+                                            <p class="mt-1 text-sm text-slate-400">Agregue cadena ganglionar y número de lesiones. Puede documentar más de una cadena en el mismo caso.</p>
+                                        </div>
+                                        <button type="button" class="pn-btn pn-btn-secondary" data-role="add-nodal-row">Añadir cadena ganglionar</button>
+                                    </div>
+                                    <div class="mt-4 space-y-3" data-role="nodal-rows"></div>
+                                    <p class="mt-3 text-xs text-slate-500" data-role="nodal-hint">Capture al menos una cadena ganglionar no regional válida.</p>
+                                </div>
+                                <div class="mt-4 hidden" data-role="bone-block">
+                                    <div class="flex flex-wrap items-start justify-between gap-3">
+                                        <div>
+                                            <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Distribución ósea</p>
+                                            <p class="mt-1 text-sm text-slate-400">Agregue sitio anatómico y número de lesiones para conservar el contexto real y derivar el volumen automáticamente.</p>
+                                        </div>
+                                        <button type="button" class="pn-btn pn-btn-secondary" data-role="add-bone-row">Añadir sitio óseo</button>
+                                    </div>
+                                    <div class="mt-4 space-y-3" data-role="bone-rows"></div>
+                                    <p class="mt-3 text-xs text-slate-500" data-role="bone-hint">Capture al menos un sitio óseo válido.</p>
+                                </div>
+                                <div class="mt-4 hidden" data-role="visceral-block">
+                                    <div class="flex flex-wrap items-start justify-between gap-3">
+                                        <div>
+                                            <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Distribución visceral</p>
+                                            <p class="mt-1 text-sm text-slate-400">Agregue órgano visceral y número de lesiones. Puede documentar más de un órgano en el mismo caso.</p>
+                                        </div>
+                                        <button type="button" class="pn-btn pn-btn-secondary" data-role="add-visceral-row">Añadir órgano visceral</button>
+                                    </div>
+                                    <div class="mt-4 space-y-3" data-role="visceral-rows"></div>
+                                    <p class="mt-3 text-xs text-slate-500" data-role="visceral-hint">Capture al menos un órgano visceral válido.</p>
+                                </div>
+                                <div class="mt-4 rounded-2xl border border-slate-700/70 bg-slate-950/60 p-4" data-role="summary-card">
+                                    <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Resumen metastásico</p>
+                                    <p class="mt-2 text-sm text-slate-200" data-role="summary-text">Seleccione los componentes metastásicos documentados para derivar la composición del caso.</p>
+                                </div>
+                                <input type="hidden" name="{{ field.name }}" value="">
+                                <input type="hidden" name="metastatic_disease_known" value="0">
+                                <input type="hidden" name="metastasis_site" value="M0">
+                                <input type="hidden" name="metastasis_count" value="0">
+                                <input type="hidden" name="metastatic_total_lesion_count" value="0">
+                                <input type="hidden" name="bone_metastasis_present" value="0">
+                                <input type="hidden" name="bone_site_entries" value="[]">
+                                <input type="hidden" name="visceral_metastasis_present" value="0">
+                                <input type="hidden" name="visceral_site_entries" value="[]">
+                                <input type="hidden" name="visceral_lesion_count" value="0">
+                                <input type="hidden" name="nonregional_nodal_metastasis_present" value="0">
+                                <input type="hidden" name="nonregional_nodal_count" value="0">
+                                <input type="hidden" name="nonregional_nodal_site_entries" value="[]">
+                            </div>
+                        {% elif field.field_type == 'gleason_profile' %}
+                            {% set gleason_default = field.default if field.default is mapping else {} %}
+                            {% set gleason_primary = gleason_default.get('gleason_primary', '') %}
+                            {% set gleason_secondary = gleason_default.get('gleason_secondary', '') %}
+                            {% set gleason_tertiary = gleason_default.get('gleason_tertiary', '') %}
+                            {% set gleason_score = gleason_default.get('gleason_score', '') %}
+                            {% set isup_grade = gleason_default.get('isup_grade', '') %}
+                            <div class="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4" data-gleason-profile-widget="1" data-field-name="{{ field.name }}">
+                                <div class="flex flex-wrap items-start justify-between gap-3">
+                                    <div>
+                                        <p class="pm-field-label">{{ field.label }}{% if field.required %} *{% endif %}</p>
+                                        {% if field.help_text %}
+                                            <p class="mt-2 text-xs text-slate-400">{{ field.help_text }}</p>
+                                        {% endif %}
+                                        {% if field.benchmark_note %}
+                                            <p class="mt-2 rounded-2xl border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-200">{{ field.benchmark_note }}</p>
+                                        {% endif %}
+                                    </div>
+                                    {{ badge(field.clinical_role_label, role_tones.get(field.clinical_role, 'muted')) }}
+                                </div>
+                                <div class="mt-4 grid gap-4 md:grid-cols-3">
+                                    <label class="text-sm">
+                                        <span class="block text-slate-300">Gleason primario</span>
+                                        <select class="pn-input mt-2 w-full px-3 py-2" data-role="gleason-primary" {% if field.required %}required{% endif %}>
+                                            <option value="">Seleccione</option>
+                                            {% for pattern in ['3', '4', '5'] %}
+                                                <option value="{{ pattern }}" {% if pattern == gleason_primary|string %}selected{% endif %}>Patrón {{ pattern }}</option>
+                                            {% endfor %}
+                                        </select>
+                                    </label>
+                                    <label class="text-sm">
+                                        <span class="block text-slate-300">Gleason secundario</span>
+                                        <select class="pn-input mt-2 w-full px-3 py-2" data-role="gleason-secondary" {% if field.required %}required{% endif %}>
+                                            <option value="">Seleccione</option>
+                                            {% for pattern in ['3', '4', '5'] %}
+                                                <option value="{{ pattern }}" {% if pattern == gleason_secondary|string %}selected{% endif %}>Patrón {{ pattern }}</option>
+                                            {% endfor %}
+                                        </select>
+                                    </label>
+                                    <label class="text-sm">
+                                        <span class="block text-slate-300">Patrón terciario (opcional)</span>
+                                        <select class="pn-input mt-2 w-full px-3 py-2" data-role="gleason-tertiary">
+                                            <option value="">Sin patrón terciario</option>
+                                            {% for pattern in ['3', '4', '5'] %}
+                                                <option value="{{ pattern }}" {% if pattern == gleason_tertiary|string %}selected{% endif %}>Patrón {{ pattern }}</option>
+                                            {% endfor %}
+                                        </select>
+                                    </label>
+                                </div>
+                                <div class="mt-4 rounded-2xl border border-slate-700/70 bg-slate-950/60 p-4" data-role="gleason-summary-card">
+                                    <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Resumen histopatológico derivado</p>
+                                    <p class="mt-2 text-sm text-slate-200" data-role="gleason-summary">Seleccione Gleason primario y secundario para derivar automáticamente Gleason total e ISUP.</p>
+                                </div>
+                                <input type="hidden" name="gleason_primary" value="{{ gleason_primary }}">
+                                <input type="hidden" name="gleason_secondary" value="{{ gleason_secondary }}">
+                                <input type="hidden" name="gleason_tertiary" value="{{ gleason_tertiary }}">
+                                <input type="hidden" name="{{ field.name }}" value="{{ gleason_score }}">
+                                <input type="hidden" name="isup_grade" value="{{ isup_grade }}">
+                                <input type="hidden" name="has_adverse_tertiary_pattern" value="{{ '1' if gleason_tertiary|string == '5' else '0' }}">
+                            </div>
                         {% else %}
-                            <input
-                                type="{{ 'number' if field.field_type == 'number' else 'date' if field.field_type == 'date' else 'text' }}"
-                                name="{{ field.name }}"
-                                value="{{ field.default if field.default is not none and field.field_type != 'date' else '' }}"
-                                class="pn-input w-full px-3 py-2"
-                                {% if field.required %}required{% endif %}
-                            >
+                            <label class="text-sm">
+                                <div class="mb-1 flex flex-wrap items-center justify-between gap-2">
+                                    <span class="block text-slate-300">{{ field.label }}{% if field.required %} *{% endif %}</span>
+                                    {{ badge(field.clinical_role_label, role_tones.get(field.clinical_role, 'muted')) }}
+                                </div>
+                                {% if field.field_type == 'select' %}
+                                    <select name="{{ field.name }}" class="pn-input w-full px-3 py-2">
+                                        {% for option in field.display_options %}
+                                            <option value="{{ option.value }}" {% if option.value == field.default %}selected{% endif %}>{{ option.label }}</option>
+                                        {% endfor %}
+                                    </select>
+                                {% else %}
+                                    <input
+                                        type="{{ 'number' if field.field_type == 'number' else 'date' if field.field_type == 'date' else 'text' }}"
+                                        name="{{ field.name }}"
+                                        value="{{ field.default if field.default is not none and field.field_type != 'date' else '' }}"
+                                        class="pn-input w-full px-3 py-2"
+                                        {% if field.required %}required{% endif %}
+                                    >
+                                {% endif %}
+                                <div class="mt-1 space-y-1">
+                                    {% if field.unit %}
+                                        <span class="block text-[11px] uppercase tracking-[0.2em] text-slate-500">Unidad: {{ field.unit }}</span>
+                                    {% endif %}
+                                    {% if field.help_text %}
+                                        <span class="block text-xs text-slate-500">{{ field.help_text }}</span>
+                                    {% endif %}
+                                    {% if field.benchmark_note %}
+                                        <span class="block rounded-2xl border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-xs text-cyan-200">{{ field.benchmark_note }}</span>
+                                    {% endif %}
+                                </div>
+                            </label>
                         {% endif %}
-                        <div class="mt-1 space-y-1">
-                            {% if field.unit %}
-                                <span class="block text-[11px] uppercase tracking-[0.2em] text-slate-500">Unidad: {{ field.unit }}</span>
-                            {% endif %}
-                            {% if field.help_text %}
-                                <span class="block text-xs text-slate-500">{{ field.help_text }}</span>
-                            {% endif %}
-                            {% if field.benchmark_note %}
-                                <span class="block rounded-2xl border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-xs text-cyan-200">{{ field.benchmark_note }}</span>
-                            {% endif %}
-                        </div>
-                    </label>
+                    </div>
                     {% if loop.last %}
                             </div>
                         </section>
@@ -144,9 +304,9 @@
                         <p id="draftStatus" class="mt-2 text-sm text-slate-400"></p>
                     </div>
                     <div class="flex flex-wrap justify-end gap-2">
-                        <button id="createDraftButton" class="hidden pn-btn rounded-full bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-400">Preparar registro longitudinal</button>
+                        <button type="button" id="createDraftButton" class="hidden pn-btn rounded-full bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-400">Preparar registro longitudinal</button>
                         <a href="#evidenciaClinica" class="hidden pn-btn pn-btn-secondary" id="evidenceAnchor">Ver evidencia clínica</a>
-                        <button id="resetWizardButton" class="hidden pn-btn pn-btn-secondary">Iniciar una nueva evaluación</button>
+                        <button type="button" id="resetWizardButton" class="hidden pn-btn pn-btn-secondary">Iniciar una nueva evaluación</button>
                         <a href="/clinical-hub" class="hidden pn-btn pn-btn-secondary" id="backToHubButton">Volver al centro clínico</a>
                     </div>
                 </div>
@@ -206,9 +366,12 @@
 {% endblock %}
 
 {% block page_scripts %}
+    <script src="{{ url_for('static', filename='js/registration_context_ui.js') }}"></script>
     <script src="{{ url_for('static', filename='js/consent_flow.js') }}"></script>
     <script>
         const humanizeClinicalText = window.clinicalPresentation?.humanize || ((value) => value);
+        const metastaticCaptureConfig = {{ metastatic_capture_config|tojson }};
+        const wizardModuleId = {{ schema.module|tojson }};
         let latestPayload = null;
         let latestResult = null;
         let latestDraft = null;
@@ -272,6 +435,21 @@
             return escapeHtml(value);
         }
 
+        function renderTreatmentPriorityLabel(item) {
+            const priority = String(item?.priority || '').toLowerCase();
+            const eligibility = String(item?.eligibility_status || '').toLowerCase();
+            if (item?.is_preferred || priority === 'preferred' || priority === 'preferente' || eligibility === 'preferred' || eligibility === 'preferente') {
+                return 'Preferente';
+            }
+            if (eligibility === 'eligible_with_caution') {
+                return 'Elegible con cautela';
+            }
+            if (eligibility === 'conditional') {
+                return 'Condicionado';
+            }
+            return 'Elegible';
+        }
+
         function renderTreatmentList(items, emptyMessage) {
             if (!items || !items.length) {
                 return `<li>${emptyMessage}</li>`;
@@ -280,7 +458,91 @@
                 if (typeof item === 'string') {
                     return `<li>${humanizeClinicalText(item)}</li>`;
                 }
-                return `<li><span class="font-medium text-white">${humanizeClinicalText(item.name)}</span> <span class="text-slate-400">(${humanizeClinicalText(item.priority)})</span><br><span class="text-slate-400">${humanizeClinicalText(item.notes || '')}</span></li>`;
+                const componentDrugs = Array.isArray(item.component_drugs) ? item.component_drugs : [];
+                const regimenCode = item.regimen_code
+                    ? `<div class="mt-1 text-[11px] font-mono uppercase tracking-[0.18em] text-cyan-300">${escapeHtml(item.regimen_code)}</div>`
+                    : '';
+                const componentList = componentDrugs.length
+                    ? `<div class="mt-2 space-y-2">${componentDrugs.map((component) => {
+                        const details = [component.dose, component.route, component.schedule].filter(Boolean).map(humanizeClinicalText).join(' · ');
+                        const imssKey = component.imss_key ? `<span class="text-slate-500">Clave IMSS: ${escapeHtml(component.imss_key)}</span>` : '';
+                        return `
+                            <div class="rounded-xl border border-slate-700/70 bg-slate-950/40 px-3 py-2">
+                                <div class="text-sm font-medium text-white">${humanizeClinicalText(component.drug_name || '')}</div>
+                                <div class="mt-1 text-xs text-slate-300">${details || 'Sin metadatos de dosis/ruta/frecuencia.'}</div>
+                                ${imssKey ? `<div class="mt-1 text-[11px] text-slate-500">${imssKey}</div>` : ''}
+                            </div>
+                        `;
+                    }).join('')}</div>`
+                    : '';
+                const rationale = Array.isArray(item.selection_rationale) && item.selection_rationale.length
+                    ? `<div class="mt-2 text-xs text-emerald-200">A favor: ${item.selection_rationale.slice(0, 2).map(humanizeClinicalText).join(' · ')}</div>`
+                    : '';
+                const limits = Array.isArray(item.contraindication_reasons) && item.contraindication_reasons.length
+                    ? `<div class="mt-2 text-xs text-amber-200">Límites: ${item.contraindication_reasons.slice(0, 2).map(humanizeClinicalText).join(' · ')}</div>`
+                    : '';
+                const regimenMeta = [
+                    item.dose ? `Dosis: ${humanizeClinicalText(item.dose)}` : '',
+                    item.route ? `Vía: ${humanizeClinicalText(item.route)}` : '',
+                    item.schedule ? `Esquema: ${humanizeClinicalText(item.schedule)}` : '',
+                    item.duration ? `Duración: ${humanizeClinicalText(item.duration)}` : '',
+                    item.clave_imss || item.imss_key ? `Clave IMSS: ${escapeHtml(item.clave_imss || item.imss_key)}` : '',
+                ].filter(Boolean);
+                const regimenMetaHtml = regimenMeta.length
+                    ? `<div class="mt-2 text-xs text-slate-400">${regimenMeta.join(' · ')}</div>`
+                    : '';
+                const benefitMeta = [
+                    item.benefit_endpoint_used ? `Endpoint decisivo: ${humanizeClinicalText(item.benefit_endpoint_used)}` : '',
+                    item.benefit_maturity ? `Madurez: ${humanizeClinicalText(item.benefit_maturity)}` : '',
+                ].filter(Boolean);
+                const benefitHtml = benefitMeta.length || item.benefit_basis
+                    ? `
+                        <div class="mt-2 rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-3 py-2">
+                            <div class="text-[11px] uppercase tracking-[0.18em] text-cyan-300">Base de beneficio</div>
+                            ${benefitMeta.length ? `<div class="mt-1 text-xs text-slate-300">${benefitMeta.join(' · ')}</div>` : ''}
+                            ${item.benefit_basis ? `<div class="mt-1 text-xs text-slate-400">${humanizeClinicalText(item.benefit_basis)}</div>` : ''}
+                        </div>
+                    `
+                    : '';
+                const safetyDrivers = Array.isArray(item.safety_drivers_used) && item.safety_drivers_used.length
+                    ? `<div class="mt-2 text-xs text-slate-400">Discriminadores usados: ${item.safety_drivers_used.slice(0, 5).map(humanizeClinicalText).join(' · ')}</div>`
+                    : '';
+                const missingFields = Array.isArray(item.required_missing_fields) && item.required_missing_fields.length
+                    ? item.required_missing_fields.slice(0, 6).map(humanizeClinicalText).join(', ')
+                    : '';
+                const staleInputs = Array.isArray(item.stale_inputs) && item.stale_inputs.length
+                    ? item.stale_inputs.slice(0, 6).map(humanizeClinicalText).join(', ')
+                    : '';
+                const confidenceHtml = item.preference_confidence
+                    ? `
+                        <div class="mt-2 rounded-xl border ${item.preference_confidence === 'provisional' ? 'border-amber-500/20 bg-amber-500/10' : 'border-emerald-500/20 bg-emerald-500/10'} px-3 py-2">
+                            <div class="text-[11px] uppercase tracking-[0.18em] ${item.preference_confidence === 'provisional' ? 'text-amber-200' : 'text-emerald-200'}">
+                                ${item.preference_confidence === 'provisional' ? 'Ranking provisional' : 'Ranking definitivo'}
+                            </div>
+                            ${missingFields ? `<div class="mt-1 text-xs text-slate-300">Falta completar: ${missingFields}</div>` : ''}
+                            ${staleInputs ? `<div class="mt-1 text-xs text-slate-300">Datos vencidos: ${staleInputs}</div>` : ''}
+                        </div>
+                    `
+                    : '';
+                return `
+                    <li class="rounded-2xl border border-slate-700/70 bg-slate-950/50 p-4">
+                        <div class="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                                <span class="font-medium text-white">${humanizeClinicalText(item.name)}</span>
+                                ${regimenCode}
+                            </div>
+                            <span class="text-xs uppercase tracking-[0.18em] ${item.is_preferred || ['preferred', 'preferente'].includes(String(item.priority || '').toLowerCase()) || ['preferred', 'preferente'].includes(String(item.eligibility_status || '').toLowerCase()) ? 'text-emerald-300' : 'text-slate-400'}">${renderTreatmentPriorityLabel(item)}</span>
+                        </div>
+                        <div class="mt-2 text-sm text-slate-300">${humanizeClinicalText(item.description || item.notes || '')}</div>
+                        ${regimenMetaHtml}
+                        ${componentList}
+                        ${benefitHtml}
+                        ${rationale}
+                        ${limits}
+                        ${confidenceHtml}
+                        ${safetyDrivers}
+                    </li>
+                `;
             }).join('');
         }
 
@@ -305,6 +567,13 @@
             const missing = (card.missing_inputs || []).length
                 ? `<p class="mt-3 text-xs text-amber-200">Faltan datos: ${(card.missing_inputs || []).map(humanizeClinicalText).join(', ')}</p>`
                 : '';
+            const stale = (card.stale_inputs || []).length
+                ? `<p class="mt-2 text-xs text-amber-200">Datos vencidos: ${(card.stale_inputs || []).map(humanizeClinicalText).join(', ')}</p>`
+                : '';
+            const labSnapshot = card.docetaxel_lab_snapshot || {};
+            const labMeta = [labSnapshot.cbc_date ? `BHC ${humanizeClinicalText(labSnapshot.cbc_date)}` : '', labSnapshot.liver_panel_date ? `PFH ${humanizeClinicalText(labSnapshot.liver_panel_date)}` : '', labSnapshot.source ? `Fuente: ${humanizeClinicalText(labSnapshot.source)}` : '']
+                .filter(Boolean)
+                .join(' · ');
             return `
                 <div class="rounded-2xl border border-slate-700 p-4">
                     <div class="flex items-center justify-between gap-3">
@@ -317,6 +586,8 @@
                     <p class="mt-3 text-sm text-slate-200">${humanizeClinicalText(card.primary_reason || '')}</p>
                     ${card.docetaxel_fitness_summary ? `<p class="mt-2 text-xs text-slate-400">${humanizeClinicalText(card.docetaxel_fitness_summary)}</p>` : ''}
                     ${missing}
+                    ${stale}
+                    ${labMeta ? `<p class="mt-2 text-xs text-slate-500">${labMeta}</p>` : ''}
                     <div class="mt-4 grid gap-4 md:grid-cols-2">
                         <div>
                             <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Por qué sí</p>
@@ -490,14 +761,464 @@
             `).join('');
         }
 
+        function renderBoneOptionsForWidget(selectedValue = '') {
+            const groups = metastaticCaptureConfig?.bone_site_groups || [];
+            const groupsHtml = groups.map((group) => {
+                const optionsHtml = (group.options || []).map((option) => {
+                    const selected = option.site_key === selectedValue ? ' selected' : '';
+                    return `<option value="${escapeHtml(option.site_key)}"${selected}>${escapeHtml(option.label)}</option>`;
+                }).join('');
+                return `<optgroup label="${escapeHtml(group.label || '')}">${optionsHtml}</optgroup>`;
+            }).join('');
+            return `<option value="">Seleccione un sitio</option>${groupsHtml}`;
+        }
+
+        function renderVisceralOptionsForWidget(selectedValue = '') {
+            const options = metastaticCaptureConfig?.visceral_site_options || [];
+            const optionsHtml = options.map((option) => {
+                const selected = option.site_key === selectedValue ? ' selected' : '';
+                return `<option value="${escapeHtml(option.site_key)}"${selected}>${escapeHtml(option.label)}</option>`;
+            }).join('');
+            return `<option value="">Seleccione un órgano visceral</option>${optionsHtml}`;
+        }
+
+        function renderNodalOptionsForWidget(selectedValue = '') {
+            const options = metastaticCaptureConfig?.nonregional_nodal_site_options || [];
+            const optionsHtml = options.map((option) => {
+                const selected = option.site_key === selectedValue ? ' selected' : '';
+                return `<option value="${escapeHtml(option.site_key)}"${selected}>${escapeHtml(option.label)}</option>`;
+            }).join('');
+            return `<option value="">Seleccione una cadena ganglionar</option>${optionsHtml}`;
+        }
+
+        function createBoneRowForWidget(container, entry = {}) {
+            const rows = container.querySelector('[data-role="bone-rows"]');
+            if (!rows) {
+                return null;
+            }
+            const row = document.createElement('div');
+            row.className = 'rounded-2xl border border-slate-700/70 bg-slate-950/70 p-3';
+            row.dataset.boneRow = '1';
+            row.innerHTML = `
+                <div class="grid gap-3 md:grid-cols-[minmax(0,2fr)_160px_auto]">
+                    <label class="text-sm">
+                        <span class="block text-slate-300">Sitio óseo</span>
+                        <select class="pn-input mt-2 w-full px-3 py-2" data-role="bone-site-key">
+                            ${renderBoneOptionsForWidget(String(entry.site_key || ''))}
+                        </select>
+                    </label>
+                    <label class="text-sm">
+                        <span class="block text-slate-300">Número de lesiones</span>
+                        <input type="number" min="1" step="1" value="${escapeHtml(entry.lesion_count || 1)}" class="pn-input mt-2 w-full px-3 py-2" data-role="bone-lesion-count">
+                    </label>
+                    <div class="flex items-end">
+                        <button type="button" class="pn-btn pn-btn-secondary w-full" data-role="remove-bone-row">Quitar</button>
+                    </div>
+                </div>
+            `;
+            rows.appendChild(row);
+            return row;
+        }
+
+        function createVisceralRowForWidget(container, entry = {}) {
+            const rows = container.querySelector('[data-role="visceral-rows"]');
+            if (!rows) {
+                return null;
+            }
+            const row = document.createElement('div');
+            row.className = 'rounded-2xl border border-slate-700/70 bg-slate-950/70 p-3';
+            row.dataset.visceralRow = '1';
+            row.innerHTML = `
+                <div class="grid gap-3 md:grid-cols-[minmax(0,2fr)_160px_auto]">
+                    <label class="text-sm">
+                        <span class="block text-slate-300">Órgano visceral</span>
+                        <select class="pn-input mt-2 w-full px-3 py-2" data-role="visceral-site-key">
+                            ${renderVisceralOptionsForWidget(String(entry.site_key || ''))}
+                        </select>
+                    </label>
+                    <label class="text-sm">
+                        <span class="block text-slate-300">Número de lesiones</span>
+                        <input type="number" min="1" step="1" value="${escapeHtml(entry.lesion_count || 1)}" class="pn-input mt-2 w-full px-3 py-2" data-role="visceral-lesion-count">
+                    </label>
+                    <div class="flex items-end">
+                        <button type="button" class="pn-btn pn-btn-secondary w-full" data-role="remove-visceral-row">Quitar</button>
+                    </div>
+                </div>
+            `;
+            rows.appendChild(row);
+            return row;
+        }
+
+        function createNodalRowForWidget(container, entry = {}) {
+            const rows = container.querySelector('[data-role="nodal-rows"]');
+            if (!rows) {
+                return null;
+            }
+            const row = document.createElement('div');
+            row.className = 'rounded-2xl border border-slate-700/70 bg-slate-950/70 p-3';
+            row.dataset.nodalRow = '1';
+            row.innerHTML = `
+                <div class="grid gap-3 md:grid-cols-[minmax(0,2fr)_160px_auto]">
+                    <label class="text-sm">
+                        <span class="block text-slate-300">Cadena ganglionar no regional</span>
+                        <select class="pn-input mt-2 w-full px-3 py-2" data-role="nodal-site-key">
+                            ${renderNodalOptionsForWidget(String(entry.site_key || ''))}
+                        </select>
+                    </label>
+                    <label class="text-sm">
+                        <span class="block text-slate-300">Número de lesiones</span>
+                        <input type="number" min="1" step="1" value="${escapeHtml(entry.lesion_count || 1)}" class="pn-input mt-2 w-full px-3 py-2" data-role="nodal-lesion-count">
+                    </label>
+                    <div class="flex items-end">
+                        <button type="button" class="pn-btn pn-btn-secondary w-full" data-role="remove-nodal-row">Quitar</button>
+                    </div>
+                </div>
+            `;
+            rows.appendChild(row);
+            return row;
+        }
+
+        function deriveIsupFromGleasonForWidget(primary, secondary) {
+            if (!primary || !secondary) {
+                return '';
+            }
+            const total = primary + secondary;
+            if (total <= 6) {
+                return '1';
+            }
+            if (total === 7 && primary === 3 && secondary === 4) {
+                return '2';
+            }
+            if (total === 7 && primary === 4 && secondary === 3) {
+                return '3';
+            }
+            if (total === 8) {
+                return '4';
+            }
+            if (total >= 9) {
+                return '5';
+            }
+            return '';
+        }
+
+        function syncGleasonProfileWidget(container) {
+            const primarySelect = container.querySelector('[data-role="gleason-primary"]');
+            const secondarySelect = container.querySelector('[data-role="gleason-secondary"]');
+            const tertiarySelect = container.querySelector('[data-role="gleason-tertiary"]');
+            const summaryNode = container.querySelector('[data-role="gleason-summary"]');
+            const primary = Number.parseInt(primarySelect?.value || '', 10) || 0;
+            const secondary = Number.parseInt(secondarySelect?.value || '', 10) || 0;
+            const tertiary = Number.parseInt(tertiarySelect?.value || '', 10) || 0;
+            const score = primary && secondary ? primary + secondary : '';
+            const isup = primary && secondary ? deriveIsupFromGleasonForWidget(primary, secondary) : '';
+
+            container.querySelector('[name="gleason_primary"]').value = primary ? String(primary) : '';
+            container.querySelector('[name="gleason_secondary"]').value = secondary ? String(secondary) : '';
+            container.querySelector('[name="gleason_tertiary"]').value = tertiary ? String(tertiary) : '';
+            container.querySelector(`[name="${container.dataset.fieldName}"]`).value = score ? String(score) : '';
+            container.querySelector('[name="isup_grade"]').value = isup ? String(isup) : '';
+            container.querySelector('[name="has_adverse_tertiary_pattern"]').value = tertiary >= 5 ? '1' : '0';
+            container.dataset.valid = primary && secondary ? '1' : '0';
+
+            if (!(primary && secondary)) {
+                summaryNode.textContent = 'Seleccione Gleason primario y secundario para derivar automáticamente Gleason total e ISUP.';
+                return;
+            }
+
+            const parts = [`Gleason ${score} (${primary}+${secondary})`, `ISUP ${isup || 'pendiente'}`];
+            if (tertiary) {
+                parts.push(`patrón terciario ${tertiary}`);
+            }
+            summaryNode.textContent = `${parts.join(', ')}. ${tertiary ? 'El patrón terciario se conserva como rasgo adverso, sin modificar el ISUP.' : 'El ISUP se deriva automáticamente desde el patrón primario y secundario.'}`;
+        }
+
+        function initializeGleasonProfileWidgets() {
+            document.querySelectorAll('[data-gleason-profile-widget="1"]').forEach((container) => {
+                container.addEventListener('change', () => syncGleasonProfileWidget(container));
+                syncGleasonProfileWidget(container);
+            });
+        }
+
+        function collectStructuredEntries(container, rowSelector, siteSelector, countSelector) {
+            return Array.from(container.querySelectorAll(rowSelector)).map((row) => {
+                const siteKey = String(row.querySelector(siteSelector)?.value || '').trim();
+                const lesionCount = Math.max(0, Number.parseInt(row.querySelector(countSelector)?.value || '0', 10) || 0);
+                return { site_key: siteKey, lesion_count: lesionCount };
+            }).filter((entry) => entry.site_key && entry.lesion_count > 0);
+        }
+
+        function resetMetastaticWidget(container) {
+            const knownSelect = container.querySelector('[data-role="metastatic-known-select"]');
+            if (knownSelect) {
+                knownSelect.value = '0';
+            }
+            container.querySelectorAll('[data-role="component-toggle"]').forEach((toggle) => {
+                toggle.checked = false;
+            });
+            const nodalRows = container.querySelector('[data-role="nodal-rows"]');
+            const boneRows = container.querySelector('[data-role="bone-rows"]');
+            const visceralRows = container.querySelector('[data-role="visceral-rows"]');
+            if (nodalRows) {
+                nodalRows.innerHTML = '';
+            }
+            if (boneRows) {
+                boneRows.innerHTML = '';
+            }
+            if (visceralRows) {
+                visceralRows.innerHTML = '';
+            }
+            syncMetastaticWidget(container);
+        }
+
+        function ensureMetastaticWidgetRows(container) {
+            const known = String(container.querySelector('[data-role="metastatic-known-select"]')?.value || '0') === '1';
+            if (!known) {
+                return;
+            }
+            const toggleSet = new Set(
+                Array.from(container.querySelectorAll('[data-role="component-toggle"]'))
+                    .filter((toggle) => toggle.checked)
+                    .map((toggle) => toggle.value)
+            );
+            if (toggleSet.has('nodes') && !container.querySelector('[data-nodal-row="1"]')) {
+                createNodalRowForWidget(container);
+            }
+            if (toggleSet.has('bone') && !container.querySelector('[data-bone-row="1"]')) {
+                createBoneRowForWidget(container);
+            }
+            if (toggleSet.has('visceral') && !container.querySelector('[data-visceral-row="1"]')) {
+                createVisceralRowForWidget(container);
+            }
+        }
+
+        function syncMetastaticWidget(container) {
+            const knownSelect = container.querySelector('[data-role="metastatic-known-select"]');
+            const toggles = Array.from(container.querySelectorAll('[data-role="component-toggle"]'));
+            const known = String(knownSelect?.value || '0') === '1';
+            if (known) {
+                ensureMetastaticWidgetRows(container);
+            }
+            const toggleSet = new Set(toggles.filter((toggle) => toggle.checked).map((toggle) => toggle.value));
+            const componentsShell = container.querySelector('[data-role="components-shell"]');
+            const boneBlock = container.querySelector('[data-role="bone-block"]');
+            const visceralBlock = container.querySelector('[data-role="visceral-block"]');
+            const nodalBlock = container.querySelector('[data-role="nodal-block"]');
+            const boneHint = container.querySelector('[data-role="bone-hint"]');
+            const visceralHint = container.querySelector('[data-role="visceral-hint"]');
+            const nodalHint = container.querySelector('[data-role="nodal-hint"]');
+            const summaryNode = container.querySelector('[data-role="summary-text"]');
+            const nodalEntries = collectStructuredEntries(container, '[data-nodal-row="1"]', '[data-role="nodal-site-key"]', '[data-role="nodal-lesion-count"]');
+            const nodalCount = toggleSet.has('nodes')
+                ? nodalEntries.reduce((acc, item) => acc + item.lesion_count, 0)
+                : 0;
+            const boneEntries = collectStructuredEntries(container, '[data-bone-row="1"]', '[data-role="bone-site-key"]', '[data-role="bone-lesion-count"]');
+            const visceralEntries = collectStructuredEntries(container, '[data-visceral-row="1"]', '[data-role="visceral-site-key"]', '[data-role="visceral-lesion-count"]');
+            const boneTotal = boneEntries.reduce((acc, item) => acc + item.lesion_count, 0);
+            const visceralTotal = visceralEntries.reduce((acc, item) => acc + item.lesion_count, 0);
+            const total = known ? boneTotal + visceralTotal + nodalCount : 0;
+            const legacySite = known && toggleSet.has('visceral') ? 'Visceral' : known && toggleSet.has('bone') ? 'Bone' : known && toggleSet.has('nodes') ? 'Node' : 'M0';
+            const valid = known
+                && toggleSet.size > 0
+                && (!toggleSet.has('bone') || boneEntries.length > 0)
+                && (!toggleSet.has('visceral') || visceralEntries.length > 0)
+                && (!toggleSet.has('nodes') || nodalEntries.length > 0);
+
+            componentsShell?.classList.toggle('hidden', !known);
+            boneBlock?.classList.toggle('hidden', !(known && toggleSet.has('bone')));
+            visceralBlock?.classList.toggle('hidden', !(known && toggleSet.has('visceral')));
+            nodalBlock?.classList.toggle('hidden', !(known && toggleSet.has('nodes')));
+            boneHint?.classList.toggle('hidden', !(known && toggleSet.has('bone') && boneEntries.length === 0));
+            visceralHint?.classList.toggle('hidden', !(known && toggleSet.has('visceral') && visceralEntries.length === 0));
+            nodalHint?.classList.toggle('hidden', !(known && toggleSet.has('nodes') && nodalEntries.length === 0));
+
+            container.querySelector('[name="metastatic_disease_known"]').value = known ? '1' : '0';
+            container.querySelector('[name="metastasis_site"]').value = legacySite;
+            container.querySelector('[name="metastasis_count"]').value = String(total);
+            container.querySelector('[name="metastatic_total_lesion_count"]').value = String(total);
+            container.querySelector('[name="bone_metastasis_present"]').value = known && toggleSet.has('bone') ? '1' : '0';
+            container.querySelector('[name="bone_site_entries"]').value = JSON.stringify(known ? boneEntries : []);
+            container.querySelector('[name="visceral_metastasis_present"]').value = known && toggleSet.has('visceral') ? '1' : '0';
+            container.querySelector('[name="visceral_site_entries"]').value = JSON.stringify(known ? visceralEntries : []);
+            container.querySelector('[name="visceral_lesion_count"]').value = String(known ? visceralTotal : 0);
+            container.querySelector('[name="nonregional_nodal_metastasis_present"]').value = known && toggleSet.has('nodes') ? '1' : '0';
+            container.querySelector('[name="nonregional_nodal_count"]').value = String(known ? nodalCount : 0);
+            container.querySelector('[name="nonregional_nodal_site_entries"]').value = JSON.stringify(known ? nodalEntries : []);
+            container.querySelector('[name="metastatic_components_capture"]').value = JSON.stringify({
+                metastatic_disease_known: known,
+                components: known ? Array.from(toggleSet) : [],
+                total_lesions: total,
+                bone_site_entries: known ? boneEntries : [],
+                visceral_site_entries: known ? visceralEntries : [],
+                nonregional_nodal_site_entries: known ? nodalEntries : [],
+                nodal_count: nodalCount,
+            });
+            container.dataset.valid = valid ? '1' : '0';
+
+            if (!known) {
+                summaryNode.textContent = 'Seleccione si existe enfermedad metastásica conocida para desplegar la captura anatómica del caso.';
+                return;
+            }
+            if (!toggleSet.size) {
+                summaryNode.textContent = 'Active al menos un componente metastásico documentado para este formulario.';
+                return;
+            }
+            const parts = [];
+            if (toggleSet.has('nodes')) {
+                parts.push(`ganglios no regionales ${nodalCount || 'pendiente'}`);
+            }
+            if (toggleSet.has('bone')) {
+                parts.push(`hueso ${boneTotal || 'pendiente'}`);
+            }
+            if (toggleSet.has('visceral')) {
+                parts.push(`víscera ${visceralTotal || 'pendiente'}`);
+            }
+            summaryNode.textContent = `Composición metastásica actual: ${parts.join(' · ')}. Sitio legado resumido: ${legacySite}.`;
+        }
+
+        function applyHubPrefillToMetastaticWidget(container, payload) {
+            if (!payload || typeof payload !== 'object') {
+                return;
+            }
+            const toggles = Array.from(container.querySelectorAll('[data-role="component-toggle"]'));
+            const knownSelect = container.querySelector('[data-role="metastatic-known-select"]');
+            const boneEntries = Array.isArray(payload.bone_site_entries) ? payload.bone_site_entries : [];
+            const visceralEntries = Array.isArray(payload.visceral_site_entries) ? payload.visceral_site_entries : [];
+            const nodalEntries = Array.isArray(payload.nonregional_nodal_site_entries) ? payload.nonregional_nodal_site_entries : [];
+            const nodalPresent = String(payload.nonregional_nodal_metastasis_present || '0') === '1';
+            const metastaticKnown = String(payload.metastatic_disease_known || '0') === '1'
+                || boneEntries.length > 0
+                || visceralEntries.length > 0
+                || nodalEntries.length > 0
+                || nodalPresent;
+            if (knownSelect) {
+                knownSelect.value = metastaticKnown ? '1' : '0';
+            }
+            toggles.forEach((toggle) => {
+                if (toggle.value === 'bone') {
+                    toggle.checked = boneEntries.length > 0 || String(payload.bone_metastasis_present || '0') === '1';
+                } else if (toggle.value === 'visceral') {
+                    toggle.checked = visceralEntries.length > 0 || String(payload.visceral_metastasis_present || '0') === '1';
+                } else if (toggle.value === 'nodes') {
+                    toggle.checked = nodalPresent;
+                }
+            });
+            const boneRows = container.querySelector('[data-role="bone-rows"]');
+            const visceralRows = container.querySelector('[data-role="visceral-rows"]');
+            if (boneRows) {
+                boneRows.innerHTML = '';
+                if (boneEntries.length) {
+                    boneEntries.forEach((entry) => createBoneRowForWidget(container, entry));
+                }
+            }
+            if (visceralRows) {
+                visceralRows.innerHTML = '';
+                if (visceralEntries.length) {
+                    visceralEntries.forEach((entry) => createVisceralRowForWidget(container, entry));
+                }
+            }
+            const nodalRows = container.querySelector('[data-role="nodal-rows"]');
+            if (nodalRows) {
+                nodalRows.innerHTML = '';
+                if (nodalEntries.length) {
+                    nodalEntries.forEach((entry) => createNodalRowForWidget(container, entry));
+                }
+            }
+            syncMetastaticWidget(container);
+        }
+
+        function initializeMetastaticWidgets() {
+            const params = new URLSearchParams(window.location.search);
+            const prefillFromHub = params.get('prefill_source') === 'clinical_hub';
+            const prefillKey = `prostanet:clinical-hub-prefill:${wizardModuleId}`;
+            let hubPrefill = null;
+            if (prefillFromHub) {
+                try {
+                    hubPrefill = JSON.parse(window.sessionStorage.getItem(prefillKey) || 'null');
+                } catch (error) {
+                    hubPrefill = null;
+                }
+            }
+
+            document.querySelectorAll('[data-metastatic-widget="1"]').forEach((container) => {
+                container.addEventListener('click', (event) => {
+                    if (event.target.closest('[data-role="add-nodal-row"]')) {
+                        createNodalRowForWidget(container);
+                        syncMetastaticWidget(container);
+                        return;
+                    }
+                    if (event.target.closest('[data-role="add-bone-row"]')) {
+                        createBoneRowForWidget(container);
+                        syncMetastaticWidget(container);
+                        return;
+                    }
+                    if (event.target.closest('[data-role="add-visceral-row"]')) {
+                        createVisceralRowForWidget(container);
+                        syncMetastaticWidget(container);
+                        return;
+                    }
+                    if (event.target.closest('[data-role="remove-bone-row"]')) {
+                        event.target.closest('[data-bone-row="1"]')?.remove();
+                        syncMetastaticWidget(container);
+                        return;
+                    }
+                    if (event.target.closest('[data-role="remove-nodal-row"]')) {
+                        event.target.closest('[data-nodal-row="1"]')?.remove();
+                        syncMetastaticWidget(container);
+                        return;
+                    }
+                    if (event.target.closest('[data-role="remove-visceral-row"]')) {
+                        event.target.closest('[data-visceral-row="1"]')?.remove();
+                        syncMetastaticWidget(container);
+                    }
+                });
+                container.addEventListener('input', () => syncMetastaticWidget(container));
+                container.addEventListener('change', () => {
+                    ensureMetastaticWidgetRows(container);
+                    syncMetastaticWidget(container);
+                });
+                if (hubPrefill) {
+                    applyHubPrefillToMetastaticWidget(container, hubPrefill);
+                } else {
+                    ensureMetastaticWidgetRows(container);
+                    syncMetastaticWidget(container);
+                }
+            });
+        }
+
+        function evaluateVisibilityConditions(conditions = {}) {
+            if (!conditions || typeof conditions !== 'object') {
+                return true;
+            }
+            if (Array.isArray(conditions.__any__)) {
+                return conditions.__any__.some((branch) => evaluateVisibilityConditions(branch));
+            }
+            if (Array.isArray(conditions.__all__)) {
+                return conditions.__all__.every((branch) => evaluateVisibilityConditions(branch));
+            }
+            return Object.entries(conditions).every(([fieldName, accepted]) => {
+                const fieldNodes = Array.from(document.querySelectorAll(`[name="${fieldName}"]`));
+                if (!fieldNodes.length) return false;
+                const acceptedValues = Array.isArray(accepted) ? accepted.map(String) : [String(accepted)];
+                const values = fieldNodes.flatMap((node) => {
+                    if (node.type === 'checkbox') {
+                        return [node.checked ? String(node.value || '1') : '0'];
+                    }
+                    return [String(node.value ?? '')];
+                });
+                return values.some((value) => acceptedValues.includes(value));
+            });
+        }
+
         function updateConditionalFields() {
             document.querySelectorAll('[data-conditions]').forEach((wrapper) => {
                 const conditions = JSON.parse(wrapper.dataset.conditions || '{}');
-                const visible = Object.entries(conditions).every(([fieldName, values]) => {
-                    const field = document.querySelector(`[name="${fieldName}"]`);
-                    return field && values.includes(field.value);
-                });
+                const visible = evaluateVisibilityConditions(conditions);
                 wrapper.classList.toggle('hidden', !visible);
+            });
+            document.querySelectorAll('[data-field-section="1"]').forEach((section) => {
+                const wrappers = Array.from(section.querySelectorAll('[data-field-wrapper]'));
+                const hasVisibleFields = wrappers.some((wrapper) => !wrapper.classList.contains('hidden'));
+                section.classList.toggle('hidden', !hasVisibleFields);
             });
         }
 
@@ -597,49 +1318,21 @@
             return html;
         }
 
-        function renderRegistrationFragments(fragments, defaults) {
-            if (!fragments || !fragments.length) {
-                registrationFragments.innerHTML = '<p class="text-sm text-slate-400">Sin bloques de registro para este estado.</p>';
-                return;
-            }
-
-            registrationFragments.innerHTML = fragments.map((fragment) => `
-                <section class="rounded-3xl border border-slate-800 bg-slate-950/40 p-5">
-                    <div class="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                            <p class="text-xs uppercase tracking-[0.2em] text-slate-500">${escapeHtml(fragment.id)}</p>
-                            <h3 class="mt-1 text-base font-semibold text-white">${escapeHtml(fragment.title)}</h3>
-                        </div>
-                        <div class="flex flex-wrap gap-2">
-                            ${fragment.optional_research ? '<span class="rounded-full border border-slate-700 bg-slate-900 px-3 py-1 text-[11px] text-slate-300">Investigación opcional</span>' : ''}
-                            ${fragment.benchmark_only ? '<span class="rounded-full border border-cyan-500/20 bg-cyan-500/10 px-3 py-1 text-[11px] text-cyan-200">Benchmarking</span>' : ''}
-                        </div>
-                    </div>
-                    ${fragment.clinical_influence?.length ? `<ul class="mt-4 space-y-2 text-sm text-slate-300">${fragment.clinical_influence.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : ''}
-                    <div class="mt-4">${renderFragmentFields(fragment.fields || [], defaults)}</div>
-                </section>
-            `).join('');
-            window.clinicalSelects?.syncAll(registrationFragments);
+        function renderRegistrationFragments(fragments, defaults, captureLayers) {
+            window.ProstaNetRegistrationContextUI.renderRegistrationContext({
+                target: registrationFragments,
+                fragments,
+                defaults,
+                captureLayers,
+            });
         }
 
         function renderImportedClinicalFields(fields) {
-            if (!fields || !fields.length) {
-                importedClinicalFields.innerHTML = '<p class="text-sm text-slate-400">No se importaron variables clínicas para este borrador.</p>';
-                importedFieldCount.textContent = '0 variables importadas';
-                return;
-            }
-
-            importedFieldCount.textContent = `${fields.length} variables importadas`;
-            importedClinicalFields.innerHTML = fields.map((field) => `
-                <div class="rounded-2xl border border-slate-700/80 bg-slate-900/70 p-4">
-                    <div class="flex flex-wrap items-center gap-2">
-                        <p class="text-sm font-medium text-white">${escapeHtml(field.label)}</p>
-                        <span class="rounded-full border border-slate-700 bg-slate-900 px-2.5 py-1 text-[11px] text-slate-300">${escapeHtml(field.clinical_role_label || '')}</span>
-                    </div>
-                    <p class="mt-2 text-sm text-cyan-100">${formatRegistrationValue(field.value_label)}</p>
-                    ${field.persist_targets?.length ? `<p class="mt-2 text-xs text-slate-500">Persistencia: ${field.persist_targets.map((item) => escapeHtml(item)).join(', ')}</p>` : ''}
-                </div>
-            `).join('');
+            window.ProstaNetRegistrationContextUI.renderImportedClinicalFields({
+                container: importedClinicalFields,
+                countNode: importedFieldCount,
+                fields,
+            });
         }
 
         function resetRegistrationPhase() {
@@ -670,7 +1363,11 @@
             registrationScopeBullets.innerHTML = (draftData.scope_bullets || []).map((item) => `<li>${escapeHtml(item)}</li>`).join('');
             registrationAssessmentBadge.textContent = draftData.assessment?.state_label || draftData.scope_label || 'Borrador clínico listo';
             renderImportedClinicalFields(draftData.imported_clinical_fields || []);
-            renderRegistrationFragments(draftData.registration_fragments || [], draftData.registration_defaults || {});
+            renderRegistrationFragments(
+                draftData.registration_fragments || [],
+                draftData.registration_defaults || {},
+                draftData.capture_layers || [],
+            );
             registrationStatus.textContent = 'Complete los datos longitudinales faltantes y guarde para abrir el expediente integrado del paciente.';
             registrationPhase.classList.remove('hidden');
             createDraftButton.classList.add('hidden');
@@ -681,6 +1378,12 @@
             latestPayload = null;
             latestResult = null;
             document.getElementById('wizardForm').reset();
+            document.querySelectorAll('[data-metastatic-widget="1"]').forEach((container) => {
+                resetMetastaticWidget(container);
+            });
+            document.querySelectorAll('[data-gleason-profile-widget="1"]').forEach((container) => {
+                syncGleasonProfileWidget(container);
+            });
             document.getElementById('resultCard').classList.add('hidden');
             document.getElementById('resultBody').innerHTML = '';
             document.getElementById('draftStatus').textContent = '';
@@ -699,6 +1402,26 @@
 
         button.addEventListener('click', async () => {
             resetRegistrationPhase();
+            const metastaticWidgets = Array.from(document.querySelectorAll('[data-metastatic-widget="1"]'));
+            metastaticWidgets.forEach((container) => syncMetastaticWidget(container));
+            const invalidWidget = metastaticWidgets.find((container) => container.dataset.valid !== '1');
+            if (invalidWidget) {
+                const card = document.getElementById('resultCard');
+                const body = document.getElementById('resultBody');
+                card.classList.remove('hidden');
+                body.innerHTML = `<p class="text-sm text-rose-300">Complete la composición metastásica documentada antes de evaluar el módulo. Si selecciona ganglios no regionales, hueso o víscera, debe especificar la localización anatómica y el número de lesiones.</p>`;
+                return;
+            }
+            const gleasonWidgets = Array.from(document.querySelectorAll('[data-gleason-profile-widget="1"]'));
+            gleasonWidgets.forEach((container) => syncGleasonProfileWidget(container));
+            const invalidGleasonWidget = gleasonWidgets.find((container) => container.dataset.valid !== '1');
+            if (invalidGleasonWidget) {
+                const card = document.getElementById('resultCard');
+                const body = document.getElementById('resultBody');
+                card.classList.remove('hidden');
+                body.innerHTML = `<p class="text-sm text-rose-300">Complete Gleason primario y secundario para derivar automáticamente el Gleason total y el ISUP antes de evaluar el módulo.</p>`;
+                return;
+            }
             const payload = Object.fromEntries(new FormData(document.getElementById('wizardForm')).entries());
             latestPayload = payload;
             button.disabled = true;
@@ -942,7 +1665,7 @@
                 return;
             }
 
-            const payload = Object.fromEntries(new FormData(registrationForm).entries());
+            const payload = window.ProstaNetRegistrationContextUI.buildRegistrationPayload(registrationForm);
             payload.assessment_id = latestDraft.assessment_id;
             payload.assessment_state = registrationAssessmentState.value || latestResult?.state || '';
             registrationStatus.textContent = 'Preparando consentimiento informado y evidencia de firma electrónica.';
@@ -959,6 +1682,8 @@
             }
         });
 
+        initializeMetastaticWidgets();
+        initializeGleasonProfileWidgets();
         updateConditionalFields();
     </script>
 {% endblock %}

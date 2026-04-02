@@ -10,6 +10,5 @@ def classify_recurrence_eau(payload: dict) -> dict:
         label = "Post-RT biochemical recurrence"
     return {
         "label": label,
-        "recommendation": "Prefer early risk-adapted salvage and avoid undifferentiated recurrence outputs.",
+        "recommendation": "Prefiera rescate temprano adaptado al riesgo y evite salidas indiferenciadas de recurrencia.",
     }
-

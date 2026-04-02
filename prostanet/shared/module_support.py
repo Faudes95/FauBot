@@ -302,6 +302,72 @@ def support_bundle_for_module(module_id: str, payload: dict[str, Any], result: d
             benchmark_flag("Salvage local documentado", "complete" if not _missing(payload.get("salvage_local_feasible")) else "missing", "EMBARK solo debe abrirse si no queda rescate curativo razonable."),
             benchmark_flag("PSMA-PET alineado a decisión", "complete" if _is_true(payload.get("psma_pet_done")) or not _missing(payload.get("psma_pet_result")) else "incomplete", "La imagen avanzada debe justificarse por cambio de conducta, no por rutina."),
         ]
+    elif module_id == "post_radiotherapy_or_local_salvage":
+        monitoring = monitoring_plan(
+            "Plan post-RT / salvage local",
+            "Confirmación Phoenix, reestadificación estructurada y factibilidad anatómica/toxicológica antes de fijar salvage curativo.",
+            [
+                "No abrir rescate curativo post-RT sin Phoenix met o confirmación local equivalente.",
+                "Correlacionar mpMRI, PSMA, toxicidad GU/GI y expertise local para elegir modalidad realista de salvage.",
+            ],
+            [
+                "Redirigir a sistémico si la PSMA ya documenta patrón diseminado o la vía local se cierra.",
+                "Mantener MDT contextual cuando el patrón sea oligorrecurrente y no puramente glandular.",
+            ],
+            ["NCCN 5.2026 recurrencia post-RT", "EAU 2026 biochemical recurrence"],
+        )
+        transitions = [
+            state_transition("m1_crpc", "Redirección sistémica", "Si la imagen o la biología ya no sostienen salvage local", "La ventana curativa local se cierra y debe rediscutirse el carril sistémico."),
+        ]
+        survivorship_risks = [
+            "Toxicidad urinaria y rectal tardía que condiciona o limita modalidades de salvage post-RT.",
+            "Sobretratamiento de recurrencias bioquímicas no confirmadas correctamente con Phoenix o confirmación local equivalente.",
+        ]
+        decision_changing_inputs = [
+            "Cerrar Phoenix, biopsia y/o mpMRI localizada antes de fijar salvage curativo post-RT.",
+            "Documentar PSMA estructurada y toxicidad GU/GI basal para distinguir rescate local, MDT o redirect sistémico.",
+        ]
+        benchmarking_flags = [
+            benchmark_flag("Phoenix documentado", "complete" if not _missing(payload.get("phoenix_delta")) and not _missing(payload.get("psa_nadir")) and not _missing(payload.get("psa_current")) else "missing", "El rescate post-RT no debe abrirse sin esta base."),
+            benchmark_flag("Confirmación local estructurada", "complete" if _is_true(payload.get("biopsy_proven_local_recurrence")) or _is_true(payload.get("mpmri_localized_recurrence")) else "incomplete", "Aclara si la falla sigue siendo localmente rescatable."),
+            benchmark_flag("PSMA estructurada", "complete" if _is_true(payload.get("psma_pet_done")) and not _missing(payload.get("psma_rads_score")) and not _missing(payload.get("psma_uptake_pattern")) else "missing", "Distingue salvage local puro frente a MDT o redirect sistémico."),
+            benchmark_flag("Factibilidad salvage documentada", "complete" if not _missing(payload.get("anesthesia_surgical_fitness")) and not _missing(payload.get("salvage_expertise_available")) else "missing", "La modalidad local no debe elegirse con una sola casilla de factibilidad."),
+        ]
+    elif module_id == "survivorship_and_toxicity_followup":
+        monitoring = monitoring_plan(
+            "Plan de survivorship y toxicidad",
+            "Seguimiento estructurado por secuela dominante, recuperación funcional y prevención secundaria.",
+            [
+                "Abrir solo los bundles de survivorship aplicables según la exposición terapéutica real del paciente.",
+                "No reducir la visita a PSA y nota libre cuando existen secuelas tardías activas o toxicidad acumulada.",
+            ],
+            [
+                "Reingresar a decisión oncológica si la secuela cambia elegibilidad, seguridad o conducta terapéutica.",
+                "Escalar a referencia específica cuando la toxicidad urinaria, sexual, cardiometabólica, ósea o neuropática domine la visita.",
+            ],
+            ["NCCN 2026 survivorship", "EAU 2026 quality of life and treatment toxicity follow-up"],
+        )
+        transitions = [
+            state_transition("post_prostatectomy", "Reevaluación postlocal", "Si la secuela tardía se contextualiza mejor en el carril postoperatorio", "Permite rediscutir secuelas locales sin crear una nueva ontología tumoral."),
+            state_transition("post_radiotherapy_or_local_salvage", "Reingreso post-RT", "Si la toxicidad tardía o el hallazgo local reabre conducta post-radioterapia", "Conecta survivorship con la ruta local ya existente."),
+            state_transition("m1_crpc", "Reentrada oncológica avanzada", "Si la toxicidad o el deterioro funcional cambian elegibilidad o seguridad de tratamiento", "La secuela domina la visita y obliga a revaluar la secuencia oncológica."),
+        ]
+        survivorship_risks = [
+            "Subcaptura de secuelas tardías urinarias, sexuales, cardiometabólicas, óseas o neuropáticas si el seguimiento se limita a marcadores tumorales.",
+            "Pérdida de oportunidades de rehabilitación y prevención secundaria cuando survivorship no gobierna la agenda visible.",
+        ]
+        decision_changing_inputs = [
+            "Documentar exposición terapéutica previa real antes de abrir bundles de toxicidad o recuperación funcional.",
+            "Cerrar PROs, secuelas urinarias/sexuales, salud ósea y perfil cardiometabólico para sostener el carril de survivorship con trazabilidad.",
+        ]
+        supportive_evidence_context = [
+            "El carril de survivorship complementa, pero no reemplaza, la lógica oncológica principal; solo domina cuando la conducta visible es secuela, rehabilitación o prevención secundaria.",
+        ]
+        benchmarking_flags = [
+            benchmark_flag("Bundles por exposición activados", "complete" if _is_true(payload.get("prior_prostatectomy")) or _is_true(payload.get("prior_radiation")) or _is_true(payload.get("prior_adt")) or _is_true(payload.get("prior_docetaxel")) or _is_true(payload.get("prior_cabazitaxel")) else "missing", "El módulo debe abrirse con exposición terapéutica explícita."),
+            benchmark_flag("PROs de survivorship", "complete" if not _missing(payload.get("depression_score")) and not _missing(payload.get("anxiety_score")) and not _missing(payload.get("sexual_bother")) else "incomplete", "Los PROs sostienen la priorización del dominio funcional dominante."),
+            benchmark_flag("Hueso y cardiometabólico", "complete" if not _missing(payload.get("hba1c")) and not _missing(payload.get("dxa_t_score_lumbar")) else "incomplete", "ADT prolongada exige bundle cardiometabólico y óseo trazable."),
+        ]
     elif module_id == "adt_progression_verification":
         monitoring = monitoring_plan(
             "Plan de verificación bajo ADT",

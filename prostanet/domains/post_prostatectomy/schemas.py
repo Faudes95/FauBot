@@ -17,7 +17,7 @@ POST_PROSTATECTOMY_SCHEMA = module_schema(
         FieldSpec("gleason_secondary", "Gleason patológico secundario", "select", options=["3", "4", "5"], default="3", group="Patología posoperatoria", group_order=2, clinical_role="required"),
         FieldSpec("pathologic_stage", "Estadio patológico", "select", options=["pT2", "pT3a", "pT3b", "pT4"], default="pT2", group="Patología posoperatoria", group_order=2, clinical_role="required"),
         FieldSpec("surgical_margin", "Margen quirúrgico positivo", "select", options=["0", "1"], default="0", group="Patología posoperatoria", group_order=2, clinical_role="required"),
-        FieldSpec("margin_location", "Localización del margen positivo", "text", default="Ápex", group="Patología posoperatoria", group_order=2, clinical_role="decision_refiner", evidence_tags=["margin_location"]),
+        FieldSpec("margin_location", "Localización del margen positivo", "select", options=["", "Ápex", "Base", "Posterolateral", "Múltiple", "Otro"], default="Ápex", group="Patología posoperatoria", group_order=2, clinical_role="decision_refiner", evidence_tags=["margin_location"]),
         FieldSpec("ece_status", "Extensión extracapsular", "select", options=["0", "1"], default="0", group="Patología posoperatoria", group_order=2, clinical_role="required"),
         FieldSpec("svi_status", "Invasión de vesículas seminales", "select", options=["0", "1"], default="0", group="Patología posoperatoria", group_order=2, clinical_role="required"),
         FieldSpec("lni_status", "Invasión ganglionar", "select", options=["0", "1"], default="0", group="Patología posoperatoria", group_order=2, clinical_role="required"),

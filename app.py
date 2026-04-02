@@ -71,8 +71,10 @@ REGISTER_NUMERIC_FIELDS = (
     "line_of_therapy_number",
     "metastasis_count",
     "ecog_score",
+    "gleason_score",
     "gleason_primary",
     "gleason_secondary",
+    "gleason_tertiary",
     "isup_grade",
     "ipss_score",
     "iief5_score",
@@ -147,9 +149,14 @@ def _reconciled_patient_snapshot(record):
     reconciliation = build_reconciled_state(record, record.get("latest_assessment"))
     return {
         "reconciled_state": reconciliation.get("reconciled_state") or "diagnostic_workup",
+        "phenotype_state": reconciliation.get("phenotype_state") or reconciliation.get("reconciled_state") or "diagnostic_workup",
         "reconciled_management_track": reconciliation.get("reconciled_management_track") or "diagnostic_surveillance",
         "state_conflict_flag": reconciliation.get("state_conflict_flag", False),
         "state_conflict_reason": reconciliation.get("state_conflict_reason", ""),
+        "progression_gate_active": reconciliation.get("progression_gate_active", False),
+        "progression_gate_target": reconciliation.get("progression_gate_target", ""),
+        "progression_gate_reason": reconciliation.get("progression_gate_reason", ""),
+        "systemic_progression_context_resolved": reconciliation.get("systemic_progression_context_resolved", "none"),
     }
 
 
@@ -290,13 +297,20 @@ def favicon():
 def patient_profile(nss):
     import tracking_db # Import local para evitar circularidad si la hubiera, o simplemente consistencia
     try:
-        data = tracking_db.get_patient_history(nss)
+        core_record = tracking_db.load_patient_record_core(nss)
+        data = tracking_db.build_patient_record_derivatives(core_record) if core_record else None
         if not data:
             return "Paciente no encontrado", 404
-        tracking_db.refresh_followup_agenda(data)
-        longitudinal_bundle = tracking_db.refresh_longitudinal_intelligence(nss, force_recompute=False)
-        data = tracking_db.get_patient_full_record(nss) or tracking_db.get_patient_history(nss)
-            
+        longitudinal_bundle = tracking_db.refresh_longitudinal_intelligence(
+            nss,
+            force_recompute=False,
+            record=data,
+            include_live_benchmark=False,
+        )
+        agenda_board = tracking_db.refresh_followup_agenda(data, longitudinal_bundle=longitudinal_bundle)
+        if agenda_board:
+            data["agenda_items"] = list(agenda_board.get("items") or [])
+
         # Calcular edad
         dob_str = data['identity'].get('dob')
         if dob_str:
@@ -674,6 +688,7 @@ def api_visit_schema(patient_id):
         visit_schema = build_visit_schema(
             state,
             track,
+            patient=patient,
             agenda_item=agenda_item,
             field_scope=capture_fields or None,
             capture_context=capture_context,
@@ -816,17 +831,30 @@ def api_patient_signals(patient_ref):
         patient = tracking_db.get_patient_full_record(patient_id)
         if not patient:
             return error_response("Paciente no encontrado", 404)
-        bundle = tracking_db.refresh_longitudinal_intelligence(patient_id, force_recompute=False)
+        bundle = tracking_db.refresh_longitudinal_intelligence(
+            patient_id,
+            force_recompute=False,
+            record=patient,
+            include_live_benchmark=False,
+        )
         signals = bundle.get("signals")
         if signals is None:
             return error_response("Paciente no encontrado", 404)
-        patient = tracking_db.get_patient_full_record(patient_id) or patient
         from prostanet.shared.presentation_text import (
             humanize_assessment,
             humanize_care_overlays,
             humanize_state_timeline,
         )
         from prostanet.domains.patient_tracking.profile_compass import build_patient_profile_view_model
+        from prostanet.domains.patient_tracking.vertical_runtime import (
+            build_decision_delta_since_last_visit,
+            build_evidence_basis_current_visit,
+            build_runtime_patient,
+            build_runtime_payload,
+            build_shared_metastatic_summary,
+            derive_display_sequence_summary,
+            select_primary_vertical_bundle,
+        )
 
         latest_assessment = humanize_assessment(patient["latest_assessment"]) if patient.get("latest_assessment") else {}
         state_timeline = humanize_state_timeline(patient.get("state_timeline", []))
@@ -839,6 +867,60 @@ def api_patient_signals(patient_ref):
             care_overlays=care_overlays,
             longitudinal_bundle=bundle,
         )
+        _, active_copilot_bundle = select_primary_vertical_bundle(
+            {
+                "crpc_copilot_bundle": bundle.get("crpc_copilot_bundle", profile_view.get("crpc_copilot_bundle", {})),
+                "post_rp_salvage_bundle": bundle.get("post_rp_salvage_bundle", profile_view.get("post_rp_salvage_bundle", {})),
+                "mhspc_copilot_bundle": bundle.get("mhspc_copilot_bundle", profile_view.get("mhspc_copilot_bundle", {})),
+                "diagnostic_biopsy_bundle": bundle.get("diagnostic_biopsy_bundle", profile_view.get("diagnostic_biopsy_bundle", {})),
+                "localized_surveillance_bundle": bundle.get("localized_surveillance_bundle", profile_view.get("localized_surveillance_bundle", {})),
+                "post_rt_salvage_bundle": bundle.get("post_rt_salvage_bundle", profile_view.get("post_rt_salvage_bundle", {})),
+            }
+        )
+        runtime_patient = build_runtime_patient(patient, bundle)
+        runtime_payload = build_runtime_payload(
+            runtime_patient,
+            patient.get("latest_assessment"),
+            effective_state=signals.get("effective_state_final") or signals.get("reconciled_state") or "",
+        )
+        metastatic_composition_summary = (
+            active_copilot_bundle.get("metastatic_composition_summary")
+            or profile_view.get("metastatic_composition_summary")
+            or build_shared_metastatic_summary(runtime_payload)
+        )
+        blocked_by_overlay = list(
+            active_copilot_bundle.get("blocked_by_overlay")
+            or profile_view.get("blocked_by_overlay")
+            or []
+        )
+        decision_delta_since_last_visit = (
+            active_copilot_bundle.get("decision_delta_since_last_visit")
+            or profile_view.get("decision_delta_since_last_visit")
+            or build_decision_delta_since_last_visit(
+                patient,
+                effective_state=signals.get("effective_state_final") or signals.get("reconciled_state") or "",
+                phenotype_state=signals.get("phenotype_state") or signals.get("effective_state_final") or "",
+                rule_based_recommendation=active_copilot_bundle.get("rule_based_recommendation") or {},
+                final_presented_recommendation=active_copilot_bundle.get("final_presented_recommendation") or {},
+                blocking_groups=active_copilot_bundle.get("blocking_inputs") or [],
+                blocked_by_overlay=blocked_by_overlay,
+            )
+        )
+        evidence_basis_current_visit = (
+            active_copilot_bundle.get("evidence_basis_current_visit")
+            or profile_view.get("evidence_basis_current_visit")
+            or build_evidence_basis_current_visit(
+                active_copilot_bundle.get("guideline_basis") or [],
+                active_copilot_bundle.get("rule_based_recommendation") or {},
+                decision_delta_since_last_visit,
+            )
+        )
+        histopathology_summary = (
+            active_copilot_bundle.get("histopathology_summary")
+            or profile_view.get("histopathology_summary")
+            or ""
+        )
+        qa_validation = active_copilot_bundle.get("qa_validation") or {}
         return jsonify(
             {
                 "success": True,
@@ -891,6 +973,11 @@ def api_patient_signals(patient_ref):
                 "effective_management_track_final": bundle.get("signals", {}).get("effective_management_track_final") or bundle.get("signals", {}).get("effective_management_track") or bundle.get("signals", {}).get("reconciled_management_track"),
                 "effective_state": bundle.get("signals", {}).get("effective_state") or bundle.get("signals", {}).get("reconciled_state"),
                 "effective_management_track": bundle.get("signals", {}).get("effective_management_track") or bundle.get("signals", {}).get("reconciled_management_track"),
+                "phenotype_state": bundle.get("signals", {}).get("phenotype_state", profile_view.get("clinical_signals", {}).get("phenotype_state", "")),
+                "progression_gate_active": bundle.get("signals", {}).get("progression_gate_active", False),
+                "progression_gate_target": bundle.get("signals", {}).get("progression_gate_target", ""),
+                "progression_gate_reason": bundle.get("signals", {}).get("progression_gate_reason", ""),
+                "systemic_progression_context_resolved": bundle.get("signals", {}).get("systemic_progression_context_resolved", "none"),
                 "blocking_inputs": bundle.get("blocking_inputs", []),
                 "hard_blocking_inputs": bundle.get("hard_blocking_inputs", []),
                 "decision_blocking_inputs": bundle.get("decision_blocking_inputs", []),
@@ -904,12 +991,31 @@ def api_patient_signals(patient_ref):
                 "crpc_copilot_status": bundle.get("crpc_copilot_status", profile_view.get("crpc_copilot_status", "not_applicable")),
                 "post_rp_salvage_bundle": bundle.get("post_rp_salvage_bundle", profile_view.get("post_rp_salvage_bundle", {})),
                 "post_rp_copilot_status": bundle.get("post_rp_copilot_status", profile_view.get("post_rp_copilot_status", "not_applicable")),
+                "mhspc_copilot_bundle": bundle.get("mhspc_copilot_bundle", profile_view.get("mhspc_copilot_bundle", {})),
+                "mhspc_copilot_status": bundle.get("mhspc_copilot_status", profile_view.get("mhspc_copilot_status", "not_applicable")),
+                "diagnostic_biopsy_bundle": bundle.get("diagnostic_biopsy_bundle", profile_view.get("diagnostic_biopsy_bundle", {})),
+                "diagnostic_copilot_status": bundle.get("diagnostic_copilot_status", profile_view.get("diagnostic_copilot_status", "not_applicable")),
+                "localized_surveillance_bundle": bundle.get("localized_surveillance_bundle", profile_view.get("localized_surveillance_bundle", {})),
+                "localized_copilot_status": bundle.get("localized_copilot_status", profile_view.get("localized_copilot_status", "not_applicable")),
+                "post_rt_salvage_bundle": bundle.get("post_rt_salvage_bundle", profile_view.get("post_rt_salvage_bundle", {})),
+                "post_rt_copilot_status": bundle.get("post_rt_copilot_status", profile_view.get("post_rt_copilot_status", "not_applicable")),
                 "salvage_window_status": bundle.get("salvage_window_status", profile_view.get("salvage_window_status", "")),
                 "salvage_window_reason": bundle.get("salvage_window_reason", profile_view.get("salvage_window_reason", "")),
-                "qa_passed": bundle.get("qa_passed", profile_view.get("qa_passed")),
-                "sequence_summary": bundle.get("sequence_summary", profile_view.get("sequence_summary", [])),
+                "post_rt_salvage_window_status": bundle.get("post_rt_salvage_window_status", profile_view.get("post_rt_salvage_window_status", "")),
+                "qa_passed": bundle.get("qa_passed", profile_view.get("qa_passed", (active_copilot_bundle.get("qa_validation") or {}).get("approved"))),
+                "sequence_summary": bundle.get("sequence_summary", profile_view.get("sequence_summary", derive_display_sequence_summary(active_copilot_bundle))),
+                "histopathology_summary": histopathology_summary,
+                "metastatic_composition_summary": metastatic_composition_summary,
+                "decision_delta_since_last_visit": decision_delta_since_last_visit,
+                "blocked_by_overlay": blocked_by_overlay,
+                "evidence_basis_current_visit": evidence_basis_current_visit,
+                "qa_validation": qa_validation,
                 "crpc_schedule_overlay": bundle.get("crpc_schedule_overlay", profile_view.get("crpc_schedule_overlay", {})),
                 "post_rp_schedule_overlay": bundle.get("post_rp_schedule_overlay", profile_view.get("post_rp_schedule_overlay", {})),
+                "mhspc_schedule_overlay": bundle.get("mhspc_schedule_overlay", profile_view.get("mhspc_schedule_overlay", {})),
+                "diagnostic_schedule_overlay": bundle.get("diagnostic_schedule_overlay", profile_view.get("diagnostic_schedule_overlay", {})),
+                "localized_schedule_overlay": bundle.get("localized_schedule_overlay", profile_view.get("localized_schedule_overlay", {})),
+                "post_rt_schedule_overlay": bundle.get("post_rt_schedule_overlay", profile_view.get("post_rt_schedule_overlay", {})),
                 "resolved_patient_id": patient_id,
                 "resolved_patient_ref": resolved.get("nss") or resolved.get("patient_ref") or str(patient_ref),
                 **_reconciled_patient_snapshot(patient),
@@ -1031,7 +1137,7 @@ def register_patient():
             data = tracking_service.canonicalize_payload(data)
         
         from tracking_db import register_new_patient
-        patient_id, msg = register_new_patient(data, assessment=assessment)
+        patient_id, msg, registration_metadata = register_new_patient(data, assessment=assessment)
         logger.info(f"DB Result: {patient_id}, {msg}")
         
         if patient_id is not None:
@@ -1090,6 +1196,7 @@ def register_patient():
                 "exploratory_benchmark": exploratory_benchmark,
                 "processing_summary": processing_summary,
                 "longitudinal_intelligence": loop_payload,
+                "registration_metadata": registration_metadata or {},
                 "msg": msg,
                 "assessment_id": assessment_id,
                 "next_routes": {
@@ -1414,7 +1521,11 @@ def api_pivotal_match(nss):
         from clinical_scores import docetaxel_fitness
         from pivotal_studies import match_patient_to_studies, generate_pivotal_report
         from prostanet.domains.patient_tracking.mhspc_evidence import is_mhspc_state, visible_trials_for_mhspc_state
-        from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
+        from prostanet.domains.patient_tracking.therapy_catalog import trial_backbone
+        from prostanet.domains.patient_tracking.reconciled_state import (
+            build_reconciled_state,
+            derive_post_prostatectomy_truth,
+        )
 
         record = get_patient_full_record(nss)
         if not record:
@@ -1428,6 +1539,7 @@ def api_pivotal_match(nss):
         latest_assessment = record.get("latest_assessment") or {}
         reconciliation = build_reconciled_state(record, latest_assessment)
         current_state = reconciliation.get("reconciled_state") or ""
+        post_rp_truth = derive_post_prostatectomy_truth(record) if current_state in {"post_prostatectomy", "recurrence_bcr"} else {}
 
         # Calcular edad
         from datetime import datetime
@@ -1443,6 +1555,14 @@ def api_pivotal_match(nss):
         # PSA actual (último follow-up o baseline)
         follow_ups = record.get('follow_ups', [])
         psa_current = follow_ups[-1].get('psa_current', 0) if follow_ups else baseline.get('baseline_psa', 0)
+        if current_state == "recurrence_bcr":
+            psa_current = (
+                post_rp_truth.get("psa_current")
+                or (latest_assessment.get("input_snapshot") or {}).get("psa_current")
+                or (latest_assessment.get("input_snapshot") or {}).get("psa_postop")
+                or (record.get("bcr") or {}).get("bcr_psa")
+                or psa_current
+            )
 
         # Claves deben coincidir con lo que espera match_patient_to_studies()
         metastasis_site = baseline.get('metastasis_site', 'M0') or 'M0'
@@ -1462,6 +1582,10 @@ def api_pivotal_match(nss):
             'age': age,
             'psa': psa_current or 0,
             'psa_basal': baseline.get('baseline_psa', 0) or 0,
+            'psa_current': psa_current or 0,
+            'psa_postop_current': post_rp_truth.get("psa_current"),
+            'psa_postop': (latest_assessment.get("input_snapshot") or {}).get("psa_postop"),
+            'bcr_psa': (record.get("bcr") or {}).get("bcr_psa"),
             'gleason_score': baseline.get('gleason_score', 6) or 6,
             'gleason_primary': baseline.get('gleason_primary'),
             'gleason_secondary': baseline.get('gleason_secondary'),
@@ -1475,6 +1599,9 @@ def api_pivotal_match(nss):
             'msi_status': genomics.get('msi_status') or baseline.get('msi_status', 'Estable') or 'Estable',
             'prior_therapy': [],
             'prior_prostatectomy': bool(surgery),
+            'post_rp_context': current_state in {"post_prostatectomy", "recurrence_bcr"},
+            'psadt_months': post_rp_truth.get("psadt_months") or (record.get("bcr") or {}).get("psadt_at_bcr") or (latest_assessment.get("input_snapshot") or {}).get("psadt_months"),
+            'salvage_local_feasible': (latest_assessment.get("input_snapshot") or {}).get("salvage_local_feasible"),
             'bone_metastases': metastasis_site in ('Hueso', 'Oseas', 'Bone'),
             'visceral_metastases': metastasis_site in ('Visceral', 'Higado', 'Pulmon'),
             'fit_for_chemotherapy': bool(docetaxel_bundle.get('fit_for_docetaxel')),
@@ -1524,6 +1651,7 @@ def api_pivotal_match(nss):
                 'expected_outcome': study.get('key_result', ''),
                 'applicability': study.get('mexican_applicability', ''),
             }
+            match_flat.update(trial_backbone(match_flat["study_name"]))
             matches_clean.append(match_flat)
             try:
                 save_pivotal_matching(identity['id'], match_flat)

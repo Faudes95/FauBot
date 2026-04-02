@@ -2,7 +2,31 @@ from __future__ import annotations
 
 from typing import Any
 
-from prostanet.domains.patient_tracking.reconciled_state import derive_post_prostatectomy_course
+from clinical_scores import docetaxel_fitness
+from prostanet.domains.patient_tracking.arpi_selection_engine import (
+    build_arpi_capture_contract,
+    candidate_regimens_for_state,
+    is_arpi_eligible_state,
+)
+from prostanet.domains.patient_tracking.palliative_longitudinal import (
+    ADVANCED_PALLIATIVE_STATES,
+    PALLIATIVE_GOALS_FIELDS,
+    PALLIATIVE_URGENT_FIELDS,
+    build_palliative_monitoring_package,
+    build_palliative_transition_bundle,
+)
+from prostanet.domains.patient_tracking.survivorship_longitudinal import (
+    build_survivorship_monitoring_package,
+    build_survivorship_transition_bundle,
+)
+from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state, derive_post_prostatectomy_course
+from prostanet.domains.patient_tracking.therapeutic_family_engine import (
+    build_active_regimen_monitoring_package,
+    family_label,
+    regimen_family_code,
+)
+from prostanet.shared.gleason_profile import apply_gleason_profile, normalize_gleason_profile
+from prostanet.shared.metastatic_profile import build_metastatic_profile, derive_mhspc_burden_context
 
 
 def _is_present(value: Any) -> bool:
@@ -29,7 +53,20 @@ def _text_contains_any(text: str, needles: tuple[str, ...]) -> bool:
 
 def _blocking_input_satisfied(field_name: str, field_values: dict[str, Any]) -> bool:
     value = field_values.get(field_name)
-    if field_name == "psa" and not _is_present(value):
+    if field_name == "ecog" and not _is_present(value):
+        value = field_values.get("ecog_score") or field_values.get("ecog_performance_status")
+    elif field_name == "imaging_negative" and not _is_present(value):
+        conventional_status = str(field_values.get("conventional_imaging_status") or "").strip().lower()
+        if conventional_status in {"m0", "negative", "negativo", "negative_conventional"}:
+            return True
+    elif field_name == "castrate_testosterone_confirmed" and not _is_present(value):
+        testosterone_status = str(field_values.get("castrate_testosterone_status") or "").strip().lower()
+        if testosterone_status in {"confirmed_castrate", "castrate", "confirmed"}:
+            return True
+        testosterone = _safe_float(field_values.get("testosterone") or field_values.get("testosterone_current"))
+        if testosterone is not None and testosterone <= 50:
+            return True
+    elif field_name == "psa" and not _is_present(value):
         value = field_values.get("bcr_psa") or field_values.get("psa_current") or field_values.get("psa_postop")
     elif field_name == "psa_postop" and not _is_present(value):
         value = field_values.get("bcr_psa") or field_values.get("psa_current") or field_values.get("psa")
@@ -44,6 +81,24 @@ def _blocking_input_satisfied(field_name: str, field_values: dict[str, Any]) -> 
         )
     elif field_name == "current_adt_context" and not _is_present(value):
         value = field_values.get("current_treatment") or field_values.get("drug_scheme")
+    elif field_name == "metastasis_count" and not _is_present(value):
+        value = derive_mhspc_burden_context(field_values).get("metastasis_count")
+    elif field_name == "isup_grade" and not _is_present(value):
+        value = normalize_gleason_profile(field_values).get("isup_grade")
+    elif field_name == "metastasis_site":
+        profile = build_metastatic_profile(field_values)
+        if str(profile.get("m_substage_resolved") or "M0").upper() != "M0":
+            return True
+        value = field_values.get("metastasis_site")
+    elif field_name == "volume_disease" and not _is_present(value):
+        burden = derive_mhspc_burden_context(field_values)
+        value = burden.get("volume_disease") if burden.get("volume_disease") in {"high", "low"} else None
+    elif field_name == "bone_distribution_documented":
+        profile = build_metastatic_profile(field_values)
+        if not bool(profile.get("bone_metastasis_present")):
+            return True
+        burden = derive_mhspc_burden_context(field_values)
+        return bool((burden.get("bone_axial_count") or 0) + (burden.get("bone_appendicular_count") or 0) > 0)
     if field_name == "psma_pet_done":
         return str(value or "").strip().lower() in {"1", "true", "si", "sí", "yes"}
     return _is_present(value)
@@ -110,6 +165,22 @@ STATE_RULES = {
         "capture_target": "followup",
         "focus": "restaging",
     },
+    "post_radiotherapy_or_local_salvage": {
+        "blocking_inputs": ["psa_current", "psa_nadir", "phoenix_delta"],
+        "optional_context_inputs": [
+            "prior_rt_modality",
+            "prior_rt_dose",
+            "prior_rt_fields",
+            "biopsy_proven_local_recurrence",
+            "mpmri_done",
+            "mpmri_localized_recurrence",
+            "psma_pet_done",
+        ],
+        "decision_domains_blocked": ["post_rt_confirmation", "post_rt_local_salvage", "restaging"],
+        "why": "La recurrencia post-RT no puede cerrar salvage local sin Phoenix o confirmación local equivalente, reestadificación dirigida y matriz real de factibilidad anatómica/funcional.",
+        "capture_target": "followup",
+        "focus": "restaging",
+    },
     "adt_progression_verification": {
         "blocking_inputs": ["testosterone", "current_adt_context", "progression_pattern", "conventional_imaging_status"],
         "optional_context_inputs": ["drug_scheme", "line_of_therapy_number", "psa", "psma_pet_done"],
@@ -119,8 +190,17 @@ STATE_RULES = {
         "focus": "advanced_sequencing",
     },
     "m0_crpc": {
-        "blocking_inputs": ["psadt_months", "testosterone", "current_adt_context"],
-        "optional_context_inputs": ["seizure_history", "dermatitis_history", "cv_risk_documented", "drug_interaction_reviewed"],
+        "blocking_inputs": ["psadt_months", "testosterone", "current_adt_context", "imaging_negative"],
+        "optional_context_inputs": [
+            "comorbidity_seizure",
+            "frailty_status",
+            "cv_risk_documented",
+            "drug_interaction_reviewed",
+            "current_medications",
+            "dermatitis_history",
+            "conventional_imaging_modality",
+            "conventional_imaging_date",
+        ],
         "decision_domains_blocked": ["nmcrpc_intensification", "arpi_safety"],
         "why": "La intensificación en nmCRPC depende de PSADT, castración confirmada y perfil de seguridad del ARPI.",
         "capture_target": "followup",
@@ -128,33 +208,64 @@ STATE_RULES = {
     },
     "m1_crpc": {
         "blocking_inputs": ["testosterone", "line_of_therapy_number", "drug_scheme", "progression_pattern"],
-        "optional_context_inputs": ["hrr_status", "brca2_status", "psma_positive", "psma_negative_dominant_lesions"],
+        "optional_context_inputs": [
+            "hrr_status",
+            "brca2_status",
+            "psma_positive",
+            "psma_negative_dominant_lesions",
+            "ecog_score",
+            "frailty_status",
+            "child_pugh_score",
+            "cv_risk_documented",
+            "drug_interaction_reviewed",
+            "current_medications",
+            "hepatic_risk_factors",
+        ],
         "decision_domains_blocked": ["mcrpc_sequencing", "precision_pathway", "psma_pathway"],
         "why": "La secuenciación en mCRPC exige castración documentada, línea terapéutica, progresión y biomarcadores accionables.",
         "capture_target": "followup",
         "focus": "advanced_sequencing",
     },
     "mcspc_oligo_metachronous": {
-        "blocking_inputs": ["metastasis_site", "metastasis_count", "ecog", "volume_disease"],
-        "optional_context_inputs": ["psma_pet_done", "psma_rads_score", "docetaxel_fit", "prior_local_therapy_context"],
+        "blocking_inputs": ["metastasis_site", "metastasis_count", "ecog", "bone_distribution_documented"],
+        "optional_context_inputs": [
+            "psma_pet_done",
+            "psma_rads_score",
+            "prior_local_therapy_context",
+            "comorbidity_seizure",
+            "frailty_status",
+            "child_pugh_score",
+            "cv_risk_documented",
+            "drug_interaction_reviewed",
+            "hepatic_risk_factors",
+        ],
         "decision_domains_blocked": ["mhspc_backbone", "mdt_eligibility"],
-        "why": "La definición de oligometástasis real y el backbone sistémico dependen de carga metastásica, imagen y fitness.",
+        "why": "La definición de oligometástasis real y el backbone sistémico dependen de carga metastásica, distribución ósea, imagen y fitness.",
         "capture_target": "followup",
         "focus": "restaging",
     },
     "mcspc_low_volume_sync_oligo": {
-        "blocking_inputs": ["metastasis_site", "metastasis_count", "ecog", "volume_disease"],
-        "optional_context_inputs": ["primary_local_treatment_done", "docetaxel_fit", "psma_pet_done"],
+        "blocking_inputs": ["metastasis_site", "metastasis_count", "ecog", "bone_distribution_documented"],
+        "optional_context_inputs": [
+            "primary_local_treatment_done",
+            "psma_pet_done",
+            "comorbidity_seizure",
+            "frailty_status",
+            "child_pugh_score",
+            "cv_risk_documented",
+            "drug_interaction_reviewed",
+            "hepatic_risk_factors",
+        ],
         "decision_domains_blocked": ["mhspc_backbone", "primary_rt"],
-        "why": "El bajo volumen sincrónico debe estratificarse bien para decidir RT al primario, doblete o escalamiento.",
+        "why": "El bajo volumen sincrónico debe estratificarse con distribución ósea documentada para decidir RT al primario, doblete o escalamiento.",
         "capture_target": "followup",
         "focus": "restaging",
     },
     "mcspc_high_volume": {
-        "blocking_inputs": ["metastasis_site", "metastasis_count", "ecog", "volume_disease"],
-        "optional_context_inputs": ["docetaxel_fit", "hrr_status", "brca2_status", "dxa_baseline_done"],
+        "blocking_inputs": ["metastasis_site", "metastasis_count", "ecog", "bone_distribution_documented"],
+        "optional_context_inputs": ["performance_status_driver", "bone_pain", "hrr_status", "brca2_status", "dxa_baseline_done"],
         "decision_domains_blocked": ["mhspc_triplet", "precision_pathway", "bone_support"],
-        "why": "El mHSPC de alto volumen requiere carga metastásica, fitness y biomarcadores para elegir doblete/triplete y soporte óseo.",
+        "why": "El mHSPC de alto volumen requiere carga metastásica, distribución ósea documentada, fitness y biomarcadores para elegir doblete/triplete y soporte óseo.",
         "capture_target": "followup",
         "focus": "advanced_sequencing",
     },
@@ -195,6 +306,19 @@ ACTIVE_SURVEILLANCE_RULE = {
 }
 
 
+DOCETAXEL_HIGH_VOLUME_STATES = {
+    "mcspc_high_volume",
+    "mcspc_high_volume_sync",
+    "mcspc_high_volume_metachronous",
+}
+
+
+DOCETAXEL_ELIGIBILITY_RULE = {
+    "decision_domains_blocked": ["mhspc_triplet"],
+    "why": "El triplete con docetaxel solo puede cerrarse cuando biometría, pruebas hepáticas, alergias relevantes y contexto funcional están vigentes y documentados.",
+}
+
+
 def _field_values(patient: dict[str, Any]) -> dict[str, Any]:
     snapshot = patient.get("longitudinal_truth_snapshot") or {}
     values = dict(snapshot.get("field_values") or {})
@@ -204,6 +328,7 @@ def _field_values(patient: dict[str, Any]) -> dict[str, Any]:
     latest_followup_payload = (((latest_followup.get("visit_bundle") or {}).get("payload")) or {}) if latest_followup else {}
     latest_stage_visit = (patient.get("stage_visits") or [{}])[-1] if patient.get("stage_visits") else {}
     stage_payload = (((latest_stage_visit.get("visit_bundle") or {}).get("payload")) or {}) if latest_stage_visit else {}
+    latest_signal_snapshot = dict(patient.get("latest_signal_snapshot") or {})
     latest_biopsy = (patient.get("biopsies") or [{}])[-1] if patient.get("biopsies") else {}
     bcr = dict(patient.get("bcr") or {})
     as_protocol = dict(patient.get("active_surveillance_protocol") or {})
@@ -211,7 +336,7 @@ def _field_values(patient: dict[str, Any]) -> dict[str, Any]:
     latest_treatment = (patient.get("treatments") or [{}])[-1] if patient.get("treatments") else {}
     regimen_json = dict(latest_treatment.get("regimen_json") or {}) if isinstance(latest_treatment.get("regimen_json"), dict) else {}
 
-    for source in (baseline, assessment_inputs, latest_followup, latest_followup_payload, stage_payload, latest_biopsy, bcr, as_protocol, as_legacy, latest_treatment, regimen_json):
+    for source in (baseline, assessment_inputs, latest_signal_snapshot, latest_followup, latest_followup_payload, stage_payload, latest_biopsy, bcr, as_protocol, as_legacy, latest_treatment, regimen_json):
         if not isinstance(source, dict):
             continue
         for key, value in source.items():
@@ -247,6 +372,8 @@ def _field_values(patient: dict[str, Any]) -> dict[str, Any]:
             "prior_therapy",
         },
     )
+
+    values = apply_gleason_profile(values)
 
     if not _is_present(values.get("management_track")) and _is_present(latest_followup.get("management_track")):
         values["management_track"] = latest_followup.get("management_track")
@@ -288,6 +415,7 @@ def build_decision_input_requirements(
     next_best_action: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     field_values = _field_values(patient)
+    reconciliation = build_reconciled_state(patient, latest_assessment or patient.get("latest_assessment"))
     current_state = (
         effective_state
         or str(field_values.get("state") or "")
@@ -296,6 +424,9 @@ def build_decision_input_requirements(
         or (patient.get("prior_history") or {}).get("current_state")
         or "diagnostic_workup"
     )
+    phenotype_state = str(reconciliation.get("phenotype_state") or current_state)
+    progression_gate_active = bool(reconciliation.get("progression_gate_active"))
+    progression_gate_reason = str(reconciliation.get("progression_gate_reason") or "")
     current_track = (
         effective_management_track
         or str(field_values.get("management_track") or "")
@@ -316,6 +447,32 @@ def build_decision_input_requirements(
     blocking_input_descriptors: list[dict[str, Any]] = []
     focus = "clinical_completion"
     capture_target = "followup" if patient.get("follow_ups") or patient.get("stage_visits") else "intake"
+    candidate_regimens_under_consideration: list[str] = []
+    regimen_specific_blocks: dict[str, dict[str, Any]] = {}
+    selection_safety_profile: dict[str, Any] = {}
+    arpi_capture_contract: dict[str, Any] = {
+        "arpi_required_fields": [],
+        "arpi_missing_inputs": [],
+        "arpi_stale_inputs": [],
+        "arpi_profile_completeness": "not_applicable",
+        "arpi_preference_readiness": "not_applicable",
+        "candidate_regimens": [],
+    }
+    palliative_capture_contract: dict[str, Any] = {
+        "palliative_required_fields": [],
+        "palliative_missing_inputs": [],
+        "palliative_stale_inputs": [],
+        "palliative_capture_block": {},
+        "goals_of_care_capture_block": {},
+        "palliative_trigger_status": "observe",
+        "care_mode": "observe",
+    }
+    post_rt_capture_contract: dict[str, Any] = {
+        "post_rt_required_fields": [],
+        "post_rt_missing_inputs": [],
+        "post_rt_confirmation_block": {},
+        "post_rt_local_salvage_block": {},
+    }
 
     def add_fields(fields: list[str], *, bucket: str, why: str, domains: list[str]) -> None:
         target = hard_blocking_inputs if bucket == "hard_blocking_inputs" else decision_blocking_inputs if bucket == "decision_blocking_inputs" else supportive_gaps
@@ -334,6 +491,8 @@ def build_decision_input_requirements(
             )
 
     state_rule = STATE_RULES.get(current_state, {})
+    if not state_rule and current_state in DOCETAXEL_HIGH_VOLUME_STATES - {"mcspc_high_volume"}:
+        state_rule = STATE_RULES.get("mcspc_high_volume", {})
     if state_rule:
         add_fields(
             list(state_rule.get("blocking_inputs", [])),
@@ -348,6 +507,77 @@ def build_decision_input_requirements(
         focus = state_rule.get("focus", focus)
         capture_target = state_rule.get("capture_target", capture_target)
 
+    docetaxel_bundle: dict[str, Any] = {}
+    taxane_competes_now = False
+    if current_state in DOCETAXEL_HIGH_VOLUME_STATES and not progression_gate_active:
+        taxane_competes_now = True
+        docetaxel_bundle = docetaxel_fitness({**field_values, "state": current_state})
+        candidate_regimens_under_consideration.extend(
+            ["ADT_DAROLUTAMIDE", "ADT_ENZALUTAMIDE", "ADT_APALUTAMIDE", "ADT_ABIRATERONE", "ADT_DOCETAXEL"]
+        )
+    elif current_state == "m1_crpc":
+        prior_therapy_hint = str(field_values.get("prior_therapy") or "").lower()
+        prior_docetaxel_cycles_hint = _safe_float(field_values.get("prior_docetaxel_cycles")) or 0.0
+        prior_docetaxel_hint = prior_docetaxel_cycles_hint >= 6 or "docetax" in prior_therapy_hint
+        line_context_hint = str(field_values.get("mcrpc_line_context") or field_values.get("line_context") or "").lower()
+        taxane_competes_now = (not prior_docetaxel_hint) and line_context_hint in {"", "first_line_mcrpc", "post_arpi_pre_taxane", "pre_taxane"}
+        if taxane_competes_now:
+            docetaxel_bundle = docetaxel_fitness({**field_values, "state": current_state, "force_docetaxel_verification": 1})
+            candidate_regimens_under_consideration.append("DOCETAXEL")
+            regimen_specific_blocks["DOCETAXEL"] = {
+                "blocking_inputs": _dedupe(
+                    list(docetaxel_bundle.get("docetaxel_missing_inputs") or [])
+                    + list(docetaxel_bundle.get("docetaxel_stale_inputs") or [])
+                ),
+                "verification_status": str(docetaxel_bundle.get("docetaxel_verification_status") or ""),
+                "base_eligibility": str(docetaxel_bundle.get("docetaxel_base_eligibility") or ""),
+            }
+    if docetaxel_bundle:
+        verification_status = str(docetaxel_bundle.get("docetaxel_verification_status") or "verified")
+        if bool(docetaxel_bundle.get("docetaxel_required_now")) and verification_status in {"pending_labs", "stale_labs"}:
+            pending_docetaxel_fields = _dedupe(
+                list(docetaxel_bundle.get("docetaxel_missing_inputs") or [])
+                + list(docetaxel_bundle.get("docetaxel_stale_inputs") or [])
+            )
+            add_fields(
+                pending_docetaxel_fields,
+                bucket="decision_blocking_inputs",
+                why=DOCETAXEL_ELIGIBILITY_RULE["why"],
+                domains=DOCETAXEL_ELIGIBILITY_RULE["decision_domains_blocked"],
+            )
+            required_to_recalculate.extend(pending_docetaxel_fields)
+            optional_context_inputs.extend(["performance_status_driver", "bone_pain"])
+            decision_domains_blocked.extend(DOCETAXEL_ELIGIBILITY_RULE["decision_domains_blocked"])
+            why_these_fields_now.append(DOCETAXEL_ELIGIBILITY_RULE["why"])
+            focus = "advanced_sequencing"
+
+    if is_arpi_eligible_state(current_state):
+        arpi_capture_contract = build_arpi_capture_contract(
+            current_state,
+            field_values,
+            candidate_regimens=candidate_regimens_for_state(current_state, field_values),
+        )
+        arpi_required_fields = list(arpi_capture_contract.get("arpi_required_fields") or [])
+        if arpi_required_fields:
+            add_fields(
+                arpi_required_fields,
+                bucket="decision_blocking_inputs",
+                why="La selección molecular ARPI exige contexto oncológico, seguridad discriminadora y bundle basal de monitorización; un dato ausente no puede asumirse como ausencia de riesgo.",
+                domains=["arpi_selection", "arpi_safety", "arpi_monitoring"],
+            )
+            required_to_recalculate.extend(arpi_required_fields)
+            decision_domains_blocked.extend(["arpi_selection", "arpi_safety", "arpi_monitoring"])
+            why_these_fields_now.append(
+                "La preferencia molecular ARPI solo puede cerrarse con bundle completo de escenario, seguridad y monitoreo basal."
+            )
+            candidate_regimens_under_consideration.extend(list(arpi_capture_contract.get("candidate_regimens") or []))
+            regimen_specific_blocks["ARPI_SELECTION"] = {
+                "blocking_inputs": list(arpi_capture_contract.get("arpi_required_fields") or []),
+                "missing_inputs": list(arpi_capture_contract.get("arpi_missing_inputs") or []),
+                "stale_inputs": list(arpi_capture_contract.get("arpi_stale_inputs") or []),
+                "profile_completeness": str(arpi_capture_contract.get("arpi_profile_completeness") or ""),
+            }
+
     latest_psa = _safe_float(field_values.get("psa") or field_values.get("psa_postop"))
     prior_radiation = str(field_values.get("prior_radiation") or field_values.get("prior_secondary_rt") or "").strip().lower() in {"1", "true", "yes", "si", "sí"}
     salvage_feasible = str(field_values.get("salvage_local_feasible") or "").strip().lower()
@@ -358,6 +588,96 @@ def build_decision_input_requirements(
     brca2_status = str(field_values.get("brca2_status") or "").strip().lower()
     progression_pattern = str(field_values.get("progression_pattern") or "").strip().lower()
     treatment_text = treatment_text.lower()
+    seizure_risk_documented = _blocking_input_satisfied("comorbidity_seizure", field_values) or _blocking_input_satisfied("seizure_history", field_values)
+    frailty_documented = _blocking_input_satisfied("frailty_status", field_values)
+    ddi_documented = _blocking_input_satisfied("drug_interaction_reviewed", field_values)
+    hepatic_documented = _blocking_input_satisfied("child_pugh_score", field_values) or _blocking_input_satisfied("hepatic_risk_factors", field_values)
+    current_meds_documented = _blocking_input_satisfied("current_medications", field_values)
+    selection_safety_profile = {
+        "seizure_risk_documented": seizure_risk_documented,
+        "frailty_documented": frailty_documented,
+        "ddi_reviewed": field_values.get("drug_interaction_reviewed"),
+        "current_medications_present": bool(str(field_values.get("current_medications") or "").strip()),
+        "cardio_risk_documented": _blocking_input_satisfied("cv_risk_documented", field_values),
+        "hepatic_context_documented": hepatic_documented,
+        "docetaxel_verification_status": str(docetaxel_bundle.get("docetaxel_verification_status") or ""),
+        "arpi_profile_completeness": str(arpi_capture_contract.get("arpi_profile_completeness") or "not_applicable"),
+        "arpi_preference_readiness": str(arpi_capture_contract.get("arpi_preference_readiness") or "not_applicable"),
+        "arpi_missing_inputs": list(arpi_capture_contract.get("arpi_missing_inputs") or []),
+        "arpi_stale_inputs": list(arpi_capture_contract.get("arpi_stale_inputs") or []),
+    }
+
+    if current_state in {"mcspc_low_volume_sync_oligo", "mcspc_oligo_metachronous"}:
+        candidate_regimens_under_consideration.extend(
+            ["ADT_DAROLUTAMIDE", "ADT_ENZALUTAMIDE", "ADT_APALUTAMIDE", "ADT_ABIRATERONE", "LOCAL_MDT"]
+        )
+        low_volume_safety_fields = [
+            "comorbidity_seizure",
+            "frailty_status",
+            "child_pugh_score",
+            "cv_risk_documented",
+            "drug_interaction_reviewed",
+            "hepatic_risk_factors",
+        ]
+        add_fields(
+            low_volume_safety_fields,
+            bucket="decision_blocking_inputs",
+            why="En bajo volumen/oligometastásico la competencia real es entre dobletes hormonales y control local; los discriminadores de seguridad ARPI deben documentarse explícitamente.",
+            domains=["mhspc_backbone", "arpi_safety"],
+        )
+        required_to_recalculate.extend(low_volume_safety_fields)
+        regimen_specific_blocks["ARPI_DOUBLETS_LOW_VOLUME"] = {
+            "blocking_inputs": low_volume_safety_fields,
+            "triplet_policy": "not_applicable",
+        }
+
+    if current_state == "m0_crpc" and psadt_months is not None and psadt_months <= 10:
+        nmcrpc_arpi_fields = [
+            "comorbidity_seizure",
+            "frailty_status",
+            "cv_risk_documented",
+            "drug_interaction_reviewed",
+            "current_medications",
+            "dermatitis_history",
+            "conventional_imaging_modality",
+            "conventional_imaging_date",
+        ]
+        candidate_regimens_under_consideration.extend(["ADT_DAROLUTAMIDE", "ADT_ENZALUTAMIDE", "ADT_APALUTAMIDE"])
+        add_fields(
+            nmcrpc_arpi_fields,
+            bucket="decision_blocking_inputs",
+            why="En nmCRPC de alto riesgo la selección entre darolutamida, enzalutamida y apalutamida depende de seguridad neurológica, fragilidad, DDI, perfil cutáneo y documentación de imagen convencional.",
+            domains=["nmcrpc_intensification", "arpi_safety"],
+        )
+        required_to_recalculate.extend(nmcrpc_arpi_fields)
+        regimen_specific_blocks["NMCRPC_ARPI"] = {
+            "blocking_inputs": nmcrpc_arpi_fields,
+            "candidate_regimens": ["ADT_DAROLUTAMIDE", "ADT_ENZALUTAMIDE", "ADT_APALUTAMIDE"],
+        }
+    elif current_state == "m0_crpc":
+        candidate_regimens_under_consideration.append("OBSERVATION")
+
+    if current_state == "m1_crpc":
+        prior_therapy_text = str(field_values.get("prior_therapy") or "").lower()
+        line_context_text = str(field_values.get("mcrpc_line_context") or "").lower()
+        prior_abiraterone = "abirater" in prior_therapy_text
+        abiraterone_competes = line_context_text in {"", "first_line_mcrpc"} and not prior_abiraterone
+        if abiraterone_competes:
+            candidate_regimens_under_consideration.append("ADT_ABIRATERONE")
+            regimen_specific_blocks["ADT_ABIRATERONE"] = {
+                "blocking_inputs": list(ABIRATERONE_RULE["blocking_inputs"]) + list(ABIRATERONE_RULE["optional_context_inputs"]),
+                "reason": ABIRATERONE_RULE["why"],
+            }
+            add_fields(
+                list(ABIRATERONE_RULE["blocking_inputs"]),
+                bucket="decision_blocking_inputs",
+                why="Abiraterona sigue compitiendo como opción en mCRPC y requiere datos metabólicos/hepáticos aun si el paciente todavía no la recibe.",
+                domains=ABIRATERONE_RULE["decision_domains_blocked"],
+            )
+            required_to_recalculate.extend(ABIRATERONE_RULE["blocking_inputs"])
+        if taxane_competes_now and docetaxel_bundle:
+            selection_safety_profile["taxane_competes_now"] = True
+            candidate_regimens_under_consideration.append("DOCETAXEL")
 
     if current_state == "post_prostatectomy":
         if post_prostatectomy_course == "persistent_psa":
@@ -434,6 +754,114 @@ def build_decision_input_requirements(
             )
             optional_context_inputs.extend(["psma_radioligand", "psma_negative_dominant_lesions"])
 
+    if current_state == "post_radiotherapy_or_local_salvage":
+        candidate_regimens_under_consideration.extend(
+            [
+                "POST_RT_CONFIRMATION",
+                "SALVAGE_PROSTATECTOMY",
+                "SALVAGE_CRYOTHERAPY",
+                "SALVAGE_HIFU",
+                "SALVAGE_BRACHYTHERAPY",
+                "PSMA_GUIDED_MDT",
+                "SYSTEMIC_RESTAGING",
+            ]
+        )
+        confirmation_fields = [
+            "psa_current",
+            "psa_nadir",
+            "phoenix_delta",
+            "biopsy_proven_local_recurrence",
+            "mpmri_done",
+            "mpmri_localized_recurrence",
+        ]
+        local_salvage_fields = [
+            "prior_rt_modality",
+            "prior_rt_dose",
+            "prior_rt_fields",
+            "biopsy_date",
+            "biopsy_grade_group",
+            "mpmri_date",
+            "local_recurrence_site",
+            "urinary_burden",
+            "incontinence_burden",
+            "urethral_stricture_history",
+            "bowel_burden",
+            "rectal_toxicity_grade",
+            "prostate_volume",
+            "anesthesia_surgical_fitness",
+            "salvage_expertise_available",
+            "psma_pet_done",
+        ]
+        psma_structured_fields = [
+            "psma_radioligand",
+            "psma_rads_score",
+            "psma_uptake_pattern",
+            "psma_stage_after_psma",
+        ]
+        add_fields(
+            confirmation_fields,
+            bucket="hard_blocking_inputs",
+            why="No debe abrirse salvage curativo post-RT sin definir Phoenix o documentar falla local equivalente con base histológica/radiográfica.",
+            domains=["post_rt_confirmation"],
+        )
+        add_fields(
+            local_salvage_fields,
+            bucket="decision_blocking_inputs",
+            why="La modalidad de salvage local post-RT exige anatomía local, toxicidad GU/GI previa, aptitud anestésica y disponibilidad real de expertise.",
+            domains=["post_rt_local_salvage", "restaging"],
+        )
+        required_to_recalculate.extend(confirmation_fields + local_salvage_fields)
+        decision_domains_blocked.extend(["post_rt_confirmation", "post_rt_local_salvage", "restaging"])
+        why_these_fields_now.extend(
+            [
+                "Phoenix o confirmación local equivalente deben cerrarse antes de sostener una vía curativa post-RT.",
+                "La modalidad local preferente post-RT depende de anatomía local, toxicidad GU/GI previa, aptitud quirúrgica y expertise disponible.",
+            ]
+        )
+        if psma_done in {"1", "true", "si", "sí", "yes"}:
+            add_fields(
+                psma_structured_fields,
+                bucket="decision_blocking_inputs",
+                why="La PSMA debe estar estructurada para distinguir rescate glandular puro, MDT oligorrecurrente o redirección sistémica.",
+                domains=["restaging", "psma_pathway", "post_rt_local_salvage"],
+            )
+            required_to_recalculate.extend(psma_structured_fields)
+            decision_domains_blocked.extend(["psma_pathway"])
+        confirmation_missing = [
+            field for field in confirmation_fields
+            if not _blocking_input_satisfied(field, field_values)
+        ]
+        local_missing = [
+            field for field in local_salvage_fields + (psma_structured_fields if psma_done in {"1", "true", "si", "sí", "yes"} else [])
+            if not _blocking_input_satisfied(field, field_values)
+        ]
+        regimen_specific_blocks["POST_RT_CONFIRMATION"] = {
+            "blocking_inputs": confirmation_fields,
+            "missing_inputs": confirmation_missing,
+        }
+        regimen_specific_blocks["POST_RT_LOCAL_SALVAGE"] = {
+            "blocking_inputs": local_salvage_fields + (psma_structured_fields if psma_done in {"1", "true", "si", "sí", "yes"} else []),
+            "missing_inputs": local_missing,
+        }
+        post_rt_capture_contract = {
+            "post_rt_required_fields": _dedupe(confirmation_fields + local_salvage_fields + (psma_structured_fields if psma_done in {"1", "true", "si", "sí", "yes"} else [])),
+            "post_rt_missing_inputs": _dedupe(confirmation_missing + local_missing),
+            "post_rt_confirmation_block": {
+                "title": "Confirmar fallo bioquímico post-RT",
+                "summary": "Cierra Phoenix o documenta una confirmación local equivalente antes de abrir salvage curativo.",
+                "fields": confirmation_missing or confirmation_fields,
+                "capture_target": "followup",
+                "focus": "post_rt_confirmation",
+            },
+            "post_rt_local_salvage_block": {
+                "title": "Completar matriz de salvage local post-RT",
+                "summary": "Documenta reestadificación, toxicidad y factibilidad anatómica/funcional para elegir modalidad local o redirigir a sistémico.",
+                "fields": local_missing or local_salvage_fields + (psma_structured_fields if psma_done in {"1", "true", "si", "sí", "yes"} else []),
+                "capture_target": "followup",
+                "focus": "post_rt_local_salvage",
+            },
+        }
+
     if _text_contains_any(treatment_text, ("abirater", "zytiga")):
         add_fields(
             ["ast", "alt", "bilirubin"],
@@ -454,7 +882,7 @@ def build_decision_input_requirements(
         focus = "adt_safety"
 
     if (_text_contains_any(treatment_text, ("lutec", "pluvicto")) or (
-        current_state in {"recurrence_bcr", "m1_crpc"} and (
+        current_state in {"recurrence_bcr", "m1_crpc", "post_radiotherapy_or_local_salvage"} and (
             psma_profile.get("available")
             or str(field_values.get("psma_pet_done") or "").strip().lower() in {"1", "true", "si", "sí", "yes"}
         )
@@ -556,6 +984,29 @@ def build_decision_input_requirements(
         if hrr_status not in {"positivo", "positive", "pathogenic"} and brca2_status not in {"positivo", "positive", "pathogenic"}:
             supportive_gaps.extend(["hrr_status", "brca2_status"])
 
+    if progression_gate_active and phenotype_state in {"mcspc_oligo_metachronous", "mcspc_low_volume_sync_oligo", "mcspc_high_volume", "mcspc_high_volume_sync", "mcspc_high_volume_metachronous"}:
+        phenotype_fields = {"metastasis_site", "metastasis_count", "bone_distribution_documented", "volume_disease"}
+        hard_blocking_inputs = [item for item in hard_blocking_inputs if item not in phenotype_fields]
+        decision_blocking_inputs = [item for item in decision_blocking_inputs if item not in phenotype_fields]
+        required_to_recalculate = [item for item in required_to_recalculate if item not in phenotype_fields]
+        blocking_input_descriptors = [
+            item for item in blocking_input_descriptors
+            if item.get("field_name") not in phenotype_fields
+        ]
+        add_fields(
+            ["testosterone", "current_adt_context", "progression_pattern", "conventional_imaging_status"],
+            bucket="hard_blocking_inputs",
+            why=progression_gate_reason or "El fenotipo metastásico ya está resuelto, pero aún falta cerrar si la progresión bajo ADT sigue siendo sensible o ya migró a CRPC.",
+            domains=["castration_status", "crpc_restage"],
+        )
+        required_to_recalculate.extend(["testosterone", "current_adt_context", "progression_pattern", "conventional_imaging_status"])
+        decision_domains_blocked.extend(["castration_status", "crpc_restage"])
+        why_these_fields_now.append(
+            progression_gate_reason or "El fenotipo metastásico ya está claro; ahora la decisión depende de verificar castración e imagen convencional suficiente."
+        )
+        focus = "advanced_sequencing"
+        capture_target = "followup"
+
     hard_blocking_inputs = _dedupe(hard_blocking_inputs)
     decision_blocking_inputs = _dedupe(decision_blocking_inputs)
     supportive_gaps = _dedupe(supportive_gaps)
@@ -563,15 +1014,237 @@ def build_decision_input_requirements(
     missing_hard = [field for field in hard_blocking_inputs if not _blocking_input_satisfied(field, field_values)]
     missing_decision = [field for field in decision_blocking_inputs if not _blocking_input_satisfied(field, field_values)]
     missing_supportive = [field for field in supportive_gaps if not _blocking_input_satisfied(field, field_values)]
+    if str(docetaxel_bundle.get("docetaxel_verification_status") or "") == "stale_labs":
+        stale_docetaxel_fields = [
+            field
+            for field in list(docetaxel_bundle.get("docetaxel_stale_inputs") or [])
+            if field in hard_blocking_inputs or field in decision_blocking_inputs or field in supportive_gaps
+        ]
+        if stale_docetaxel_fields:
+            present_blocking = [field for field in present_blocking if field not in stale_docetaxel_fields]
+            missing_decision = _dedupe(missing_decision + stale_docetaxel_fields)
     missing_blocking = _dedupe(missing_hard + missing_decision)
     headline = str((next_best_action or {}).get("title") or "").strip()
     filtered_descriptors = [
         item for item in blocking_input_descriptors
         if item.get("field_name") in set(missing_blocking + missing_supportive)
     ]
+    result_snapshot = dict(((latest_assessment or patient.get("latest_assessment") or {}).get("result_snapshot")) or {})
+    preferred_regimen = dict(result_snapshot.get("preferred_frontline_regimen") or {})
+    sequence_bundle = dict(result_snapshot.get("sequence_transition_bundle") or {})
+    active_regimen_code = str(
+        preferred_regimen.get("regimen_code")
+        or field_values.get("drug_scheme")
+        or field_values.get("current_treatment")
+        or ""
+    )
+    active_family_code = str(
+        preferred_regimen.get("family_code")
+        or sequence_bundle.get("active_family")
+        or regimen_family_code(active_regimen_code, fallback="observation_family")
+    )
+    active_monitoring_package = build_active_regimen_monitoring_package(
+        active_regimen_code,
+        family_code=active_family_code,
+        field_values=field_values,
+    )
+    family_missing_inputs = {
+        str(code): _dedupe(list((profile or {}).get("missing_inputs") or []))
+        for code, profile in dict(result_snapshot.get("comparative_eligibility_matrix") or {}).items()
+        if _dedupe(list((profile or {}).get("missing_inputs") or []))
+    }
+    family_stale_inputs = {
+        str(code): _dedupe(list((profile or {}).get("stale_inputs") or []))
+        for code, profile in dict(result_snapshot.get("comparative_eligibility_matrix") or {}).items()
+        if _dedupe(list((profile or {}).get("stale_inputs") or []))
+    }
+    if active_family_code:
+        family_missing_inputs[active_family_code] = _dedupe(
+            list(family_missing_inputs.get(active_family_code) or [])
+            + list(active_monitoring_package.get("missing_inputs") or [])
+        )
+        family_stale_inputs[active_family_code] = _dedupe(
+            list(family_stale_inputs.get(active_family_code) or [])
+            + list(active_monitoring_package.get("stale_inputs") or [])
+        )
+    monitoring_required_fields = _dedupe(list(active_monitoring_package.get("required_visit_fields") or []))
+    trigger_status = str(sequence_bundle.get("trigger_status") or "")
+    monitoring_capture_title = (
+        f"Monitorizar {active_monitoring_package.get('active_regimen_label') or family_label(active_family_code)}"
+        if monitoring_required_fields
+        else "Completar monitorizacion activa"
+    )
+    monitoring_capture_summary = str(
+        sequence_bundle.get("line_change_reason")
+        or active_monitoring_package.get("monitoring_focus")
+        or "La decision terapeutica activa requiere monitorizacion estructurada."
+    )
+    if trigger_status in {"hold", "switch", "redirect_local", "redirect_systemic"}:
+        monitoring_capture_summary = (
+            f"{monitoring_capture_summary} La agenda debe abrir seguridad, reestadificacion y reevaluacion de linea."
+        ).strip()
+
+    palliative_transition_bundle = build_palliative_transition_bundle(
+        patient,
+        state=current_state,
+        management_track=current_track,
+        latest_assessment=latest_assessment,
+        field_values=field_values,
+    )
+    palliative_monitoring_package = build_palliative_monitoring_package(
+        patient,
+        state=current_state,
+        management_track=current_track,
+        latest_assessment=latest_assessment,
+        field_values=field_values,
+        transition_bundle=palliative_transition_bundle,
+    )
+    palliative_required_fields = (
+        _dedupe(list(palliative_transition_bundle.get("required_visit_fields") or []))
+        if current_state in ADVANCED_PALLIATIVE_STATES
+        else []
+    )
+    palliative_missing_inputs = _dedupe(list(palliative_transition_bundle.get("missing_inputs") or []))
+    palliative_stale_inputs = _dedupe(list(palliative_transition_bundle.get("stale_inputs") or []))
+    palliative_trigger_status = str(palliative_transition_bundle.get("trigger_status") or "observe")
+    palliative_domains = ["palliative_support", "goals_of_care", "symptom_control"]
+    if palliative_required_fields and palliative_trigger_status in {"urgent_local_palliation", "redirect_supportive_only", "hospice_candidate"}:
+        add_fields(
+            palliative_missing_inputs or palliative_stale_inputs or palliative_required_fields,
+            bucket="decision_blocking_inputs",
+            why="El carril paliativo dominante exige cerrar carga sintomatica, objetivos de cuidado y alertas oncológicas urgentes antes de sostener la conducta visible.",
+            domains=palliative_domains,
+        )
+        required_to_recalculate.extend(palliative_missing_inputs or palliative_stale_inputs or palliative_required_fields)
+        decision_domains_blocked.extend(palliative_domains)
+        why_these_fields_now.append(
+            "La conducta visible actual depende de confirmar control sintomatico, elegibilidad hospice y objetivos de cuidado."
+        )
+    elif palliative_required_fields and palliative_trigger_status not in {"", "observe"}:
+        add_fields(
+            palliative_missing_inputs or palliative_stale_inputs or palliative_required_fields,
+            bucket="supportive_gaps",
+            why="El soporte paliativo concurrente requiere captura estructurada de sintomas, seguridad opioide y objetivos de cuidado.",
+            domains=palliative_domains,
+        )
+        why_these_fields_now.append(
+            "La integracion paliativa concurrente requiere bundle estructurado de sintomas, urgencias y soporte familiar."
+        )
+    if palliative_required_fields:
+        family_missing_inputs["palliative_support_family"] = _dedupe(
+            list(family_missing_inputs.get("palliative_support_family") or []) + palliative_missing_inputs
+        )
+        family_stale_inputs["palliative_support_family"] = _dedupe(
+            list(family_stale_inputs.get("palliative_support_family") or []) + palliative_stale_inputs
+        )
+    palliative_capture_contract = {
+        "palliative_required_fields": palliative_required_fields,
+        "palliative_missing_inputs": palliative_missing_inputs,
+        "palliative_stale_inputs": palliative_stale_inputs,
+        "palliative_trigger_status": palliative_trigger_status,
+        "care_mode": str(palliative_transition_bundle.get("care_mode") or "observe"),
+        "palliative_capture_block": {
+            "title": "Completar bundle paliativo activo",
+            "summary": str(
+                palliative_transition_bundle.get("trigger_status_label")
+                or palliative_monitoring_package.get("monitoring_focus")
+                or "Completar sintomas, seguridad opioide y urgencias oncologicas."
+            ),
+            "fields": palliative_missing_inputs or palliative_stale_inputs or palliative_required_fields,
+            "capture_target": "followup",
+            "focus": "palliative_support",
+            "trigger_status": palliative_trigger_status,
+            "care_mode": str(palliative_transition_bundle.get("care_mode") or "observe"),
+            "recommended_cadence": str(palliative_monitoring_package.get("recommended_cadence") or ""),
+        },
+        "goals_of_care_capture_block": {
+            "title": "Completar objetivos de cuidado",
+            "summary": "Documenta voluntades anticipadas, representante y preferencia por confort cuando el carril paliativo ya influye la conducta.",
+            "fields": [
+                field
+                for field in PALLIATIVE_GOALS_FIELDS
+                if field in set(palliative_required_fields)
+            ],
+            "capture_target": "followup",
+            "focus": "goals_of_care",
+            "care_mode": str(palliative_transition_bundle.get("care_mode") or "observe"),
+        },
+    }
+
+    survivorship_transition_bundle = build_survivorship_transition_bundle(
+        patient,
+        state=current_state,
+        management_track=current_track,
+        latest_assessment=latest_assessment,
+        field_values=field_values,
+    )
+    survivorship_monitoring_package = build_survivorship_monitoring_package(
+        patient,
+        state=current_state,
+        management_track=current_track,
+        latest_assessment=latest_assessment,
+        field_values=field_values,
+        transition_bundle=survivorship_transition_bundle,
+    )
+    survivorship_required_fields = _dedupe(list(survivorship_transition_bundle.get("required_visit_fields") or []))
+    survivorship_missing_inputs = _dedupe(list(survivorship_transition_bundle.get("missing_inputs") or []))
+    survivorship_stale_inputs = _dedupe(list(survivorship_transition_bundle.get("stale_inputs") or []))
+    survivorship_trigger_status = str(survivorship_transition_bundle.get("trigger_status") or "observe")
+    survivorship_capture_fields = (
+        survivorship_missing_inputs or survivorship_stale_inputs or survivorship_required_fields
+    )
+    survivorship_domains = ["survivorship", "late_effects", "toxicity_recovery"]
+    if survivorship_required_fields and survivorship_trigger_status == "reenter_oncologic_decision":
+        add_fields(
+            survivorship_capture_fields,
+            bucket="decision_blocking_inputs",
+            why="La secuela dominante ya puede cambiar elegibilidad o conducta oncológica y debe cerrarse antes de sostener la recomendación visible.",
+            domains=survivorship_domains,
+        )
+        required_to_recalculate.extend(survivorship_capture_fields)
+        decision_domains_blocked.extend(survivorship_domains)
+        why_these_fields_now.append(
+            "La toxicidad o secuela tardía actual puede reabrir la decisión oncológica y exige captura estructurada."
+        )
+    elif survivorship_required_fields and survivorship_trigger_status not in {"", "observe"}:
+        add_fields(
+            survivorship_capture_fields,
+            bucket="supportive_gaps",
+            why="El carril de survivorship activo requiere cerrar secuelas tardías, recuperación funcional y prevención secundaria con captura estructurada.",
+            domains=survivorship_domains,
+        )
+        why_these_fields_now.append(
+            "Hoy la visita está dominada por toxicidad, secuelas tardías o rehabilitación, no solo por la vigilancia tumoral."
+        )
+    if survivorship_required_fields:
+        family_missing_inputs["survivorship_followup_family"] = _dedupe(
+            list(family_missing_inputs.get("survivorship_followup_family") or []) + survivorship_missing_inputs
+        )
+        family_stale_inputs["survivorship_followup_family"] = _dedupe(
+            list(family_stale_inputs.get("survivorship_followup_family") or []) + survivorship_stale_inputs
+        )
+    survivorship_capture_contract = {
+        "survivorship_required_fields": survivorship_required_fields,
+        "survivorship_missing_inputs": survivorship_missing_inputs,
+        "survivorship_stale_inputs": survivorship_stale_inputs,
+        "survivorship_trigger_status": survivorship_trigger_status,
+        "late_effect_domain_blocks": list(survivorship_transition_bundle.get("late_effect_domain_blocks") or []),
+        "survivorship_capture_block": {
+            "title": "Completar survivorship y toxicidad activa",
+            "summary": str(
+                survivorship_transition_bundle.get("trigger_status_label")
+                or survivorship_monitoring_package.get("recommended_cadence")
+                or "Completar secuelas tardías, recuperación funcional y prevención secundaria."
+            ),
+            "fields": survivorship_capture_fields,
+            "capture_target": "followup",
+            "focus": str(survivorship_transition_bundle.get("survivorship_track") or "survivorship_followup"),
+            "recommended_cadence": str(survivorship_monitoring_package.get("recommended_cadence") or ""),
+        },
+    }
 
     return {
-        "available": bool(hard_blocking_inputs or decision_blocking_inputs or optional_context_inputs or supportive_gaps),
+        "available": bool(hard_blocking_inputs or decision_blocking_inputs or optional_context_inputs or supportive_gaps or palliative_required_fields or survivorship_required_fields),
         "effective_state": current_state,
         "effective_management_track": current_track,
         "blocking_inputs": missing_blocking,
@@ -583,6 +1256,52 @@ def build_decision_input_requirements(
         "decision_domains_blocked": _dedupe(decision_domains_blocked),
         "why_these_fields_now": [item for item in _dedupe(why_these_fields_now) if item],
         "ready_inputs": present_blocking,
+        "docetaxel_verification_status": str(docetaxel_bundle.get("docetaxel_verification_status") or ""),
+        "docetaxel_required_now": bool(docetaxel_bundle.get("docetaxel_required_now")),
+        "docetaxel_missing_inputs": _dedupe(list(docetaxel_bundle.get("docetaxel_missing_inputs") or [])),
+        "docetaxel_stale_inputs": _dedupe(list(docetaxel_bundle.get("docetaxel_stale_inputs") or [])),
+        "docetaxel_lab_snapshot": dict(docetaxel_bundle.get("docetaxel_lab_snapshot") or {}),
+        "candidate_regimens_under_consideration": _dedupe(candidate_regimens_under_consideration),
+        "candidate_families_under_consideration": _dedupe(
+            [
+                regimen_family_code(item, fallback="observation_family")
+                for item in candidate_regimens_under_consideration
+            ]
+        ),
+        "regimen_specific_blocks": regimen_specific_blocks,
+        "selection_safety_profile": selection_safety_profile,
+        "arpi_required_fields": list(arpi_capture_contract.get("arpi_required_fields") or []),
+        "arpi_missing_inputs": list(arpi_capture_contract.get("arpi_missing_inputs") or []),
+        "arpi_stale_inputs": list(arpi_capture_contract.get("arpi_stale_inputs") or []),
+        "arpi_profile_completeness": str(arpi_capture_contract.get("arpi_profile_completeness") or "not_applicable"),
+        "arpi_preference_readiness": str(arpi_capture_contract.get("arpi_preference_readiness") or "not_applicable"),
+        "post_rt_required_fields": list(post_rt_capture_contract.get("post_rt_required_fields") or []),
+        "post_rt_missing_inputs": list(post_rt_capture_contract.get("post_rt_missing_inputs") or []),
+        "palliative_required_fields": list(palliative_capture_contract.get("palliative_required_fields") or []),
+        "palliative_missing_inputs": list(palliative_capture_contract.get("palliative_missing_inputs") or []),
+        "palliative_stale_inputs": list(palliative_capture_contract.get("palliative_stale_inputs") or []),
+        "palliative_capture_block": dict(palliative_capture_contract.get("palliative_capture_block") or {}),
+        "goals_of_care_capture_block": dict(palliative_capture_contract.get("goals_of_care_capture_block") or {}),
+        "survivorship_required_fields": list(survivorship_capture_contract.get("survivorship_required_fields") or []),
+        "survivorship_missing_inputs": list(survivorship_capture_contract.get("survivorship_missing_inputs") or []),
+        "survivorship_capture_block": dict(survivorship_capture_contract.get("survivorship_capture_block") or {}),
+        "late_effect_domain_blocks": list(survivorship_capture_contract.get("late_effect_domain_blocks") or []),
+        "post_rt_confirmation_block": dict(post_rt_capture_contract.get("post_rt_confirmation_block") or {}),
+        "post_rt_local_salvage_block": dict(post_rt_capture_contract.get("post_rt_local_salvage_block") or {}),
+        "family_missing_inputs": family_missing_inputs,
+        "family_stale_inputs": family_stale_inputs,
+        "monitoring_required_fields": monitoring_required_fields,
+        "monitoring_capture_block": {
+            "title": monitoring_capture_title,
+            "summary": monitoring_capture_summary,
+            "fields": monitoring_required_fields,
+            "capture_target": "followup",
+            "focus": str(active_monitoring_package.get("monitoring_focus") or ""),
+            "family_code": active_family_code,
+            "active_regimen_code": active_regimen_code,
+            "recommended_cadence": str(active_monitoring_package.get("recommended_cadence") or ""),
+            "trigger_status": trigger_status,
+        },
         "headline": headline,
         "blocking_input_descriptors": filtered_descriptors,
         "capture_block": {

@@ -63,6 +63,7 @@ METASTATIC_PROFILE_FIELD_NAMES = (
     "nonregional_nodal_metastasis_present",
     "nonregional_nodal_count",
     "nonregional_nodal_sites",
+    "nonregional_nodal_site_entries",
     "bone_metastasis_present",
     "bone_axial_count",
     "bone_appendicular_count",
@@ -76,6 +77,8 @@ METASTATIC_PROFILE_FIELD_NAMES = (
     "metastasis_volume_context",
     "m_substage_resolved",
     "metastatic_profile_json",
+    "bone_site_entries",
+    "visceral_site_entries",
     "visceral_other_label",
     "nonregional_nodal_other_label",
 ) + NONREGIONAL_NODAL_COUNT_FIELDS + BONE_COUNT_FIELDS + VISCERAL_COUNT_FIELDS
@@ -131,17 +134,87 @@ def _summarize_sites(entries: list[dict[str, Any]]) -> str:
     return ", ".join(parts)
 
 
+def _normalize_site_key(value: Any) -> str:
+    return str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
+
+
+def _normalize_dynamic_site_entries(
+    value: Any,
+    *,
+    labels: dict[str, str],
+    source: str = "",
+    date: str = "",
+) -> tuple[dict[str, int], list[dict[str, Any]]]:
+    if value in (None, "", []):
+        return {}, []
+    raw_entries = value
+    if isinstance(value, str):
+        raw_entries = _parse_json_blob(value, [])
+    if not isinstance(raw_entries, list):
+        return {}, []
+
+    counts: dict[str, int] = {}
+    entry_totals: dict[tuple[str, str], dict[str, Any]] = {}
+    for item in raw_entries:
+        if not isinstance(item, dict):
+            continue
+        site_key = _normalize_site_key(item.get("site_key") or item.get("site") or item.get("location"))
+        if site_key not in labels:
+            continue
+        lesion_count = _safe_int(item.get("lesion_count"), 0)
+        if lesion_count <= 0:
+            continue
+        counts[site_key] = counts.get(site_key, 0) + lesion_count
+        label_override = ""
+        if site_key == "other":
+            label_override = str(
+                item.get("other_label")
+                or item.get("label_override")
+                or item.get("custom_label")
+                or ""
+            ).strip()
+        label = label_override or labels.get(site_key, site_key)
+        entry_key = (site_key, label.lower())
+        bucket = entry_totals.setdefault(
+            entry_key,
+            {
+                "site": site_key,
+                "label": label,
+                "lesion_count": 0,
+                "source": source,
+                "date": date,
+            },
+        )
+        bucket["lesion_count"] += lesion_count
+    return counts, list(entry_totals.values())
+
+
+def _resolved_count(
+    data: dict[str, Any],
+    prefix: str,
+    key: str,
+    *,
+    dynamic_counts: dict[str, int] | None = None,
+) -> int:
+    explicit = _safe_int(data.get(f"{prefix}_{key}_count"), 0)
+    if explicit > 0:
+        return explicit
+    if dynamic_counts:
+        return _safe_int(dynamic_counts.get(key), 0)
+    return 0
+
+
 def _site_entries_from_counts(
     data: dict[str, Any],
     prefix: str,
     labels: dict[str, str],
     *,
     other_label_field: str | None = None,
+    dynamic_counts: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     for key, default_label in labels.items():
-        field_name = f"{prefix}_{key}_count"
-        count = _safe_int(data.get(field_name), 0)
+        count = _resolved_count(data, prefix, key, dynamic_counts=dynamic_counts)
         if count <= 0:
             continue
         label = default_label
@@ -181,19 +254,45 @@ def build_metastatic_profile(data: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(existing, dict):
         existing = {}
 
+    bone_site_dynamic_counts, bone_site_dynamic_entries = _normalize_dynamic_site_entries(
+        data.get("bone_site_entries"),
+        labels=BONE_SITE_LABELS,
+        source=str(data.get("metastasis_document_source") or ""),
+        date=str(data.get("metastasis_assessment_date") or data.get("visit_date") or data.get("study_date") or ""),
+    )
+    visceral_site_dynamic_counts, visceral_site_dynamic_entries = _normalize_dynamic_site_entries(
+        data.get("visceral_site_entries"),
+        labels=VISCERAL_SITE_LABELS,
+        source=str(data.get("metastasis_document_source") or ""),
+        date=str(data.get("metastasis_assessment_date") or data.get("visit_date") or data.get("study_date") or ""),
+    )
+    nodal_site_dynamic_counts, nodal_site_dynamic_entries = _normalize_dynamic_site_entries(
+        data.get("nonregional_nodal_site_entries"),
+        labels=NONREGIONAL_NODAL_SITE_LABELS,
+        source=str(data.get("metastasis_document_source") or ""),
+        date=str(data.get("metastasis_assessment_date") or data.get("visit_date") or data.get("study_date") or ""),
+    )
+
     nodal_sites = _site_entries_from_counts(
         data,
         "nonregional_nodal",
         NONREGIONAL_NODAL_SITE_LABELS,
         other_label_field="nonregional_nodal_other_label",
-    ) or list(existing.get("nonregional_nodal_sites") or [])
-    bone_sites = _site_entries_from_counts(data, "bone", BONE_SITE_LABELS) or list(existing.get("bone_sites") or [])
+        dynamic_counts=nodal_site_dynamic_counts,
+    ) or nodal_site_dynamic_entries or list(existing.get("nonregional_nodal_sites") or [])
+    bone_sites = _site_entries_from_counts(
+        data,
+        "bone",
+        BONE_SITE_LABELS,
+        dynamic_counts=bone_site_dynamic_counts,
+    ) or bone_site_dynamic_entries or list(existing.get("bone_sites") or [])
     visceral_sites = _site_entries_from_counts(
         data,
         "visceral",
         VISCERAL_SITE_LABELS,
         other_label_field="visceral_other_label",
-    ) or list(existing.get("visceral_sites") or [])
+        dynamic_counts=visceral_site_dynamic_counts,
+    ) or visceral_site_dynamic_entries or list(existing.get("visceral_sites") or [])
 
     legacy_site, legacy_count = _legacy_m_site(data)
 
@@ -201,7 +300,7 @@ def build_metastatic_profile(data: dict[str, Any] | None) -> dict[str, Any]:
         _safe_int(item.get("lesion_count"), 0) for item in nodal_sites
     )
     bone_axial_count = _safe_int(data.get("bone_axial_count"), 0) or sum(
-        _safe_int(data.get(f"bone_{key}_count"), 0) for key in AXIAL_BONE_SITE_KEYS
+        _resolved_count(data, "bone", key, dynamic_counts=bone_site_dynamic_counts) for key in AXIAL_BONE_SITE_KEYS
     )
     if bone_axial_count <= 0:
         bone_axial_count = sum(
@@ -210,7 +309,7 @@ def build_metastatic_profile(data: dict[str, Any] | None) -> dict[str, Any]:
             if item.get("site") in AXIAL_BONE_SITE_KEYS
         )
     bone_appendicular_count = _safe_int(data.get("bone_appendicular_count"), 0) or sum(
-        _safe_int(data.get(f"bone_{key}_count"), 0) for key in APPENDICULAR_BONE_SITE_KEYS
+        _resolved_count(data, "bone", key, dynamic_counts=bone_site_dynamic_counts) for key in APPENDICULAR_BONE_SITE_KEYS
     )
     if bone_appendicular_count <= 0:
         bone_appendicular_count = sum(
@@ -276,15 +375,12 @@ def build_metastatic_profile(data: dict[str, Any] | None) -> dict[str, Any]:
     else:
         legacy_metastasis_site = "M0"
 
-    volume_context = str(data.get("metastasis_volume_context") or data.get("volume_disease") or "").strip()
-    if not volume_context:
-        volume_context = "High" if visceral_present or total_count >= 4 else ("Low" if m_substage.startswith("M1") else "")
-
     profile = {
         "m_substage_resolved": m_substage,
         "regional_nodal_metastasis_present": _is_truthy(data.get("regional_nodal_metastasis_present")),
         "nonregional_nodal_metastasis_present": nonregional_nodal_present,
         "nonregional_nodal_sites": nodal_sites,
+        "nonregional_nodal_site_entries": nodal_sites,
         "nonregional_nodal_count": nonregional_nodal_count,
         "bone_metastasis_present": bone_present,
         "bone_axial_count": bone_axial_count,
@@ -292,11 +388,12 @@ def build_metastatic_profile(data: dict[str, Any] | None) -> dict[str, Any]:
         "bone_sites": bone_sites,
         "visceral_metastasis_present": visceral_present,
         "visceral_sites": visceral_sites,
+        "visceral_site_entries": visceral_sites,
         "visceral_lesion_count": visceral_lesion_count,
         "metastatic_total_lesion_count": total_count,
         "metastasis_assessment_date": data.get("metastasis_assessment_date") or data.get("visit_date") or data.get("study_date") or existing.get("metastasis_assessment_date") or "",
         "metastasis_document_source": data.get("metastasis_document_source") or existing.get("metastasis_document_source") or "",
-        "metastasis_volume_context": volume_context,
+        "bone_site_entries": bone_sites,
         "metastatic_truth_status": truth_status,
         "legacy_metastasis_site": legacy_metastasis_site,
         "legacy_metastasis_count": total_count,
@@ -306,6 +403,21 @@ def build_metastatic_profile(data: dict[str, Any] | None) -> dict[str, Any]:
             "visceral": _summarize_sites(visceral_sites),
         },
     }
+    profile["metastatic_components"] = [
+        component
+        for component, present in (
+            ("nodes", nonregional_nodal_present),
+            ("bone", bone_present),
+            ("visceral", visceral_present),
+        )
+        if present
+    ]
+    profile["metastatic_component_count"] = len(profile["metastatic_components"])
+    profile["has_mixed_metastatic_sites"] = profile["metastatic_component_count"] > 1
+    burden_context = _derive_mhspc_burden_context_from_profile(profile, data)
+    profile["metastasis_volume_context"] = burden_context.get("volume_disease", "")
+    profile["metastatic_volume_reason"] = burden_context.get("volume_reason", "")
+    profile["oligometastatic_operational"] = burden_context.get("oligometastatic_operational", False)
     profile["metastatic_burden_summary"] = summarize_metastatic_profile(profile)
     return profile
 
@@ -342,6 +454,90 @@ def summarize_metastatic_profile(profile: dict[str, Any] | None) -> str:
     return " · ".join(parts)
 
 
+def build_metastatic_composition_summary(data: dict[str, Any] | None) -> dict[str, Any]:
+    profile = build_metastatic_profile(data)
+    burden = _derive_mhspc_burden_context_from_profile(profile, data or {})
+    m_substage = str(profile.get("m_substage_resolved") or "M0")
+    if m_substage == "M0":
+        return {
+            "available": False,
+            "summary": "",
+            "narrative": "",
+            "metastatic_profile_summary": "",
+            "m_substage_resolved": "M0",
+            "volume_disease": "unknown",
+            "volume_reason": "",
+            "metastatic_components": [],
+            "has_mixed_metastatic_sites": False,
+            "bone_present": False,
+            "visceral_present": False,
+            "nonregional_nodal_present": False,
+            "bone_distribution_summary": "",
+            "visceral_distribution_summary": "",
+            "supportive_implications": [],
+        }
+
+    summary = str(burden.get("metastatic_profile_summary") or summarize_metastatic_profile(profile))
+    mixed = bool(burden.get("has_mixed_metastatic_sites"))
+    bone_present = bool(burden.get("bone_present"))
+    visceral_present = bool(burden.get("visceral_present"))
+    nonregional_nodal_present = bool(burden.get("nonregional_nodal_present"))
+    volume_disease = str(burden.get("volume_disease") or "unknown")
+    volume_label = {
+        "high": "alto volumen",
+        "low": "bajo volumen",
+        "unknown": "volumen no resuelto",
+    }.get(volume_disease, volume_disease or "volumen no resuelto")
+
+    if mixed:
+        composition_label = "Enfermedad metastásica mixta"
+    elif visceral_present:
+        composition_label = "Enfermedad metastásica visceral"
+    elif bone_present:
+        composition_label = "Enfermedad metastásica ósea"
+    elif nonregional_nodal_present:
+        composition_label = "Enfermedad metastásica ganglionar no regional"
+    else:
+        composition_label = "Enfermedad metastásica a distancia"
+
+    supportive_implications: list[str] = []
+    if visceral_present:
+        supportive_implications.append("El componente visceral mantiene un fenotipo sistémico de alto volumen.")
+    if bone_present:
+        supportive_implications.append("Mantener bundle óseo visible y vigilancia de eventos esqueléticos.")
+    if mixed:
+        supportive_implications.append("La composición mixta no debe colapsarse a un único sitio metastásico en la narrativa ni en la decisión clínica.")
+    elif nonregional_nodal_present and not (visceral_present or bone_present):
+        supportive_implications.append("La enfermedad ganglionar no regional aislada sigue siendo metastásica, pero no cumple por sí sola criterio anatómico de alto volumen.")
+
+    narrative = f"{composition_label} de {volume_label} ({m_substage}) con {summary}."
+    volume_reason = str(burden.get("volume_reason") or "").strip()
+    if volume_reason:
+        narrative = f"{narrative} {volume_reason}"
+    if bone_present and visceral_present:
+        narrative = f"{narrative} Mantener visibles tanto la intensificación sistémica como el bundle óseo."
+    elif bone_present:
+        narrative = f"{narrative} Mantener bundle óseo visible durante el seguimiento."
+
+    return {
+        "available": True,
+        "summary": summary,
+        "narrative": narrative.strip(),
+        "metastatic_profile_summary": summary,
+        "m_substage_resolved": m_substage,
+        "volume_disease": volume_disease,
+        "volume_reason": volume_reason,
+        "metastatic_components": list(burden.get("metastatic_components") or []),
+        "has_mixed_metastatic_sites": mixed,
+        "bone_present": bone_present,
+        "visceral_present": visceral_present,
+        "nonregional_nodal_present": nonregional_nodal_present,
+        "bone_distribution_summary": str(burden.get("bone_distribution_summary") or ""),
+        "visceral_distribution_summary": str(burden.get("visceral_distribution_summary") or ""),
+        "supportive_implications": supportive_implications,
+    }
+
+
 def derive_legacy_metastasis(data: dict[str, Any] | None) -> tuple[str, int, str]:
     profile = build_metastatic_profile(data)
     return (
@@ -351,24 +547,93 @@ def derive_legacy_metastasis(data: dict[str, Any] | None) -> tuple[str, int, str
     )
 
 
-def derive_mhspc_volume_context(data: dict[str, Any] | None) -> str:
+def _derive_mhspc_burden_context_from_profile(profile: dict[str, Any], data: dict[str, Any] | None = None) -> dict[str, Any]:
     data = data or {}
-    explicit = str(data.get("volume_disease") or "").strip().lower()
-    if explicit in {"high", "low"}:
-        return explicit
-
-    profile = build_metastatic_profile(data)
-    profile_volume = str(profile.get("metastasis_volume_context") or "").strip().lower()
-    if profile_volume in {"high", "low"}:
-        return profile_volume
-
     m_substage = str(profile.get("m_substage_resolved") or "M0").upper()
-    total_bone = _safe_int(profile.get("bone_axial_count"), 0) + _safe_int(profile.get("bone_appendicular_count"), 0)
-    total_lesions = _safe_int(profile.get("metastatic_total_lesion_count"), 0)
-    if m_substage == "M1C":
-        return "high"
-    if total_bone >= 4:
-        return "high"
-    if m_substage in {"M1A", "M1B"} and total_lesions > 0:
-        return "low"
-    return "unknown"
+    legacy_site = str(profile.get("legacy_metastasis_site") or "M0")
+    metastatic_total = _safe_int(profile.get("metastatic_total_lesion_count"), 0)
+    bone_axial = _safe_int(profile.get("bone_axial_count"), 0)
+    bone_appendicular = _safe_int(profile.get("bone_appendicular_count"), 0)
+    total_bone = bone_axial + bone_appendicular
+    visceral_present = bool(profile.get("visceral_metastasis_present"))
+    explicit_volume = str(data.get("volume_disease") or "").strip().lower()
+    volume_disease = "unknown"
+    volume_reason = ""
+    volume_source = "derived"
+
+    if visceral_present or m_substage == "M1C":
+        volume_disease = "high"
+        volume_reason = "Alto volumen por metástasis viscerales documentadas."
+    elif total_bone >= 4 and bone_appendicular >= 1:
+        volume_disease = "high"
+        volume_reason = f"Alto volumen por {total_bone} lesiones óseas con al menos una en esqueleto apendicular."
+    elif total_bone >= 4 and bone_axial >= 4 and bone_appendicular == 0:
+        volume_disease = "low"
+        volume_reason = f"Bajo volumen porque las {total_bone} lesiones óseas documentadas permanecen confinadas al esqueleto axial."
+    elif m_substage in {"M1A", "M1B"} and metastatic_total > 0:
+        volume_disease = "low"
+        if total_bone > 0:
+            volume_reason = f"Bajo volumen por enfermedad ósea sin criterio anatómico de alto volumen ({total_bone} lesiones; apendicular {bone_appendicular})."
+        else:
+            volume_reason = "Bajo volumen por enfermedad metastásica sin criterio anatómico de alto volumen."
+    elif explicit_volume in {"high", "low"}:
+        volume_disease = explicit_volume
+        volume_source = "legacy_explicit"
+        volume_reason = (
+            "Se conserva el volumen legado explícito ante distribución anatómica incompleta."
+            if metastatic_total > 0
+            else "Volumen legado explícito conservado por compatibilidad."
+        )
+    elif legacy_site == "Visceral":
+        volume_disease = "high"
+        volume_source = "legacy_coarse"
+        volume_reason = "Alto volumen por metástasis viscerales registradas en contexto legado."
+    elif legacy_site in {"Bone", "Node", "M1"} and metastatic_total > 0:
+        volume_disease = "low"
+        volume_source = "legacy_coarse"
+        volume_reason = "Carga metastásica registrada sin distribución anatómica completa; se conserva clasificación operativa de bajo volumen."
+
+    return {
+        "metastasis_count": metastatic_total,
+        "bone_axial_count": bone_axial,
+        "bone_appendicular_count": bone_appendicular,
+        "m_substage_resolved": m_substage,
+        "volume_disease": volume_disease,
+        "volume_reason": volume_reason,
+        "volume_source": volume_source,
+        "oligometastatic_operational": (
+            metastatic_total > 0
+            and metastatic_total <= 5
+            and not visceral_present
+            and volume_disease != "high"
+        ),
+        "legacy_metastasis_site": legacy_site,
+        "bone_present": bool(profile.get("bone_metastasis_present")),
+        "visceral_present": visceral_present,
+        "nonregional_nodal_present": bool(profile.get("nonregional_nodal_metastasis_present")),
+        "has_mixed_metastatic_sites": bool(profile.get("has_mixed_metastatic_sites")),
+        "metastatic_components": list(profile.get("metastatic_components") or []),
+        "metastatic_profile_summary": str(profile.get("metastatic_burden_summary") or summarize_metastatic_profile(profile)),
+        "nodal_distribution_summary": str(((profile.get("metastatic_site_summary") or {}).get("nonregional_nodes")) or ""),
+        "bone_distribution_summary": str(((profile.get("metastatic_site_summary") or {}).get("bone")) or ""),
+        "visceral_distribution_summary": str(((profile.get("metastatic_site_summary") or {}).get("visceral")) or ""),
+        "nonregional_nodal_sites": list(profile.get("nonregional_nodal_sites") or []),
+        "visceral_sites": list(profile.get("visceral_sites") or []),
+    }
+
+
+def derive_mhspc_burden_context(data: dict[str, Any] | None) -> dict[str, Any]:
+    profile = build_metastatic_profile(data)
+    return _derive_mhspc_burden_context_from_profile(profile, data or {})
+
+
+def derive_mhspc_volume_context(data: dict[str, Any] | None) -> str:
+    return str(derive_mhspc_burden_context(data).get("volume_disease") or "unknown")
+
+
+def has_bone_metastatic_component(data: dict[str, Any] | None) -> bool:
+    return bool(build_metastatic_profile(data).get("bone_metastasis_present"))
+
+
+def has_visceral_metastatic_component(data: dict[str, Any] | None) -> bool:
+    return bool(build_metastatic_profile(data).get("visceral_metastasis_present"))

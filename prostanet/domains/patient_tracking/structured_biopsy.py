@@ -18,6 +18,8 @@ import logging
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from prostanet.shared.gleason_profile import derive_gleason_score, derive_isup_grade
+
 logger = logging.getLogger(__name__)
 
 # ── Constantes anatómicas ────────────────────────────────────────────────────
@@ -126,26 +128,6 @@ def _safe_float(value: Any) -> float | None:
         return None
 
 
-def _gleason_sum(primary: int | None, secondary: int | None) -> int | None:
-    if primary is not None and secondary is not None:
-        return primary + secondary
-    return None
-
-
-def _isup_from_gleason(primary: int | None, secondary: int | None) -> int | None:
-    """Deriva ISUP Grade Group desde Gleason primary + secondary."""
-    if primary is None or secondary is None:
-        return None
-    total = primary + secondary
-    if total <= 6:
-        return 1
-    if total == 7:
-        return 2 if primary == 3 else 3
-    if total == 8:
-        return 4
-    return 5  # total >= 9
-
-
 # ── Servicio principal ───────────────────────────────────────────────────────
 
 class StructuredBiopsyService:
@@ -158,7 +140,7 @@ class StructuredBiopsyService:
         location = data.get("location_sextant", data.get("location", ""))
         gleason_p = _safe_int(data.get("gleason_primary"))
         gleason_s = _safe_int(data.get("gleason_secondary"))
-        isup = _safe_int(data.get("isup_grade")) or _isup_from_gleason(gleason_p, gleason_s)
+        isup = _safe_int(data.get("isup_grade")) or derive_isup_grade(gleason_p, gleason_s)
         positive = data.get("positive", False)
         if isinstance(positive, str):
             positive = positive.lower() in ("true", "1", "si", "sí", "yes", "positivo")
@@ -217,7 +199,7 @@ class StructuredBiopsyService:
 
         # Gleason / ISUP más alto
         gleason_sums = [
-            _gleason_sum(c.gleason_primary, c.gleason_secondary)
+            derive_gleason_score(c.gleason_primary, c.gleason_secondary)
             for c in all_cores if c.positive
         ]
         result.highest_gleason_sum = max((g for g in gleason_sums if g is not None), default=None)

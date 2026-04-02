@@ -4,11 +4,11 @@ from typing import Any
 
 
 def classify_nccn(payload: dict[str, Any]) -> dict[str, Any]:
-    tstage = str(payload.get("clinical_tstage", "T2a")).upper()
-    gg = int(payload.get("isup_grade", 1))
-    psa = float(payload.get("psa", 0) or 0)
-    n_pos = int(payload.get("num_cores_positive", 0) or 0)
-    total_cores = max(int(payload.get("total_cores", 12) or 12), 1)
+    tstage = str(payload.get("clinical_tstage") or "T2a").upper()
+    gg = int(payload.get("isup_grade") or 1)
+    psa = float(payload.get("psa") or 0)
+    n_pos = int(payload.get("num_cores_positive") or 0)
+    total_cores = max(int(payload.get("total_cores") or 12), 1)
     pct = payload.get("pct_cores_positive")
     if pct in (None, ""):
         pct = n_pos / total_cores
@@ -75,21 +75,21 @@ def classify_nccn(payload: dict[str, Any]) -> dict[str, Any]:
             "label": "Favorable Intermediate",
             "risk_group": "FAVORABLE INTERMEDIATE",
             "reasons": ["Single intermediate-risk factor, GG1-2, and <50% positive cores."],
-            "recommendation": "Observation or definitive local therapy; AS only in carefully selected patients with >10-year life expectancy.",
+            "recommendation": "Observación o terapia local definitiva; la vigilancia activa solo debe plantearse en pacientes cuidadosamente seleccionados con esperanza de vida mayor de 10 años.",
         }
 
     return {
         "label": "Low",
         "risk_group": "LOW",
         "reasons": ["cT1-T2a, GG1, PSA <10 without higher-risk features."],
-        "recommendation": "Active surveillance is preferred for most men with >=10-year life expectancy; observation if <10 years.",
+        "recommendation": "La vigilancia activa es preferente para la mayoría de los pacientes con esperanza de vida mayor o igual a 10 años; observación si es menor.",
     }
 
 
 def active_surveillance_position(payload: dict[str, Any], nccn_group: str) -> dict[str, Any]:
-    gg = int(payload.get("isup_grade", 1))
-    psad = float(payload.get("psad", 0) or 0)
-    pct = float(payload.get("pct_cores_positive", 0) or 0)
+    gg = int(payload.get("isup_grade") or 1)
+    psad = float(payload.get("psad") or 0)
+    pct = float(payload.get("pct_cores_positive") or 0)
     max_inv = float(payload.get("max_core_involvement", 0) or 0)
     life_expectancy = float(payload.get("life_expectancy_years", 15) or 15)
     percent_pattern_4 = float(payload.get("percent_pattern_4", 0) or 0)

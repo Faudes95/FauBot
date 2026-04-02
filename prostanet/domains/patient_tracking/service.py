@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from typing import Any
 
 from tracking_db import get_patient_full_record
@@ -8,6 +9,9 @@ from tracking_db import get_patient_full_record
 from prostanet.domains.patient_tracking.followup_agenda import (
     LINE_OF_THERAPY_CONTEXT_OPTIONS,
     LINE_OF_THERAPY_NUMBER_OPTIONS,
+)
+from prostanet.domains.patient_tracking.laboratory_intelligence.repository import (
+    lab_reference_range,
 )
 from prostanet.domains.patient_tracking.risk_tools import build_intake_score_requirements
 from prostanet.domains.patient_tracking.therapy_catalog import (
@@ -23,11 +27,33 @@ from prostanet.shared.official_diagnosis import (
     NODAL_STATUS_OPTIONS,
 )
 from prostanet.shared.contracts import FieldSpec, RegistrationFragment
+from prostanet.shared.field_semantics import (
+    CAPTURE_LAYER_METADATA,
+    build_score_semantics,
+    field_capture_layer,
+    field_reuse_key,
+    field_scale_semantics,
+    field_semantics_for,
+    field_when_to_ask,
+)
+from prostanet.shared.gleason_profile import apply_gleason_profile, normalize_gleason_profile
 from prostanet.shared.metastatic_profile import (
     BONE_SITE_LABELS,
     NONREGIONAL_NODAL_SITE_LABELS,
     VISCERAL_SITE_LABELS,
+    AXIAL_BONE_SITE_KEYS,
+    APPENDICULAR_BONE_SITE_KEYS,
+    build_metastatic_composition_summary,
 )
+
+
+def _docetaxel_visibility() -> dict[str, list[str]]:
+    return {
+        "ecog_score": ["", "0", "1", "2"],
+        "peripheral_neuropathy_grade": ["", "0", "1", "2"],
+        "frailty_status": ["", "Fit", "Vulnerable"],
+        "child_pugh_score": ["", "A", "B"],
+    }
 
 
 STATE_SCOPE_MAP = {
@@ -36,6 +62,7 @@ STATE_SCOPE_MAP = {
     "localized_initial": "localized",
     "post_prostatectomy": "postlocal",
     "recurrence_bcr": "postlocal",
+    "post_radiotherapy_or_local_salvage": "postlocal",
     "adt_progression_verification": "advanced",
     "mcspc_oligo_metachronous": "advanced",
     "mcspc_low_volume_sync_oligo": "advanced",
@@ -92,6 +119,7 @@ CANONICAL_FIELD_MAP = {
     "molecular_report_date": "molecular_assay_date",
     "molecular_assay_source": "biomarker_source",
     "castrate_testosterone_confirmed": "castrate_testosterone_status",
+    "positive_cores": "num_cores_positive",
 }
 
 CANONICAL_VALUE_MAPS = {
@@ -116,79 +144,212 @@ CANONICAL_VALUE_MAPS = {
 
 
 def _field(name: str, label: str, field_type: str, **kwargs) -> FieldSpec:
-    return FieldSpec(name=name, label=label, field_type=field_type, **kwargs)
+    semantics = field_semantics_for(name)
+    reference_range = lab_reference_range(name)
+    payload = dict(kwargs)
+    if reference_range:
+        payload.setdefault("reference_range_low", reference_range.get("reference_range_low"))
+        payload.setdefault("reference_range_high", reference_range.get("reference_range_high"))
+        payload.setdefault("reference_range_unit", reference_range.get("reference_range_unit"))
+        payload.setdefault("reference_range_label", reference_range.get("reference_range_label"))
+        payload.setdefault("reference_range_source", reference_range.get("reference_range_source"))
+    return FieldSpec(
+        name=name,
+        label=label,
+        field_type=field_type,
+        reuse_key=payload.pop("reuse_key", semantics["reuse_key"]),
+        capture_layer=payload.pop("capture_layer", semantics["capture_layer"]),
+        when_to_ask=payload.pop("when_to_ask", semantics["when_to_ask"]),
+        scale_descriptor=payload.pop("scale_descriptor", semantics["scale_descriptor"]),
+        score_interpretation=payload.pop("score_interpretation", semantics["score_interpretation"]),
+        **payload,
+    )
+
+
+def _fragment(
+    *,
+    capture_layer: str,
+    when_to_ask: str,
+    collapsed_by_default: bool = False,
+    **kwargs,
+) -> RegistrationFragment:
+    return RegistrationFragment(
+        capture_layer=capture_layer,
+        when_to_ask=when_to_ask,
+        collapsed_by_default=collapsed_by_default,
+        **kwargs,
+    )
+
+
+def _layer_label(layer: str) -> str:
+    return CAPTURE_LAYER_METADATA.get(layer, {}).get("label", layer)
+
+
+def _apply_fragment_semantics(fragment: RegistrationFragment) -> RegistrationFragment:
+    enriched_fields: list[FieldSpec] = []
+    for field in fragment.fields:
+        semantics = field_semantics_for(field.name, optional_research=fragment.optional_research)
+        scale_semantics = field_scale_semantics(field.name)
+        enriched_fields.append(
+            replace(
+                field,
+                reuse_key=field.reuse_key or semantics["reuse_key"],
+                capture_layer=field.capture_layer or semantics["capture_layer"],
+                when_to_ask=field.when_to_ask or semantics["when_to_ask"] or fragment.when_to_ask,
+                scale_descriptor=field.scale_descriptor or scale_semantics.get("scale_descriptor", ""),
+                score_interpretation=field.score_interpretation or scale_semantics.get("score_interpretation", ""),
+            )
+        )
+    return replace(
+        fragment,
+        capture_layer=fragment.capture_layer or field_capture_layer("", optional_research=fragment.optional_research),
+        when_to_ask=fragment.when_to_ask,
+        collapsed_by_default=fragment.collapsed_by_default or fragment.optional_research,
+        fields=enriched_fields,
+    )
+
+
+def _build_capture_layers(fragments: list[RegistrationFragment]) -> list[dict[str, Any]]:
+    ordered_layers = ["core_minimum", "scenario_refiners", "safety_eligibility", "research_optional"]
+    sections: list[dict[str, Any]] = []
+    for layer in ordered_layers:
+        layer_fragments = [fragment for fragment in fragments if fragment.capture_layer == layer]
+        if not layer_fragments:
+            continue
+        layer_meta = CAPTURE_LAYER_METADATA.get(layer, {})
+        sections.append(
+            {
+                "id": layer,
+                "label": layer_meta.get("label", layer),
+                "description": layer_meta.get("description", ""),
+                "collapsed_by_default": layer == "research_optional",
+                "fragment_ids": [fragment.id for fragment in layer_fragments],
+            }
+        )
+    return sections
+
+
+def _dedupe_registration_fragments(
+    fragments: list[RegistrationFragment],
+    imported_fields: list[dict[str, Any]],
+) -> tuple[list[RegistrationFragment], list[dict[str, Any]]]:
+    seen_keys = {field_reuse_key(item.get("reuse_key") or item.get("name", "")) for item in imported_fields}
+    deduped_fragments: list[RegistrationFragment] = []
+    visible_fields: list[dict[str, Any]] = []
+
+    for fragment in fragments:
+        kept_fields: list[FieldSpec] = []
+        for field in fragment.fields:
+            reuse_key = field.reuse_key or field.name
+            if reuse_key in seen_keys:
+                continue
+            seen_keys.add(reuse_key)
+            kept_fields.append(field)
+            visible_fields.append(
+                {
+                    "name": field.name,
+                    "label": field.label,
+                    "reuse_key": reuse_key,
+                    "capture_layer": field.capture_layer,
+                    "capture_layer_label": _layer_label(field.capture_layer),
+                    "clinical_role": field.clinical_role,
+                }
+            )
+        if kept_fields or fragment.optional_research:
+            deduped_fragments.append(replace(fragment, fields=kept_fields))
+    return deduped_fragments, visible_fields
+
+
+def _filter_score_requirements_for_visible_fields(
+    score_requirements: dict[str, Any],
+    *,
+    visible_fields: list[dict[str, Any]],
+    imported_fields: list[dict[str, Any]],
+) -> dict[str, Any]:
+    visible_names = {field.get("name") for field in visible_fields}
+    visible_reuse_keys = {field.get("reuse_key") for field in visible_fields}
+    imported_names = {field.get("name") for field in imported_fields}
+    imported_reuse_keys = {field.get("reuse_key") for field in imported_fields}
+    filtered_missing: list[dict[str, Any]] = []
+    for item in score_requirements.get("score_missing_inputs", []):
+        reuse_key = field_reuse_key(item.get("name", ""))
+        if item.get("name") in visible_names or item.get("name") in imported_names:
+            continue
+        if reuse_key in visible_reuse_keys or reuse_key in imported_reuse_keys:
+            continue
+        filtered_missing.append(item)
+    filtered = deepcopy(score_requirements)
+    filtered["score_missing_inputs"] = filtered_missing
+    return filtered
+
+
+def _field_semantics_registry(
+    *,
+    fragments: list[RegistrationFragment],
+    imported_fields: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    semantics: dict[str, dict[str, Any]] = {}
+    for fragment in fragments:
+        for field in fragment.fields:
+            semantics[field.name] = field_semantics_for(field.name, optional_research=fragment.optional_research)
+    for item in imported_fields:
+        semantics[item["name"]] = field_semantics_for(item["name"])
+    return semantics
 
 
 def _metastatic_intake_fields() -> list[FieldSpec]:
-    fields = [
-        _field("nonregional_nodal_metastasis_present", "Ganglios no regionales presentes", "select", options=["", "0", "1"], default="", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
-        _field("nonregional_nodal_count", "Número de ganglios no regionales", "number", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
-        _field("nonregional_nodal_other_label", "Otro sitio ganglionar no regional", "text", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
+    bone_site_groups = [
+        {
+            "label": "Esqueleto axial",
+            "options": [
+                {"site_key": key, "label": BONE_SITE_LABELS[key]}
+                for key in AXIAL_BONE_SITE_KEYS
+                if key in BONE_SITE_LABELS
+            ],
+        },
+        {
+            "label": "Esqueleto apendicular",
+            "options": [
+                {"site_key": key, "label": BONE_SITE_LABELS[key]}
+                for key in APPENDICULAR_BONE_SITE_KEYS
+                if key in BONE_SITE_LABELS
+            ],
+        },
     ]
-    for key, label in NONREGIONAL_NODAL_SITE_LABELS.items():
-        fields.append(
-            _field(
-                f"nonregional_nodal_{key}_count",
-                f"{label}: número de lesiones",
-                "number",
-                group="Distribución metastásica",
-                group_order=4,
-                clinical_role="decision_refiner",
-                unit="lesiones",
-            )
-        )
-    fields.extend(
-        [
-            _field("bone_metastasis_present", "Metástasis óseas presentes", "select", options=["", "0", "1"], default="", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
-            _field("bone_axial_count", "Número de lesiones en esqueleto axial", "number", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
-            _field("bone_appendicular_count", "Número de lesiones en esqueleto apendicular", "number", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
-        ]
-    )
-    for key, label in BONE_SITE_LABELS.items():
-        fields.append(
-            _field(
-                f"bone_{key}_count",
-                f"{label}: número de lesiones",
-                "number",
-                group="Distribución metastásica",
-                group_order=4,
-                clinical_role="decision_refiner",
-                unit="lesiones",
-            )
-        )
-    fields.extend(
-        [
-            _field("visceral_metastasis_present", "Metástasis viscerales presentes", "select", options=["", "0", "1"], default="", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
-            _field("visceral_lesion_count", "Número total de lesiones viscerales", "number", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
-            _field("visceral_other_label", "Otro órgano visceral", "text", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
-        ]
-    )
-    for key, label in VISCERAL_SITE_LABELS.items():
-        fields.append(
-            _field(
-                f"visceral_{key}_count",
-                f"{label}: número de lesiones",
-                "number",
-                group="Distribución metastásica",
-                group_order=4,
-                clinical_role="decision_refiner",
-                unit="lesiones",
-            )
-        )
-    fields.extend(
-        [
-            _field("metastatic_total_lesion_count", "Número total de lesiones metastásicas", "number", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
-            _field("metastasis_assessment_date", "Fecha de evaluación metastásica", "date", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
-            _field("metastasis_document_source", "Fuente documental de la distribución metastásica", "text", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
-        ]
-    )
-    return fields
+    return [
+        _field(
+            "metastatic_components_capture",
+            "Carga metastásica estructurada",
+            "metastatic_components",
+            group="Distribución metastásica",
+            group_order=4,
+            clinical_role="decision_refiner",
+            help_text="Reutilice la composición anatómica metastásica ya capturada; si el contexto ya está completo, solo verifique o ajuste el delta documentado.",
+            options=[
+                {
+                    "bone_site_groups": bone_site_groups,
+                    "visceral_site_options": [
+                        {"site_key": key, "label": label}
+                        for key, label in VISCERAL_SITE_LABELS.items()
+                    ],
+                    "nonregional_nodal_site_options": [
+                        {"site_key": key, "label": label}
+                        for key, label in NONREGIONAL_NODAL_SITE_LABELS.items()
+                    ],
+                }
+            ],
+        ),
+        _field("metastasis_assessment_date", "Fecha de evaluación metastásica", "date", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
+        _field("metastasis_document_source", "Fuente documental de la distribución metastásica", "text", group="Distribución metastásica", group_order=4, clinical_role="decision_refiner"),
+    ]
 
 
 def _common_fragment() -> RegistrationFragment:
-    return RegistrationFragment(
+    return _fragment(
         id="fragment_common_identity_baseline",
         title="Identidad, laboratorios y línea basal",
+        capture_layer="core_minimum",
+        when_to_ask="Siempre que falten identidad, basal clínico o una serie inicial de APE que cambie la lectura longitudinal.",
         applies_to_states=list(STATE_SCOPE_MAP.keys()),
         persist_targets=["patient_identity", "clinical_baseline"],
         clinical_influence=[
@@ -204,6 +365,15 @@ def _common_fragment() -> RegistrationFragment:
             _field("tobacco_use", "Tabaquismo", "select", options=["", "Nunca", "Exfumador", "Activo"], group="Línea basal clínica", group_order=2, clinical_role="decision_refiner"),
             _field("exercise_status", "Actividad física basal", "select", options=["", "No realiza", "Ligera", "Moderada", "Intensa"], group="Línea basal clínica", group_order=2, clinical_role="decision_refiner"),
             _field("baseline_psa", "Antígeno prostático específico basal (PSA)", "number", group="Laboratorio basal", group_order=2, clinical_role="required", unit="ng/mL"),
+            _field(
+                "psa_history",
+                "Serie longitudinal de APE disponible",
+                "psa_history",
+                group="Laboratorio basal",
+                group_order=2,
+                clinical_role="decision_refiner",
+                help_text="Agregue cero o más mediciones históricas de APE/PSA si ya existen; el sistema conservará el basal canónico y guardará la serie longitudinal.",
+            ),
             _field("testosterone_baseline", "Testosterona basal", "number", group="Laboratorio basal", group_order=2, clinical_role="decision_refiner", unit="ng/dL"),
             _field("hemoglobin", "Hemoglobina", "number", group="Laboratorio basal", group_order=2, clinical_role="decision_refiner", unit="g/dL"),
             _field("alp", "Fosfatasa alcalina", "number", group="Laboratorio basal", group_order=2, clinical_role="decision_refiner", unit="UI/L"),
@@ -230,9 +400,11 @@ def _common_fragment() -> RegistrationFragment:
 
 
 def _official_diagnosis_fragment() -> RegistrationFragment:
-    return RegistrationFragment(
+    return _fragment(
         id="fragment_official_diagnosis",
         title="Diagnóstico oficial y clasificación oncológica",
+        capture_layer="core_minimum",
+        when_to_ask="Siempre que falte el diagnóstico oncológico formal visible en perfil y analítica.",
         applies_to_states=list(STATE_SCOPE_MAP.keys()),
         persist_targets=["clinical_baseline", "biopsy_details"],
         clinical_influence=[
@@ -241,9 +413,15 @@ def _official_diagnosis_fragment() -> RegistrationFragment:
         ],
         fields=[
             _field("histology_subtype", "Subtipo histológico", "select", options=HISTOLOGY_SUBTYPE_OPTIONS, group="Diagnóstico oficial", group_order=1, clinical_role="required"),
-            _field("gleason_primary", "Gleason primario", "select", options=["", "3", "4", "5"], group="Diagnóstico oficial", group_order=1, clinical_role="required"),
-            _field("gleason_secondary", "Gleason secundario", "select", options=["", "3", "4", "5"], group="Diagnóstico oficial", group_order=1, clinical_role="required"),
-            _field("isup_grade", "ISUP / Grade Group", "select", options=["", "1", "2", "3", "4", "5"], group="Diagnóstico oficial", group_order=1, clinical_role="decision_refiner"),
+            _field(
+                "gleason_score",
+                "Perfil Gleason / ISUP",
+                "gleason_profile",
+                group="Diagnóstico oficial",
+                group_order=1,
+                clinical_role="required",
+                help_text="Capture Gleason primario, secundario y patrón terciario si existe. El sistema deriva automáticamente Gleason total e ISUP y los integra al diagnóstico principal.",
+            ),
             _field("clinical_tstage", "T clínico", "select", options=CLINICAL_TSTAGE_OPTIONS, group="TNM clínico", group_order=2, clinical_role="required"),
             _field("nodal_status", "N clínico", "select", options=NODAL_STATUS_OPTIONS, group="TNM clínico", group_order=2, clinical_role="required"),
             _field("clinical_stage_group", "Etapa clínica", "select", options=CLINICAL_STAGE_GROUP_OPTIONS, group="TNM clínico", group_order=2, clinical_role="decision_refiner"),
@@ -253,9 +431,11 @@ def _official_diagnosis_fragment() -> RegistrationFragment:
 
 
 def _diagnostic_fragment() -> RegistrationFragment:
-    return RegistrationFragment(
+    return _fragment(
         id="fragment_diagnostic",
         title="Síntomas y antecedentes familiares longitudinales",
+        capture_layer="scenario_refiners",
+        when_to_ask="Solo en ruta diagnóstica o biopsia benigna previa cuando refine riesgo o rebiopsia.",
         applies_to_states=["diagnostic_workup", "post_negative_biopsy_followup"],
         persist_targets=["patient_demographics", "family_history_detail"],
         clinical_influence=[
@@ -270,9 +450,11 @@ def _diagnostic_fragment() -> RegistrationFragment:
 
 
 def _localized_fragment() -> RegistrationFragment:
-    return RegistrationFragment(
+    return _fragment(
         id="fragment_localized",
         title="PROs y función basal",
+        capture_layer="scenario_refiners",
+        when_to_ask="Solo en enfermedad localizada cuando la función basal cambia la conversación entre vigilancia activa, cirugía o radioterapia.",
         applies_to_states=["localized_initial"],
         persist_targets=["patient_demographics", "patient_pros"],
         clinical_influence=[
@@ -287,9 +469,11 @@ def _localized_fragment() -> RegistrationFragment:
 
 
 def _postlocal_fragment() -> RegistrationFragment:
-    return RegistrationFragment(
+    return _fragment(
         id="fragment_postlocal",
         title="Contexto de imagen y rescate longitudinal",
+        capture_layer="scenario_refiners",
+        when_to_ask="Solo en contexto poslocal o de recurrencia bioquímica cuando cambia rescate, reestadificación o vigilancia.",
         applies_to_states=["post_prostatectomy", "recurrence_bcr"],
         persist_targets=["imaging_studies", "biochemical_recurrence"],
         clinical_influence=[
@@ -297,6 +481,7 @@ def _postlocal_fragment() -> RegistrationFragment:
         ],
         fields=[
             _field("has_bone_scan", "Gammagrama óseo disponible", "select", options=["0", "1"], default="0", group="Imagen complementaria", group_order=1, clinical_role="monitoring"),
+            _field("margin_location", "Localización del margen positivo", "select", options=MARGIN_LOCATION_OPTIONS, default="Ápex", group="Patología posoperatoria", group_order=2, clinical_role="decision_refiner"),
         ],
     )
 
@@ -314,21 +499,24 @@ def _survival_fragment() -> RegistrationFragment:
         "m0_crpc",
         "m1_crpc",
     ]
-    return RegistrationFragment(
+    return _fragment(
         id="fragment_survival_status",
         title="Estado vital y anclas de supervivencia",
+        capture_layer="scenario_refiners",
+        when_to_ask="Solo cuando falten anclas de supervivencia o progresión que afecten seguimiento longitudinal.",
         applies_to_states=applicable_states,
         persist_targets=["survival_status_records", "survival_anchor_events", "patient_identity"],
         clinical_influence=[
             "Cierra la trazabilidad para OS, rPFS, MFS, TTR, TTPP y TTSRE sin romper el longitudinal existente.",
         ],
         fields=[
-            _field("vital_status", "Estado vital", "select", options=["", "alive", "deceased", "lost_to_followup"], group="Estado vital", group_order=1, clinical_role="required"),
+            _field("registrar_defuncion_en_esta_visita", "Registrar defunción en esta visita", "select", options=["0", "1"], default="0", group="Estado vital", group_order=1, clinical_role="decision_refiner"),
             _field("last_contact_date", "Último contacto documentado", "date", group="Estado vital", group_order=1, clinical_role="required"),
             _field("last_contact_status", "Tipo de último contacto", "select", options=["", "clinic_visit", "phone", "lab_result", "imaging", "document_review"], group="Estado vital", group_order=1, clinical_role="required"),
-            _field("date_of_death", "Fecha de defunción", "date", group="Estado vital", group_order=1, clinical_role="monitoring"),
-            _field("cause_of_death", "Causa de muerte", "select", options=["", "prostate_cancer", "other_cancer", "cardiovascular", "infection", "treatment_related", "other", "unknown"], group="Estado vital", group_order=1, clinical_role="monitoring"),
-            _field("death_source", "Fuente del estado vital", "text", group="Estado vital", group_order=1, clinical_role="monitoring"),
+            _field("vital_status", "Estado vital", "select", options=["", "alive", "deceased", "lost_to_followup"], group="Estado vital", group_order=1, clinical_role="required", conditional_visibility={"registrar_defuncion_en_esta_visita": ["1"]}),
+            _field("date_of_death", "Fecha de defunción", "date", group="Estado vital", group_order=1, clinical_role="monitoring", conditional_visibility={"registrar_defuncion_en_esta_visita": ["1"]}),
+            _field("cause_of_death", "Causa de muerte", "select", options=["", "prostate_cancer", "other_cancer", "cardiovascular", "infection", "treatment_related", "other", "unknown"], group="Estado vital", group_order=1, clinical_role="monitoring", conditional_visibility={"registrar_defuncion_en_esta_visita": ["1"]}),
+            _field("death_source", "Fuente del estado vital", "text", group="Estado vital", group_order=1, clinical_role="monitoring", conditional_visibility={"registrar_defuncion_en_esta_visita": ["1"]}),
             _field("radiographic_progression_date", "Fecha de progresión radiográfica", "date", group="Endpoints", group_order=2, clinical_role="monitoring"),
             _field("psa_progression_date", "Fecha de progresión PSA", "date", group="Endpoints", group_order=2, clinical_role="monitoring"),
             _field("crpc_confirmation_date", "Fecha de confirmación CRPC", "date", group="Endpoints", group_order=2, clinical_role="monitoring"),
@@ -338,9 +526,11 @@ def _survival_fragment() -> RegistrationFragment:
 
 
 def _structured_biopsy_fragment() -> RegistrationFragment:
-    return RegistrationFragment(
+    return _fragment(
         id="fragment_structured_biopsy_operational",
         title="Biopsia estructurada y concordancia MRI",
+        capture_layer="scenario_refiners",
+        when_to_ask="Solo cuando la biopsia o su trazabilidad modifican riesgo, vigilancia o ruta diagnóstica.",
         applies_to_states=["diagnostic_workup", "post_negative_biopsy_followup", "localized_initial"],
         persist_targets=["structured_biopsy", "biopsy_details"],
         clinical_influence=[
@@ -359,9 +549,11 @@ def _structured_biopsy_fragment() -> RegistrationFragment:
 
 
 def _active_surveillance_operational_fragment() -> RegistrationFragment:
-    return RegistrationFragment(
+    return _fragment(
         id="fragment_active_surveillance_operational",
         title="Operación real de vigilancia activa",
+        capture_layer="scenario_refiners",
+        when_to_ask="Solo cuando el paciente entra o sale de vigilancia activa y esos datos cambian la trayectoria.",
         applies_to_states=["localized_initial", "post_negative_biopsy_followup"],
         persist_targets=["active_surveillance_update"],
         clinical_influence=[
@@ -378,9 +570,11 @@ def _active_surveillance_operational_fragment() -> RegistrationFragment:
 
 
 def _skeletal_bone_fragment() -> RegistrationFragment:
-    return RegistrationFragment(
+    return _fragment(
         id="fragment_skeletal_bone_operational",
         title="Eventos esqueléticos y salud ósea",
+        capture_layer="safety_eligibility",
+        when_to_ask="Solo cuando la salud ósea o los SRE cambian seguridad, soporte o tratamiento concomitante.",
         applies_to_states=[
             "adt_progression_verification",
             "mcspc_oligo_metachronous",
@@ -408,29 +602,34 @@ def _skeletal_bone_fragment() -> RegistrationFragment:
 
 
 def _radiotherapy_detail_fragment() -> RegistrationFragment:
-    return RegistrationFragment(
+    return _fragment(
         id="fragment_radiotherapy_detailed",
         title="Radioterapia detallada",
+        capture_layer="scenario_refiners",
+        when_to_ask="Solo cuando la radioterapia previa o planeada cambia la elegibilidad, la secuencia o el rescate.",
         applies_to_states=["localized_initial", "post_prostatectomy", "recurrence_bcr", "mcspc_oligo_metachronous", "mcspc_low_volume_sync_oligo", "mcspc_high_volume_sync", "mcspc_high_volume_metachronous", "mcspc_high_volume", "m1_crpc"],
         persist_targets=["radiotherapy_course", "radiation_details"],
         clinical_influence=[
             "Diferencia RT definitiva, adyuvante, salvamento y MDT con dosis, fraccionamiento y toxicidad.",
         ],
         fields=[
-            _field("rt_intent", "Intención de radioterapia", "select", options=["", "definitive", "adjuvant", "salvage", "palliative", "MDT"], group="Radioterapia", group_order=1, clinical_role="monitoring"),
-            _field("modality", "Modalidad de radioterapia", "select", options=["", "EBRT_IMRT", "EBRT_VMAT", "SBRT", "LDR_brachy", "HDR_brachy", "protons", "combined"], group="Radioterapia", group_order=1, clinical_role="monitoring"),
-            _field("target_volume", "Campo / volumen blanco", "select", options=["", "prostate_only", "prostate_sv", "whole_pelvis", "boost_dominant", "metastasis_directed", "prostate_pelvis_boost"], group="Radioterapia", group_order=1, clinical_role="monitoring"),
-            _field("total_dose_gy", "Dosis total", "number", group="Radioterapia", group_order=1, clinical_role="monitoring", unit="Gy"),
-            _field("fractions", "Número de fracciones", "number", group="Radioterapia", group_order=1, clinical_role="monitoring"),
-            _field("salvage_psa_at_start", "PSA al inicio de RT de salvamento", "number", group="Radioterapia", group_order=1, clinical_role="monitoring", unit="ng/mL"),
+            _field("received_radiotherapy_this_visit", "Registrar radioterapia en esta visita", "select", options=["0", "1"], default="0", group="Radioterapia", group_order=1, clinical_role="decision_refiner"),
+            _field("rt_intent", "Intención de radioterapia", "select", options=["", "definitive", "adjuvant", "salvage", "palliative", "MDT"], group="Radioterapia", group_order=1, clinical_role="monitoring", conditional_visibility={"received_radiotherapy_this_visit": ["1"]}),
+            _field("modality", "Modalidad de radioterapia", "select", options=["", "EBRT_IMRT", "EBRT_VMAT", "SBRT", "LDR_brachy", "HDR_brachy", "protons", "combined"], group="Radioterapia", group_order=1, clinical_role="monitoring", conditional_visibility={"received_radiotherapy_this_visit": ["1"]}),
+            _field("target_volume", "Campo / volumen blanco", "select", options=["", "prostate_only", "prostate_sv", "whole_pelvis", "boost_dominant", "metastasis_directed", "prostate_pelvis_boost"], group="Radioterapia", group_order=1, clinical_role="monitoring", conditional_visibility={"received_radiotherapy_this_visit": ["1"]}),
+            _field("total_dose_gy", "Dosis total", "number", group="Radioterapia", group_order=1, clinical_role="monitoring", unit="Gy", conditional_visibility={"received_radiotherapy_this_visit": ["1"]}),
+            _field("fractions", "Número de fracciones", "number", group="Radioterapia", group_order=1, clinical_role="monitoring", conditional_visibility={"received_radiotherapy_this_visit": ["1"]}),
+            _field("salvage_psa_at_start", "PSA al inicio de RT de salvamento", "number", group="Radioterapia", group_order=1, clinical_role="monitoring", unit="ng/mL", conditional_visibility={"received_radiotherapy_this_visit": ["1"]}),
         ],
     )
 
 
-def _advanced_history_fragment() -> RegistrationFragment:
-    return RegistrationFragment(
+def _advanced_current_treatment_fragment() -> RegistrationFragment:
+    return _fragment(
         id="fragment_treatment_history",
         title="Tratamiento actual e historial terapéutico",
+        capture_layer="scenario_refiners",
+        when_to_ask="Solo en enfermedad avanzada cuando la línea y la exposición previa cambian secuenciación o clasificación.",
         applies_to_states=[
             "adt_progression_verification",
             "mcspc_oligo_metachronous",
@@ -467,6 +666,31 @@ def _advanced_history_fragment() -> RegistrationFragment:
             _field("prior_docetaxel_cycles", "Ciclos previos de docetaxel", "number", default=0, group="Historial previo", group_order=2, clinical_role="decision_refiner", unit="ciclos"),
             _field("prior_arpi_agent", "Inhibidor previo de la vía del receptor androgénico", "select", options=["", "Abiraterona", "Enzalutamida", "Apalutamida", "Darolutamida"], default="", group="Historial previo", group_order=2, clinical_role="decision_refiner"),
             _field("prior_arpi_duration", "Duración del inhibidor previo de la vía del receptor androgénico", "number", default=0, group="Historial previo", group_order=2, clinical_role="decision_refiner", unit="meses"),
+        ] + _metastatic_intake_fields(),
+    )
+
+
+def _advanced_biomarker_fragment() -> RegistrationFragment:
+    return _fragment(
+        id="fragment_advanced_biomarkers",
+        title="Biomarcadores y trazabilidad molecular",
+        capture_layer="scenario_refiners",
+        when_to_ask="Solo cuando biomarcadores, PSMA o la trazabilidad molecular cambian elegibilidad o prioridad terapéutica.",
+        applies_to_states=[
+            "adt_progression_verification",
+            "mcspc_oligo_metachronous",
+            "mcspc_low_volume_sync_oligo",
+            "mcspc_high_volume_sync",
+            "mcspc_high_volume_metachronous",
+            "mcspc_high_volume",
+            "m0_crpc",
+            "m1_crpc",
+        ],
+        persist_targets=["clinical_baseline", "prior_clinical_history", "imaging_studies"],
+        clinical_influence=[
+            "Alinea biomarcadores, fuente documental y elegibilidad molecular con la trayectoria clínica activa.",
+        ],
+        fields=[
             _field("hrr_status", "Estado HRR", "select", options=["", "Positivo", "Negativo", "Desconocido"], default="Desconocido", group="Biomarcadores", group_order=3, clinical_role="decision_refiner"),
             _field("hrr_gene", "Gen HRR dominante", "text", group="Biomarcadores", group_order=3, clinical_role="decision_refiner"),
             _field("brca2_status", "BRCA2", "select", options=["", "Positivo", "Negativo", "Desconocido"], default="Desconocido", group="Biomarcadores", group_order=3, clinical_role="decision_refiner"),
@@ -476,6 +700,64 @@ def _advanced_history_fragment() -> RegistrationFragment:
             _field("molecular_assay_date", "Fecha del estudio molecular", "date", group="Biomarcadores", group_order=3, clinical_role="decision_refiner"),
             _field("psma_positive", "PSMA positivo", "select", options=["0", "1"], default="0", group="Biomarcadores", group_order=3, clinical_role="decision_refiner"),
             _field("psma_negative_dominant_lesions", "Lesiones dominantes PSMA negativas", "select", options=["0", "1"], default="0", group="Biomarcadores", group_order=3, clinical_role="decision_refiner"),
+        ],
+    )
+
+
+def _advanced_docetaxel_fragment() -> RegistrationFragment:
+    return _fragment(
+        id="fragment_advanced_docetaxel_eligibility",
+        title="Elegibilidad a docetaxel",
+        capture_layer="safety_eligibility",
+        when_to_ask="Solo cuando el paciente sigue siendo candidato real a docetaxel o triplete en enfermedad metastásica sensible a la castración de alto volumen.",
+        applies_to_states=[
+            "mcspc_high_volume_sync",
+            "mcspc_high_volume_metachronous",
+            "mcspc_high_volume",
+        ],
+        persist_targets=["clinical_assessments", "clinical_baseline", "prior_clinical_history"],
+        clinical_influence=[
+            "Verifica elegibilidad quimioterapéutica actual con biometría, pruebas hepáticas, alergias relevantes y contexto funcional antes de cerrar triplete.",
+        ],
+        fields=[
+            _field("cbc_date", "Fecha de biometría hemática", "date", group="Elegibilidad a docetaxel", group_order=3, clinical_role="required", conditional_visibility=_docetaxel_visibility()),
+            _field("anc", "ANC", "number", group="Elegibilidad a docetaxel", group_order=3, clinical_role="required", unit="/mm3", conditional_visibility=_docetaxel_visibility()),
+            _field("platelets", "Plaquetas", "number", group="Elegibilidad a docetaxel", group_order=3, clinical_role="required", unit="/mm3", conditional_visibility=_docetaxel_visibility()),
+            _field("liver_panel_date", "Fecha de pruebas hepáticas", "date", group="Elegibilidad a docetaxel", group_order=3, clinical_role="required", conditional_visibility=_docetaxel_visibility()),
+            _field("bilirubin", "Bilirrubina total", "number", group="Elegibilidad a docetaxel", group_order=3, clinical_role="required", unit="mg/dL", conditional_visibility=_docetaxel_visibility()),
+            _field("ast", "AST (TGO)", "number", group="Elegibilidad a docetaxel", group_order=3, clinical_role="required", unit="U/L", conditional_visibility=_docetaxel_visibility()),
+            _field("alt", "ALT (TGP)", "number", group="Elegibilidad a docetaxel", group_order=3, clinical_role="required", unit="U/L", conditional_visibility=_docetaxel_visibility()),
+            _field("alp", "Fosfatasa alcalina", "number", group="Elegibilidad a docetaxel", group_order=3, clinical_role="required", unit="U/L", conditional_visibility=_docetaxel_visibility()),
+            _field("taxane_hypersensitivity_history", "Hipersensibilidad previa a taxanos", "select", options=["", "0", "1"], default="", group="Elegibilidad a docetaxel", group_order=3, clinical_role="required", conditional_visibility=_docetaxel_visibility()),
+            _field("polysorbate_hypersensitivity", "Hipersensibilidad a polisorbato 80", "select", options=["", "0", "1"], default="", group="Elegibilidad a docetaxel", group_order=3, clinical_role="required", conditional_visibility=_docetaxel_visibility()),
+            _field("child_pugh_score", "Child-Pugh", "select", options=["", "A", "B", "C"], default="", group="Elegibilidad a docetaxel", group_order=3, clinical_role="required", conditional_visibility=_docetaxel_visibility()),
+            _field("performance_status_driver", "Origen del deterioro funcional", "select", options=["", "mixed_or_unclear", "cancer_related", "comorbidity_or_frailty"], default="", group="Elegibilidad a docetaxel", group_order=3, clinical_role="decision_refiner", conditional_visibility={"ecog_score": ["2"]}),
+            _field("bone_pain", "Dolor óseo relacionado con la enfermedad", "select", options=["", "0", "1"], default="", group="Elegibilidad a docetaxel", group_order=3, clinical_role="decision_refiner", conditional_visibility={"ecog_score": ["2"]}),
+        ],
+    )
+
+
+def _advanced_safety_fragment() -> RegistrationFragment:
+    return _fragment(
+        id="fragment_advanced_safety",
+        title="Seguridad, fragilidad y elegibilidad terapéutica",
+        capture_layer="safety_eligibility",
+        when_to_ask="Solo cuando la seguridad, la fragilidad o la reserva funcional cambian elegibilidad y contraindicaciones.",
+        applies_to_states=[
+            "adt_progression_verification",
+            "mcspc_oligo_metachronous",
+            "mcspc_low_volume_sync_oligo",
+            "mcspc_high_volume_sync",
+            "mcspc_high_volume_metachronous",
+            "mcspc_high_volume",
+            "m0_crpc",
+            "m1_crpc",
+        ],
+        persist_targets=["clinical_assessments", "clinical_baseline"],
+        clinical_influence=[
+            "Convierte comorbilidad, fragilidad y seguridad en modificadores visibles de elegibilidad terapéutica.",
+        ],
+        fields=[
             _field("seizure_history", "Antecedente convulsivo", "select", options=["0", "1"], default="0", group="Seguridad ARPI", group_order=3, clinical_role="decision_refiner"),
             _field("peripheral_neuropathy_grade", "Neuropatía periférica", "select", options=["", "0", "1", "2", "3", "4"], default="", group="Seguridad ARPI", group_order=3, clinical_role="decision_refiner"),
             _field("dermatitis_history", "Dermatitis / rash previo", "select", options=["0", "1"], default="0", group="Seguridad ARPI", group_order=3, clinical_role="decision_refiner"),
@@ -492,14 +774,17 @@ def _advanced_history_fragment() -> RegistrationFragment:
             _field("protein_supplements", "Suplementos proteicos", "select", options=["0", "1"], default="0", group="Seguridad ARPI", group_order=3, clinical_role="decision_refiner"),
             _field("calcium_vitd_started", "Calcio / vitamina D iniciados", "select", options=["0", "1"], default="0", group="Salud ósea", group_order=4, clinical_role="monitoring"),
             _field("bone_protection_started", "Protección ósea iniciada", "select", options=["0", "1"], default="0", group="Salud ósea", group_order=4, clinical_role="monitoring"),
-        ] + _metastatic_intake_fields(),
+        ],
     )
 
 
 def _mexico_fragment() -> RegistrationFragment:
-    return RegistrationFragment(
+    return _fragment(
         id="fragment_mexico_cohort_optional",
         title="Perfil demográfico de México para investigación",
+        capture_layer="research_optional",
+        when_to_ask="Solo si se desea enriquecer la cohorte y el benchmarking institucional.",
+        collapsed_by_default=True,
         applies_to_states=list(STATE_SCOPE_MAP.keys()),
         persist_targets=["patient_demographics"],
         clinical_influence=[
@@ -571,6 +856,19 @@ def _persist_targets_for_field(field_name: str, scope: str) -> list[str]:
         "psma_positive": ["imaging_studies", "clinical_assessments"],
         "psma_negative_dominant_lesions": ["imaging_studies", "clinical_assessments"],
         "peripheral_neuropathy_grade": ["clinical_assessments", "clinical_baseline"],
+        "cbc_date": ["clinical_assessments", "clinical_baseline"],
+        "anc": ["clinical_assessments", "clinical_baseline"],
+        "platelets": ["clinical_assessments", "clinical_baseline"],
+        "liver_panel_date": ["clinical_assessments", "clinical_baseline"],
+        "bilirubin": ["clinical_assessments", "clinical_baseline"],
+        "ast": ["clinical_assessments", "clinical_baseline"],
+        "alt": ["clinical_assessments", "clinical_baseline"],
+        "alp": ["clinical_assessments", "clinical_baseline"],
+        "taxane_hypersensitivity_history": ["clinical_assessments", "prior_clinical_history"],
+        "polysorbate_hypersensitivity": ["clinical_assessments", "prior_clinical_history"],
+        "child_pugh_score": ["clinical_assessments", "clinical_baseline"],
+        "performance_status_driver": ["clinical_assessments", "clinical_baseline"],
+        "bone_pain": ["clinical_assessments", "clinical_baseline"],
         "mcrpc_line_context": ["prior_clinical_history"],
         "current_adt_context": ["prior_clinical_history", "clinical_assessments"],
         "castrate_testosterone_status": ["clinical_baseline", "clinical_assessments"],
@@ -578,6 +876,7 @@ def _persist_targets_for_field(field_name: str, scope: str) -> list[str]:
         "dxa_baseline_done": ["clinical_assessments"],
         "calcium_vitd_started": ["clinical_assessments"],
         "bone_protection_started": ["clinical_assessments"],
+        "margin_location": ["surgical_details", "clinical_assessments"],
         "vital_status": ["survival_status_records", "patient_identity"],
         "date_of_death": ["survival_status_records", "patient_identity"],
         "cause_of_death": ["survival_status_records", "patient_identity"],
@@ -627,6 +926,43 @@ def _truthy(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "si", "sí", "positivo", "positive", "confirmed_castrate"}
 
 
+MARGIN_LOCATION_OPTIONS = ["", "Ápex", "Base", "Posterolateral", "Múltiple", "Otro"]
+
+
+def _death_documented(data: dict[str, Any]) -> bool:
+    vital_status = str(data.get("vital_status") or "").strip().lower()
+    return vital_status == "deceased" or _is_present(data.get("date_of_death"))
+
+
+def _radiotherapy_truth_positive(data: dict[str, Any]) -> bool:
+    if any(_truthy(data.get(flag)) for flag in ("rt_primary_received", "prior_radiation", "received_radiotherapy_this_visit")):
+        return True
+    return any(
+        _is_present(data.get(field))
+        for field in ("rt_intent", "modality", "target_volume", "total_dose_gy", "fractions", "salvage_psa_at_start")
+    )
+
+
+def _known_cancer_diagnosis(state: str, data: dict[str, Any]) -> bool:
+    if _truthy(data.get("known_cancer_diagnosis")):
+        return True
+    return str(state or "").strip() not in {"diagnostic_workup", "post_negative_biopsy_followup"}
+
+
+def _has_pathology_detail(data: dict[str, Any]) -> bool:
+    pathology_fields = (
+        "gleason_primary",
+        "gleason_secondary",
+        "isup_grade",
+        "total_cores",
+        "positive_cores",
+        "num_cores_positive",
+        "structured_biopsy",
+        "biopsy_date",
+    )
+    return any(_is_present(data.get(field)) for field in pathology_fields)
+
+
 class PatientTrackingService:
     def get_full_record(self, nss: str) -> dict | None:
         return get_patient_full_record(nss)
@@ -651,6 +987,10 @@ class PatientTrackingService:
     ) -> dict[str, Any]:
         scope = self.scope_for_state(state or module_id)
         config = deepcopy(SCOPE_CONFIG[scope])
+        known_cancer = _known_cancer_diagnosis(state, assessment_input)
+        needs_biopsy_capture = known_cancer and not _has_pathology_detail(assessment_input)
+        death_toggle_default = "1" if _death_documented(assessment_input) else str(assessment_input.get("registrar_defuncion_en_esta_visita") or "0" or "0")
+        rt_toggle_default = "1" if _radiotherapy_truth_positive(assessment_input) else str(assessment_input.get("received_radiotherapy_this_visit") or "0" or "0")
         fragments = [_common_fragment(), _official_diagnosis_fragment()]
         if scope == "diagnostic":
             fragments.append(_diagnostic_fragment())
@@ -661,34 +1001,58 @@ class PatientTrackingService:
             fragments.append(_radiotherapy_detail_fragment())
         elif scope == "postlocal":
             fragments.append(_postlocal_fragment())
-            fragments.append(_advanced_history_fragment())
             fragments.append(_survival_fragment())
             fragments.append(_radiotherapy_detail_fragment())
         else:
-            fragments.append(_advanced_history_fragment())
+            fragments.append(_advanced_current_treatment_fragment())
+            fragments.append(_advanced_biomarker_fragment())
+            fragments.append(_advanced_safety_fragment())
+            if state in {"mcspc_high_volume_sync", "mcspc_high_volume_metachronous", "mcspc_high_volume"}:
+                fragments.append(_advanced_docetaxel_fragment())
             fragments.append(_survival_fragment())
             fragments.append(_skeletal_bone_fragment())
             fragments.append(_radiotherapy_detail_fragment())
         if scope == "diagnostic":
             fragments.append(_structured_biopsy_fragment())
+        if needs_biopsy_capture and not any(fragment.id == "fragment_structured_biopsy_operational" for fragment in fragments):
+            fragments.append(_structured_biopsy_fragment())
         fragments.append(_mexico_fragment())
+        fragments = [_apply_fragment_semantics(fragment) for fragment in fragments]
 
         imported_fields = []
         for field in module_schema.get("fields", []):
             value = assessment_input.get(field["name"])
             if not _is_present(value):
                 continue
+            semantics = field_semantics_for(field["name"])
+            value_label = ""
+            if field.get("field_type") == "gleason_profile":
+                value_label = normalize_gleason_profile(assessment_input).get("summary") or ""
+            elif field.get("field_type") == "metastatic_components":
+                metastatic_summary = build_metastatic_composition_summary(assessment_input)
+                value_label = metastatic_summary.get("narrative") or metastatic_summary.get("summary") or ""
             imported_fields.append(
                 {
                     "name": field["name"],
                     "label": field["label"],
                     "value": value,
+                    "value_label": value_label,
                     "options": field.get("options", []),
                     "clinical_role": field.get("clinical_role", ""),
                     "persist_targets": _persist_targets_for_field(field["name"], scope),
+                    "reuse_key": semantics["reuse_key"],
+                    "capture_layer": semantics["capture_layer"],
+                    "capture_layer_label": semantics["capture_layer_label"],
+                    "when_to_ask": semantics["when_to_ask"],
                 }
             )
+        fragments, deduped_visible_fields = _dedupe_registration_fragments(fragments, imported_fields)
 
+        gleason_profile = normalize_gleason_profile(assessment_input)
+        metastatic_known = str(assessment_input.get("metastatic_disease_known", "")).strip() == "1" or any(
+            str(assessment_input.get(key, "")).strip() not in {"", "[]", "null", "None"}
+            for key in ("bone_site_entries", "visceral_site_entries", "nonregional_nodal_site_entries")
+        )
         defaults = {
             "assessment_state": state,
             "baseline_psa": assessment_input.get("baseline_psa", assessment_input.get("psa", "")),
@@ -696,6 +1060,29 @@ class PatientTrackingService:
             "volume_disease": assessment_input.get("volume_disease", "Low" if scope != "advanced" else ""),
             "line_of_therapy_number": assessment_input.get("line_of_therapy_number", assessment_input.get("line_of_therapy", "")),
             "line_of_therapy_context": assessment_input.get("line_of_therapy_context", ""),
+            "psa_history": assessment_input.get("psa_history", assessment_input.get("ape_history", [])),
+            "registrar_defuncion_en_esta_visita": death_toggle_default,
+            "received_radiotherapy_this_visit": rt_toggle_default,
+            "vital_status": assessment_input.get("vital_status", "deceased" if death_toggle_default == "1" else ""),
+            "margin_location": assessment_input.get("margin_location", "Ápex"),
+            "positive_cores": assessment_input.get("positive_cores", assessment_input.get("num_cores_positive", "")),
+            "gleason_score": {
+                "gleason_primary": gleason_profile.get("gleason_primary") or "",
+                "gleason_secondary": gleason_profile.get("gleason_secondary") or "",
+                "gleason_tertiary": gleason_profile.get("gleason_tertiary") or "",
+                "gleason_score": gleason_profile.get("gleason_score") or "",
+                "isup_grade": gleason_profile.get("isup_grade") or "",
+            },
+            "metastatic_components_capture": {
+                "metastatic_disease_known": metastatic_known,
+                "bone_site_entries": assessment_input.get("bone_site_entries", []),
+                "visceral_site_entries": assessment_input.get("visceral_site_entries", []),
+                "nonregional_nodal_site_entries": assessment_input.get("nonregional_nodal_site_entries", []),
+                "bone_metastasis_present": assessment_input.get("bone_metastasis_present", "1" if assessment_input.get("bone_site_entries") else "0"),
+                "visceral_metastasis_present": assessment_input.get("visceral_metastasis_present", "1" if assessment_input.get("visceral_site_entries") else "0"),
+                "nonregional_nodal_metastasis_present": assessment_input.get("nonregional_nodal_metastasis_present", "1" if assessment_input.get("nonregional_nodal_site_entries") else "0"),
+                "metastatic_total_lesion_count": assessment_input.get("metastatic_total_lesion_count", assessment_input.get("metastasis_count", "")),
+            },
         }
         score_requirements = build_intake_score_requirements(
             module_id=module_id,
@@ -703,6 +1090,13 @@ class PatientTrackingService:
             assessment_input=assessment_input,
             assessment_result=assessment_result or {},
         )
+        score_requirements = _filter_score_requirements_for_visible_fields(
+            score_requirements,
+            visible_fields=deduped_visible_fields,
+            imported_fields=imported_fields,
+        )
+        field_semantics = _field_semantics_registry(fragments=fragments, imported_fields=imported_fields)
+        score_semantics = build_score_semantics([field["name"] for field in deduped_visible_fields])
 
         return {
             "scope": scope,
@@ -710,11 +1104,15 @@ class PatientTrackingService:
             "scope_description": config["description"],
             "scope_bullets": config["bullets"],
             "registration_fragments": [fragment.to_dict() for fragment in fragments],
+            "capture_layers": _build_capture_layers(fragments),
             "registration_defaults": defaults,
             "therapy_catalog_options": therapy_select_options(state="advanced", management_track="systemic_surveillance", include_empty=True),
             "therapy_catalog_entries": therapy_catalog_entries(),
             "canonicalization_map": self.canonicalization_map(),
             "imported_clinical_fields": imported_fields,
+            "deduped_visible_fields": deduped_visible_fields,
+            "field_semantics": field_semantics,
+            "score_semantics": score_semantics,
             "applicable_scores": score_requirements.get("applicable_scores", []),
             "required_fields_by_score": score_requirements.get("required_fields_by_score", {}),
             "score_missing_inputs": score_requirements.get("score_missing_inputs", []),
@@ -775,5 +1173,9 @@ class PatientTrackingService:
 
         if not _is_present(canonical.get("imaging_modality")):
             canonical["imaging_modality"] = "Ninguna"
+
+        canonical = apply_gleason_profile(canonical)
+        if _is_present(canonical.get("psa_history")) and not _is_present(canonical.get("ape_history")):
+            canonical["ape_history"] = canonical.get("psa_history")
 
         return canonical

@@ -76,6 +76,169 @@ CURRENT_CATALOG_COMPONENTS = {
             "Child-Pugh C",
         ],
     },
+    "Cabazitaxel": {
+        "drug_name": "Cabazitaxel",
+        "dose": "20-25 mg/m²",
+        "route": "Intravenosa",
+        "schedule": "Cada 21 días con soporte y prednisona concomitante",
+        "imss_key": "",
+        "metadata_source": "current_catalog",
+        "toxicity_watchouts": [
+            "Neutropenia",
+            "Diarrea",
+            "Fatiga",
+            "Toxicidad hematológica",
+        ],
+        "contraindications": [
+            "Neutropenia no controlada",
+            "Fragilidad marcada",
+            "Toxicidad hematológica limitante",
+        ],
+    },
+    "Talazoparib": {
+        "drug_name": "Talazoparib",
+        "dose": "0.5 mg al día",
+        "route": "Oral",
+        "schedule": "Continuo",
+        "imss_key": "",
+        "metadata_source": "current_catalog",
+        "toxicity_watchouts": [
+            "Anemia",
+            "Fatiga",
+            "Trombocitopenia",
+        ],
+        "contraindications": [
+            "Toxicidad hematológica grave",
+        ],
+    },
+    "Niraparib": {
+        "drug_name": "Niraparib",
+        "dose": "200 mg al día",
+        "route": "Oral",
+        "schedule": "Continuo",
+        "imss_key": "",
+        "metadata_source": "current_catalog",
+        "toxicity_watchouts": [
+            "Anemia",
+            "Trombocitopenia",
+            "Hipertensión",
+        ],
+        "contraindications": [
+            "Trombocitopenia no controlada",
+        ],
+    },
+    "Rucaparib": {
+        "drug_name": "Rucaparib",
+        "dose": "600 mg cada 12 horas",
+        "route": "Oral",
+        "schedule": "Continuo",
+        "imss_key": "",
+        "metadata_source": "current_catalog",
+        "toxicity_watchouts": [
+            "Anemia",
+            "Fatiga",
+            "Náusea",
+        ],
+        "contraindications": [
+            "Toxicidad hematológica severa",
+        ],
+    },
+    "Lu177-PSMA-617": {
+        "drug_name": "Lu177-PSMA-617",
+        "dose": "7.4 GBq",
+        "route": "Intravenosa",
+        "schedule": "Cada 6 semanas hasta 6 ciclos",
+        "imss_key": "",
+        "metadata_source": "current_catalog",
+        "toxicity_watchouts": [
+            "Xerostomía",
+            "Fatiga",
+            "Toxicidad hematológica",
+        ],
+        "contraindications": [
+            "Lesiones dominantes PSMA-negativas",
+            "PSMA-PET no concluyente",
+        ],
+    },
+    "Radio-223": {
+        "drug_name": "Radio-223",
+        "dose": "55 kBq/kg",
+        "route": "Intravenosa",
+        "schedule": "Cada 4 semanas por 6 dosis",
+        "imss_key": "",
+        "metadata_source": "current_catalog",
+        "toxicity_watchouts": [
+            "Trombocitopenia",
+            "Anemia",
+            "Dolor óseo transitorio",
+        ],
+        "contraindications": [
+            "Metástasis viscerales",
+            "Citopenias no corregidas",
+        ],
+    },
+    "Pembrolizumab": {
+        "drug_name": "Pembrolizumab",
+        "dose": "200 mg",
+        "route": "Intravenosa",
+        "schedule": "Cada 3 semanas",
+        "imss_key": "",
+        "metadata_source": "current_catalog",
+        "toxicity_watchouts": [
+            "Eventos inmunomediados",
+            "Hepatitis autoinmune",
+            "Colitis",
+        ],
+        "contraindications": [
+            "Autoinmunidad activa no controlada",
+        ],
+    },
+    "Carboplatino": {
+        "drug_name": "Carboplatino",
+        "dose": "AUC 4-5",
+        "route": "Intravenosa",
+        "schedule": "Cada 21 días",
+        "imss_key": "",
+        "metadata_source": "current_catalog",
+        "toxicity_watchouts": [
+            "Toxicidad hematológica",
+            "Fatiga",
+        ],
+        "contraindications": [
+            "Citopenias severas",
+        ],
+    },
+    "Etopósido": {
+        "drug_name": "Etopósido",
+        "dose": "100 mg/m²",
+        "route": "Intravenosa / oral",
+        "schedule": "Días 1-3 cada 21 días",
+        "imss_key": "",
+        "metadata_source": "current_catalog",
+        "toxicity_watchouts": [
+            "Neutropenia",
+            "Mucositis",
+        ],
+        "contraindications": [
+            "Citopenias severas",
+        ],
+    },
+    "Ipatasertib": {
+        "drug_name": "Ipatasertib",
+        "dose": "400 mg al día",
+        "route": "Oral",
+        "schedule": "Días 1-21 de cada ciclo",
+        "imss_key": "",
+        "metadata_source": "current_catalog",
+        "toxicity_watchouts": [
+            "Diarrea",
+            "Hiperglucemia",
+            "Rash",
+        ],
+        "contraindications": [
+            "Hiperglucemia descontrolada",
+        ],
+    },
 }
 
 CURATED_COMPONENTS = {
@@ -209,6 +372,8 @@ REGIMEN_PIVOTAL_TRIALS = {
     "ADT_DOCETAXEL": ["CHAARTED"],
 }
 
+_REFERENCE_CACHE: dict[tuple[str, tuple[tuple[str, bool, int, int], ...]], dict[str, Any]] = {}
+
 
 def _normalize_text(value: str) -> str:
     return " ".join((value or "").split())
@@ -301,22 +466,41 @@ def build_curated_treatment_reference() -> dict[str, Any]:
     return curated
 
 
+def _reference_signature() -> tuple[tuple[str, bool, int, int], ...]:
+    signature: list[tuple[str, bool, int, int]] = []
+    for source in SOURCE_DOCUMENTS:
+        path = Path(source["path"])
+        if path.exists() and path.is_file():
+            stat = path.stat()
+            signature.append((str(path), True, int(stat.st_mtime_ns), int(stat.st_size)))
+        else:
+            signature.append((str(path), False, 0, 0))
+    return tuple(signature)
+
+
 def ensure_mhspc_frontline_reference(root: Path | None = None) -> dict[str, Any]:
     reference_root = Path(root or DEFAULT_REFERENCE_ROOT)
     reference_root.mkdir(parents=True, exist_ok=True)
+    cache_key = (str(reference_root), _reference_signature())
+    cached = _REFERENCE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     raw_snapshot = build_raw_ingestion_snapshot()
     curated_reference = build_curated_treatment_reference()
     raw_path = reference_root / "raw_ingestion_snapshot.json"
     curated_path = reference_root / "curated_treatment_reference.json"
     raw_path.write_text(json.dumps(raw_snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
     curated_path.write_text(json.dumps(curated_reference, ensure_ascii=False, indent=2), encoding="utf-8")
-    return {
+    result = {
         "root": str(reference_root),
         "raw_snapshot_path": str(raw_path),
         "curated_reference_path": str(curated_path),
         "raw_snapshot": raw_snapshot,
         "curated_reference": curated_reference,
     }
+    _REFERENCE_CACHE.clear()
+    _REFERENCE_CACHE[cache_key] = result
+    return result
 
 
 def get_mhspc_frontline_reference() -> dict[str, Any]:
@@ -341,4 +525,3 @@ def component_metadata(drug_name: str) -> dict[str, Any]:
         "toxicity_watchouts": [],
         "contraindications": [],
     }
-

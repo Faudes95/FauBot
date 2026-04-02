@@ -208,6 +208,22 @@
                     <div class="mt-4 grid grid-cols-1 gap-3" id="postRpSalvageGrid"></div>
                 </div>
                 <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <h4 class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Copiloto mHSPC</h4>
+                    <div class="mt-4 grid grid-cols-1 gap-3" id="mhspcCopilotGrid"></div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <h4 class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Copiloto diagnóstico</h4>
+                    <div class="mt-4 grid grid-cols-1 gap-3" id="diagnosticCopilotGrid"></div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <h4 class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Copiloto localizado / AS</h4>
+                    <div class="mt-4 grid grid-cols-1 gap-3" id="localizedCopilotGrid"></div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+                    <h4 class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Copiloto post-RT</h4>
+                    <div class="mt-4 grid grid-cols-1 gap-3" id="postRtSalvageGrid"></div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
                     <h4 class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Validación longitudinal viva</h4>
                     <div class="mt-4 grid grid-cols-1 gap-3" id="validationRunGrid"></div>
                 </div>
@@ -390,6 +406,12 @@
                 renderPanelMessage('institutionalBenchmarkGrid', 'El benchmarking institucional no estuvo disponible en esta carga.', 'amber');
                 renderPanelMessage('psmaImagingGrid', 'La epidemiología PSMA no estuvo disponible en esta carga.', 'amber');
                 renderPanelMessage('laboratoryIntelligenceGrid', 'La inteligencia longitudinal de laboratorios no estuvo disponible en esta carga.', 'amber');
+                renderPanelMessage('crpcCopilotGrid', 'El copiloto CRPC no estuvo disponible en esta carga.', 'amber');
+                renderPanelMessage('postRpSalvageGrid', 'El copiloto post-RP no estuvo disponible en esta carga.', 'amber');
+                renderPanelMessage('mhspcCopilotGrid', 'El copiloto mHSPC no estuvo disponible en esta carga.', 'amber');
+                renderPanelMessage('diagnosticCopilotGrid', 'El copiloto diagnóstico no estuvo disponible en esta carga.', 'amber');
+                renderPanelMessage('localizedCopilotGrid', 'El copiloto localizado no estuvo disponible en esta carga.', 'amber');
+                renderPanelMessage('postRtSalvageGrid', 'El copiloto post-RT no estuvo disponible en esta carga.', 'amber');
                 renderPanelMessage('dynamicCohortGrid', 'Las cohortes dinámicas no estuvieron disponibles en esta carga.', 'amber');
                 renderPanelMessage('multivariateGrid', 'El análisis multivariado no estuvo disponible en esta carga.', 'amber');
                 renderPanelMessage('comparativeGrid', 'El análisis comparativo no estuvo disponible en esta carga.', 'amber');
@@ -461,6 +483,10 @@
             renderLaboratoryIntelligencePanels();
             renderCrpcCopilotPanels();
             renderPostRPSalvagePanels();
+            renderMhspcCopilotPanels();
+            renderDiagnosticCopilotPanels();
+            renderLocalizedCopilotPanels();
+            renderPostRTSalvagePanels();
             renderValidationPanels();
             renderDynamicCohortPanels();
             renderMultivariatePanels();
@@ -1463,6 +1489,141 @@
                 </div>
             `;
             window.clinicalPresentation?.normalizeDocument(container);
+        }
+
+        function renderGenericVerticalPanels(containerId, payload, emptyMessage, cards, detailTitle, detailText, recentTitle, recentFormatter) {
+            const container = document.getElementById(containerId);
+            if (!payload?.available) {
+                container.innerHTML = `<div class="text-sm text-slate-500">${emptyMessage}</div>`;
+                return;
+            }
+            const runtimeModes = Object.entries(payload.runtime_modes || {}).map(([mode, count]) => `${humanizeClinicalText(mode)} (${count})`).join(', ') || 'Sin modos registrados.';
+            const failureFamilies = (payload.top_failure_families || []).map((item) => `${item[0]} (${item[1]})`).join(', ') || 'Sin familias bloqueadas.';
+            const recentCases = (payload.recent_cases || []).map((item) => recentFormatter(item)).join('');
+            container.innerHTML = `
+                ${cards.map((card) => `
+                    <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
+                        <div class="text-xs uppercase tracking-[0.18em] text-slate-500">${humanizeClinicalText(card.title)}</div>
+                        <div class="mt-2 text-xl font-bold text-white">${card.value}</div>
+                        <div class="mt-2 text-xs text-slate-400">${humanizeClinicalText(card.detail)}</div>
+                    </div>
+                `).join('')}
+                <div class="rounded-2xl border border-cyan-500/20 bg-cyan-950/10 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-cyan-200">${humanizeClinicalText(detailTitle)}</div>
+                    <div class="mt-2 text-sm text-white">${humanizeClinicalText(detailText)}</div>
+                    <div class="mt-2 text-xs text-slate-300">${humanizeClinicalText(failureFamilies)}</div>
+                    <div class="mt-2 text-xs text-slate-400">${humanizeClinicalText(runtimeModes)}</div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
+                    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">${humanizeClinicalText(recentTitle)}</div>
+                    <div class="mt-3 grid grid-cols-1 gap-2">${recentCases || '<div class="text-xs text-slate-500">Sin casos recientes.</div>'}</div>
+                </div>
+            `;
+            window.clinicalPresentation?.normalizeDocument(container);
+        }
+
+        function renderMhspcCopilotPanels() {
+            const payload = dashboardResearch?.mhspc_copilot || {};
+            const phenotypeDistribution = Object.entries(payload.phenotype_distribution || {}).map(([label, count]) => `${humanizeClinicalText(label)} (${count})`).join(', ') || 'Sin fenotipos registrados.';
+            renderGenericVerticalPanels(
+                'mhspcCopilotGrid',
+                payload,
+                'Todavía no hay snapshots del copiloto mHSPC registrados.',
+                [
+                    { title: 'Concordancia shadow vs regla', value: `${Number(payload.shadow_rule_concordance_pct || 0).toFixed(1)}%`, detail: `${payload.total_patients || 0} pacientes con snapshot vigente.` },
+                    { title: 'QA pass', value: `${Number(payload.qa_pass_pct || 0).toFixed(1)}%`, detail: `Última actualización: ${humanizeClinicalText(payload.latest_created_at || 'Fecha no disponible')}` },
+                    { title: 'RT primaria visible', value: `${Number(payload.rt_primary_visible_pct || 0).toFixed(1)}%`, detail: 'Casos donde la RT al primario sigue siendo parte visible de la ruta.' },
+                    { title: 'Triplete visible', value: `${Number(payload.triplet_visible_pct || 0).toFixed(1)}%`, detail: 'Casos donde el bundle deja triplete como candidato visible.' },
+                ],
+                'Fenotipos y familias de fallo',
+                phenotypeDistribution,
+                'Casos recientes',
+                (item) => `
+                    <div class="rounded-xl border border-slate-700/70 bg-slate-950/50 px-3 py-2">
+                        <div class="text-[11px] uppercase tracking-[0.18em] text-slate-500">Paciente ${item.patient_id}</div>
+                        <div class="mt-1 text-sm font-semibold text-white">${humanizeClinicalText(item.effective_state || 'Estado no disponible')}</div>
+                        <div class="mt-1 text-xs text-slate-400">${humanizeClinicalText(item.volume_disease || 'volumen no disponible')} · QA ${item.qa_passed ? 'pass' : 'pendiente'}</div>
+                    </div>
+                `,
+            );
+        }
+
+        function renderDiagnosticCopilotPanels() {
+            const payload = dashboardResearch?.diagnostic_biopsy_copilot || {};
+            const trackDistribution = Object.entries(payload.track_distribution || {}).map(([label, count]) => `${humanizeClinicalText(label)} (${count})`).join(', ') || 'Sin tracks registrados.';
+            renderGenericVerticalPanels(
+                'diagnosticCopilotGrid',
+                payload,
+                'Todavía no hay snapshots del copiloto diagnóstico registrados.',
+                [
+                    { title: 'Concordancia shadow vs regla', value: `${Number(payload.shadow_rule_concordance_pct || 0).toFixed(1)}%`, detail: `${payload.total_patients || 0} pacientes con snapshot vigente.` },
+                    { title: 'QA pass', value: `${Number(payload.qa_pass_pct || 0).toFixed(1)}%`, detail: `Última actualización: ${humanizeClinicalText(payload.latest_created_at || 'Fecha no disponible')}` },
+                    { title: 'Listos para biopsia', value: `${Number(payload.biopsy_ready_pct || 0).toFixed(1)}%`, detail: 'Casos donde el copiloto ya cruza el umbral visible de biopsia.' },
+                    { title: 'Reapertura tras biopsia benigna', value: `${Number(payload.reopen_after_negative_pct || 0).toFixed(1)}%`, detail: 'Casos donde la sospecha vuelve a abrir el pathway tras una biopsia benigna previa.' },
+                ],
+                'Tracks y familias de fallo',
+                trackDistribution,
+                'Casos recientes',
+                (item) => `
+                    <div class="rounded-xl border border-slate-700/70 bg-slate-950/50 px-3 py-2">
+                        <div class="text-[11px] uppercase tracking-[0.18em] text-slate-500">Paciente ${item.patient_id}</div>
+                        <div class="mt-1 text-sm font-semibold text-white">${humanizeClinicalText(item.diagnostic_track || 'Track no disponible')}</div>
+                        <div class="mt-1 text-xs text-slate-400">${humanizeClinicalText(item.effective_state || 'Estado no disponible')} · QA ${item.qa_passed ? 'pass' : 'pendiente'}</div>
+                    </div>
+                `,
+            );
+        }
+
+        function renderLocalizedCopilotPanels() {
+            const payload = dashboardResearch?.localized_surveillance_copilot || {};
+            const trackDistribution = Object.entries(payload.track_distribution || {}).map(([label, count]) => `${humanizeClinicalText(label)} (${count})`).join(', ') || 'Sin tracks registrados.';
+            renderGenericVerticalPanels(
+                'localizedCopilotGrid',
+                payload,
+                'Todavía no hay snapshots del copiloto localizado registrados.',
+                [
+                    { title: 'Concordancia shadow vs regla', value: `${Number(payload.shadow_rule_concordance_pct || 0).toFixed(1)}%`, detail: `${payload.total_patients || 0} pacientes con snapshot vigente.` },
+                    { title: 'QA pass', value: `${Number(payload.qa_pass_pct || 0).toFixed(1)}%`, detail: `Última actualización: ${humanizeClinicalText(payload.latest_created_at || 'Fecha no disponible')}` },
+                    { title: 'AS visible', value: `${Number(payload.active_surveillance_visible_pct || 0).toFixed(1)}%`, detail: 'Casos donde la vigilancia activa permanece como conducta longitudinal visible.' },
+                    { title: 'Salida de AS', value: `${Number(payload.upgrade_exit_pct || 0).toFixed(1)}%`, detail: 'Casos donde ya existen triggers estructurados de salida.' },
+                ],
+                'Tracks y familias de fallo',
+                trackDistribution,
+                'Casos recientes',
+                (item) => `
+                    <div class="rounded-xl border border-slate-700/70 bg-slate-950/50 px-3 py-2">
+                        <div class="text-[11px] uppercase tracking-[0.18em] text-slate-500">Paciente ${item.patient_id}</div>
+                        <div class="mt-1 text-sm font-semibold text-white">${humanizeClinicalText(item.localized_track || 'Track no disponible')}</div>
+                        <div class="mt-1 text-xs text-slate-400">${humanizeClinicalText(item.effective_state || 'Estado no disponible')} · QA ${item.qa_passed ? 'pass' : 'pendiente'}</div>
+                    </div>
+                `,
+            );
+        }
+
+        function renderPostRTSalvagePanels() {
+            const payload = dashboardResearch?.post_rt_salvage_copilot || {};
+            const courseDistribution = Object.entries(payload.course_distribution || {}).map(([label, count]) => `${humanizeClinicalText(label)} (${count})`).join(', ') || 'Sin cursos registrados.';
+            renderGenericVerticalPanels(
+                'postRtSalvageGrid',
+                payload,
+                'Todavía no hay snapshots del copiloto post-RT registrados.',
+                [
+                    { title: 'Concordancia shadow vs regla', value: `${Number(payload.shadow_rule_concordance_pct || 0).toFixed(1)}%`, detail: `${payload.total_patients || 0} pacientes con snapshot vigente.` },
+                    { title: 'QA pass', value: `${Number(payload.qa_pass_pct || 0).toFixed(1)}%`, detail: `Última actualización: ${humanizeClinicalText(payload.latest_created_at || 'Fecha no disponible')}` },
+                    { title: 'Salvage local visible', value: `${Number(payload.local_salvage_candidate_pct || 0).toFixed(1)}%`, detail: 'Casos con rescate local post-RT todavía plausible.' },
+                    { title: 'Redirect sistémico', value: `${Number(payload.redirect_systemic_pct || 0).toFixed(1)}%`, detail: 'Casos ya redirigidos fuera del rescate local aislado.' },
+                ],
+                'Cursos y familias de fallo',
+                courseDistribution,
+                'Casos recientes',
+                (item) => `
+                    <div class="rounded-xl border border-slate-700/70 bg-slate-950/50 px-3 py-2">
+                        <div class="text-[11px] uppercase tracking-[0.18em] text-slate-500">Paciente ${item.patient_id}</div>
+                        <div class="mt-1 text-sm font-semibold text-white">${humanizeClinicalText(item.post_rt_course || 'Curso no disponible')}</div>
+                        <div class="mt-1 text-xs text-slate-400">${humanizeClinicalText(item.window_status || 'Window no disponible')} · QA ${item.qa_passed ? 'pass' : 'pendiente'}</div>
+                    </div>
+                `,
+            );
         }
 
         function renderMultivariatePanels() {

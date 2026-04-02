@@ -4,7 +4,10 @@ from datetime import date, datetime
 from typing import Any
 
 from prostanet.domains.patient_tracking.event_graph import merge_record_into_assessment_payload
-from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
+from prostanet.domains.patient_tracking.reconciled_state import (
+    build_reconciled_state,
+    derive_post_prostatectomy_truth,
+)
 from prostanet.domains.patient_tracking.response_assessment import ResponseAssessmentService
 from prostanet.domains.patient_tracking.skeletal_events import SkeletalEventService
 from prostanet.domains.patient_tracking.survival_endpoints import SurvivalEndpointService
@@ -26,12 +29,13 @@ MHSPC_STATES = {
     "mcspc_high_volume_metachronous",
     "mcspc_high_volume",
 }
-POSTLOCAL_STATES = {"post_prostatectomy", "recurrence_bcr"}
+POSTLOCAL_STATES = {"post_prostatectomy", "recurrence_bcr", "post_radiotherapy_or_local_salvage"}
 ADVANCED_STATES = {"adt_progression_verification", "m0_crpc", "m1_crpc"} | MHSPC_STATES
 
 TRIAL_FAMILY_PRIORITY = (
-    "EMBARK_like",
+    "POST_RP_SALVAGE_like",
     "PSMA_SRT_like",
+    "EMBARK_like",
     "ARANOTE_ARASENS_PEACE1_like",
     "TALAPRO2_like",
     "PSMAfore_like",
@@ -140,12 +144,26 @@ def _derive_line_context(patient: dict[str, Any], merged: dict[str, Any]) -> dic
 
 
 def _derive_current_psa(patient: dict[str, Any], merged: dict[str, Any]) -> tuple[float | None, str]:
+    postlocal_state = str(
+        _first_nonempty(
+            merged.get("state"),
+            (patient.get("latest_assessment") or {}).get("state"),
+            (patient.get("prior_history") or {}).get("current_state"),
+        )
+        or ""
+    )
+    if postlocal_state in POSTLOCAL_STATES or patient.get("bcr") or patient.get("surgery"):
+        post_rp_truth = derive_post_prostatectomy_truth(patient)
+        psa_points = list(post_rp_truth.get("psa_points") or [])
+        if psa_points:
+            latest_point = psa_points[-1]
+            return _safe_float(latest_point.get("value")), str(latest_point.get("sample_date") or "")
     psa_series = patient.get("psa_series") or []
     if psa_series:
         latest = sorted(psa_series, key=lambda item: str(item.get("sample_date") or ""))[-1]
         return _safe_float(latest.get("value")), str(latest.get("sample_date") or "")
     latest_followup = _latest(patient.get("follow_ups") or [], "visit_date")
-    return _safe_float(_first_nonempty(latest_followup.get("psa_current"), patient.get("bcr", {}).get("bcr_psa"), merged.get("psa_current"))), str(
+    return _safe_float(_first_nonempty(latest_followup.get("psa_current"), latest_followup.get("psa"), patient.get("bcr", {}).get("bcr_psa"), merged.get("psa_current"), merged.get("psa"))), str(
         _first_nonempty(latest_followup.get("visit_date"), patient.get("bcr", {}).get("bcr_date"), patient.get("identity", {}).get("diagnosis_date")) or ""
     )
 
@@ -988,7 +1006,7 @@ def _build_trial_comparable_endpoints(
         )
 
     current_start = _parse_date(line_context.get("current_line_start_date"))
-    if current_start:
+    if current_start and state in ADVANCED_STATES:
         add_endpoint(
             "time_on_treatment",
             "Tiempo en tratamiento",
@@ -1000,36 +1018,37 @@ def _build_trial_comparable_endpoints(
         )
 
     milestone_types = {item.get("event_type") for item in outcome_events}
-    add_endpoint(
-        "psa50",
-        "PSA50",
-        "complete" if "psa50_achieved" in milestone_types else "missing",
-        value="sí" if "psa50_achieved" in milestone_types else "no",
-        details="Reducción ≥50% desde baseline.",
-        comparable=state in MHSPC_STATES | {"m1_crpc"},
-        provisional=response_state.get("provisional", False),
-        evidence_basis=["ARANOTE", "SWOG S1216", "PCWG3 PSA kinetics"],
-    )
-    add_endpoint(
-        "psa90",
-        "PSA90",
-        "complete" if "psa90_achieved" in milestone_types else "missing",
-        value="sí" if "psa90_achieved" in milestone_types else "no",
-        details="Reducción ≥90% desde baseline.",
-        comparable=state in MHSPC_STATES | {"m1_crpc"},
-        provisional=response_state.get("provisional", False),
-        evidence_basis=["ARANOTE", "SWOG S1216"],
-    )
-    add_endpoint(
-        "ultralow_psa_milestone",
-        "PSA ultrabajo",
-        "complete" if "ultralow_psa_milestone" in milestone_types else "missing",
-        value="sí" if "ultralow_psa_milestone" in milestone_types else "no",
-        details="Milestone de PSA ≤0.2 ng/mL.",
-        comparable=state in MHSPC_STATES | {"m1_crpc"},
-        provisional=response_state.get("provisional", False),
-        evidence_basis=["SWOG S1216"],
-    )
+    if state in MHSPC_STATES | {"m1_crpc"}:
+        add_endpoint(
+            "psa50",
+            "PSA50",
+            "complete" if "psa50_achieved" in milestone_types else "missing",
+            value="sí" if "psa50_achieved" in milestone_types else "no",
+            details="Reducción ≥50% desde baseline.",
+            comparable=True,
+            provisional=response_state.get("provisional", False),
+            evidence_basis=["ARANOTE", "SWOG S1216", "PCWG3 PSA kinetics"],
+        )
+        add_endpoint(
+            "psa90",
+            "PSA90",
+            "complete" if "psa90_achieved" in milestone_types else "missing",
+            value="sí" if "psa90_achieved" in milestone_types else "no",
+            details="Reducción ≥90% desde baseline.",
+            comparable=True,
+            provisional=response_state.get("provisional", False),
+            evidence_basis=["ARANOTE", "SWOG S1216"],
+        )
+        add_endpoint(
+            "ultralow_psa_milestone",
+            "PSA ultrabajo",
+            "complete" if "ultralow_psa_milestone" in milestone_types else "missing",
+            value="sí" if "ultralow_psa_milestone" in milestone_types else "no",
+            details="Milestone de PSA ≤0.2 ng/mL.",
+            comparable=True,
+            provisional=response_state.get("provisional", False),
+            evidence_basis=["SWOG S1216"],
+        )
 
     mfs = survival_by_type.get("MFS")
     if mfs:
@@ -1116,13 +1135,45 @@ def _build_benchmark_snapshots(
         )
 
     if state == "recurrence_bcr" and (patient.get("surgery") or patient.get("radiation")):
+        salvage_local_flag = _normalize_status(
+            _first_nonempty(
+                merged.get("salvage_local_feasible"),
+                merged.get("local_salvage_candidate"),
+                _latest(patient.get("follow_ups") or [], "visit_date").get("salvage_local_feasible"),
+            )
+        )
+        systemic_redirect = m_substage in {"M1", "M1A", "M1B", "M1C"}
+        salvage_local_plausible = not systemic_redirect and salvage_local_flag != "negative"
+        if salvage_local_plausible:
+            snapshots.append(
+                BenchmarkSnapshot(
+                    benchmark_family="POST_RP_SALVAGE_like",
+                    scenario_state=state,
+                    management_track=management_track,
+                    eligibility_status="matched" if patient.get("surgery") else "partial",
+                    matched_trials=["RAVES", "RADICALS-RT", "ARTISTIC", "GETUG-AFU 16", "RTOG 9601", "SPPORT", "EMPIRE-1"],
+                    endpoint_snapshot={},
+                    cohort_flags=["BCR post tratamiento local", "Ruta de rescate todavía plausible"],
+                    notes=[
+                        "La familia dominante del caso sigue siendo salvage post-RP hasta que una imagen/documentación redirija la conducta fuera de rescate local.",
+                    ],
+                    recommended_trial_backbone=["SALVAGE_RT_CONTEXTUAL_ADT"],
+                    recommended_trial_backbone_label="RT de salvage temprana +/- ADT corta/prolongada",
+                    recommended_trial_backbone_source="RAVES, RADICALS-RT, ARTISTIC, GETUG-AFU 16, RTOG 9601, SPPORT, EMPIRE-1",
+                    recommended_trial_backbone_note="La evidencia comparable favorece activar rescate y reestadificación dirigida antes de pivotar a intensificación sistémica tipo EMBARK.",
+                ).to_dict()
+            )
         if psadt is not None and psadt <= 9:
             add_snapshot(
                 "EMBARK_like",
                 "matched",
                 ["EMBARK"],
                 [f"PSADT {psadt:.1f} meses", "BCR post tratamiento local"],
-                ["Cohorte de BCR de alto riesgo comparable para análisis observacional."],
+                [
+                    "Cohorte de BCR de alto riesgo comparable para análisis observacional."
+                    if not salvage_local_plausible
+                    else "Aunque existe BCR de alto riesgo tipo EMBARK, la ruta de salvage local sigue siendo clínicamente plausible y domina la comparación actual."
+                ],
             )
         else:
             add_snapshot(
@@ -1130,7 +1181,11 @@ def _build_benchmark_snapshots(
                 "partial",
                 ["EMBARK"],
                 ["BCR post tratamiento local"],
-                ["Falta PSADT rápido o riesgo estructurado para matching más estricto."],
+                [
+                    "Falta PSADT rápido o riesgo estructurado para matching más estricto."
+                    if not salvage_local_plausible
+                    else "Se mantiene como soporte contextual; no desplaza la familia salvage mientras el rescate local siga plausible."
+                ],
             )
         add_snapshot(
             "PSMA_SRT_like",
@@ -1373,7 +1428,14 @@ def build_disease_course_bundle(
 
 
 def build_cohort_benchmark_aggregate(patient_records: list[dict[str, Any]]) -> dict[str, Any]:
-    bundles = [build_disease_course_bundle(patient) for patient in patient_records if patient and patient.get("identity")]
+    bundles = [
+        build_disease_course_bundle(
+            patient,
+            state=str((patient.get("latest_assessment") or {}).get("state") or ""),
+        )
+        for patient in patient_records
+        if patient and patient.get("identity")
+    ]
     family_summary: dict[str, dict[str, Any]] = {}
     endpoint_availability: dict[str, dict[str, int]] = {}
     for bundle in bundles:

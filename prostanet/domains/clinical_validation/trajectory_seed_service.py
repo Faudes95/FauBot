@@ -62,7 +62,7 @@ def _register_case_patient(
         "assessment_state": str(trajectory.get("module_id") or ""),
     }
     merged_payload = tracking_service.merge_assessment_payload(assessment, patient_payload) if assessment else tracking_service.canonicalize_payload(patient_payload)
-    patient_id, message = tracking_db.register_new_patient(merged_payload, assessment=assessment)
+    patient_id, message, _registration_metadata = tracking_db.register_new_patient(merged_payload, assessment=assessment)
     if patient_id is None:
         raise RuntimeError(f"No se pudo registrar el caso {trajectory.get('scenario_id')}: {message}")
     if assessment_id:

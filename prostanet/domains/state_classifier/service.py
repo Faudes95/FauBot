@@ -1,14 +1,32 @@
 from __future__ import annotations
 
-from prostanet.shared.metastatic_profile import derive_legacy_metastasis, derive_mhspc_volume_context
+from prostanet.shared.metastatic_profile import (
+    derive_legacy_metastasis,
+    derive_mhspc_burden_context,
+)
+from prostanet.shared.systemic_progression import (
+    build_progression_gate,
+    normalize_castrate_status,
+    resolve_systemic_progression_context,
+)
+
+
+MHSPC_STATES = {
+    "mcspc_oligo_metachronous",
+    "mcspc_low_volume_sync_oligo",
+    "mcspc_high_volume_sync",
+    "mcspc_high_volume_metachronous",
+    "mcspc_high_volume",
+}
 
 
 class StateClassifierService:
     def classify(self, payload: dict) -> dict:
+        burden_context = derive_mhspc_burden_context(payload)
         known_cancer_diagnosis = self._is_true(payload.get("known_cancer_diagnosis", 1))
         prior_negative_biopsy = self._is_true(payload.get("prior_negative_biopsy"))
         metastasis_site, metastasis_count, m_substage = derive_legacy_metastasis(payload)
-        systemic_progression_context = str(payload.get("systemic_progression_context", "none") or "none")
+        systemic_progression_context = str(payload.get("systemic_progression_context", "") or "")
         current_adt_context = str(payload.get("current_adt_context", "none") or "none")
         castrate_status = self._normalize_castrate_status(payload)
         progression_pattern = str(payload.get("progression_pattern", "biochemical_only") or "biochemical_only")
@@ -22,6 +40,12 @@ class StateClassifierService:
             bcr2 = False
             metachronous = False
             volume_disease = "low"
+            burden_context = {
+                **burden_context,
+                "volume_disease": "low",
+                "volume_reason": "",
+                "oligometastatic_operational": False,
+            }
             systemic_progression_context = "none"
             current_adt_context = "none"
             castrate_status = "unknown"
@@ -33,67 +57,71 @@ class StateClassifierService:
             prior_radiation = self._is_true(payload.get("prior_radiation"))
             bcr2 = self._is_true(payload.get("bcr2"))
             metachronous = self._is_true(payload.get("metachronous_metastasis"))
-            volume_disease = str(payload.get("volume_disease") or derive_mhspc_volume_context(payload) or "low").lower()
-        castration_resistant = (
-            legacy_crpc_signal
-            or systemic_progression_context == "confirmed_crpc"
-            or int(float(payload.get("line_of_therapy", 1) or 1)) > 1
+            volume_disease = str(burden_context.get("volume_disease") or "low").lower()
+        systemic_progression_context_resolved = resolve_systemic_progression_context(
+            systemic_progression_context,
+            legacy_crpc_signal=legacy_crpc_signal,
+            line_of_therapy=payload.get("line_of_therapy"),
         )
+        castration_resistant = systemic_progression_context_resolved == "confirmed_crpc"
         legacy_crpc_shortcut = self._use_legacy_crpc_shortcut(
             payload,
             legacy_crpc_signal=legacy_crpc_signal,
         )
         on_adt = current_adt_context != "none"
 
-        metastatic = metastasis_site.upper() not in {"M0", "", "NONE", "NO"}
-        requires_adt_verification = self._requires_adt_verification(
-            systemic_progression_context=systemic_progression_context,
+        metastatic = (
+            burden_context.get("metastasis_count", 0) not in (None, 0)
+            or str(burden_context.get("m_substage_resolved") or m_substage).upper() not in {"", "M0"}
+            or metastasis_site.upper() not in {"M0", "", "NONE", "NO"}
+        )
+        phenotype_state = self._resolve_phenotype_state(
+            known_cancer_diagnosis=known_cancer_diagnosis,
+            prior_negative_biopsy=prior_negative_biopsy,
+            prior_prostatectomy=prior_prostatectomy,
+            prior_radiation=prior_radiation,
+            bcr2=bcr2,
+            castration_resistant=castration_resistant,
+            castrate_status=castrate_status,
+            conventional_imaging_status=conventional_imaging_status,
+            metastatic=metastatic,
+            metachronous=metachronous,
+            burden_context=burden_context,
+            metastasis_count=metastasis_count,
+            legacy_crpc_shortcut=legacy_crpc_shortcut,
+            payload=payload,
+        )
+        progression_gate = build_progression_gate(
+            systemic_progression_context=systemic_progression_context_resolved,
             on_adt=on_adt,
             castrate_status=castrate_status,
             progression_pattern=progression_pattern,
             prior_prostatectomy=prior_prostatectomy,
             prior_radiation=prior_radiation,
+            phenotype_state=phenotype_state if phenotype_state in MHSPC_STATES else "",
         )
 
         if not known_cancer_diagnosis:
-            if prior_negative_biopsy:
-                module = "post_negative_biopsy_followup"
-            else:
-                module = "diagnostic_workup"
-        elif requires_adt_verification and not legacy_crpc_shortcut:
+            module = phenotype_state
+        elif progression_gate.get("progression_gate_active") and phenotype_state in MHSPC_STATES:
+            module = phenotype_state
+        elif progression_gate.get("progression_gate_active") and not legacy_crpc_shortcut:
             module = "adt_progression_verification"
-        elif castration_resistant:
-            if legacy_crpc_shortcut:
-                module = "m1_crpc" if metastatic else "m0_crpc"
-            elif castrate_status != "confirmed_castrate":
-                module = "adt_progression_verification"
-            elif conventional_imaging_status == "M1":
-                module = "m1_crpc"
-            elif conventional_imaging_status == "M0":
-                module = "m0_crpc"
-            elif systemic_progression_context == "confirmed_crpc":
-                module = "adt_progression_verification"
-            elif metastatic:
-                module = "m1_crpc"
-            else:
-                module = "m0_crpc"
-        elif metastatic:
-            if metachronous and metastasis_count <= 5:
-                module = "mcspc_oligo_metachronous"
-            elif volume_disease == "high" or metastasis_count >= 4 or metastasis_site.lower() == "visceral" or m_substage == "M1c":
-                module = "mcspc_high_volume_metachronous" if metachronous else "mcspc_high_volume_sync"
-            else:
-                module = "mcspc_low_volume_sync_oligo"
-        elif bcr2 or ((prior_prostatectomy or prior_radiation) and self._has_recurrence_signal(payload)):
-            module = "recurrence_bcr"
-        elif prior_prostatectomy:
-            module = "post_prostatectomy"
         else:
-            module = "localized_initial"
+            module = phenotype_state
 
         return {
             "state": module,
-            "classification_reason": self._reason_for(module),
+            "classification_reason": self._reason_for(
+                module,
+                burden_context=burden_context,
+                metachronous=metachronous,
+                progression_gate=progression_gate,
+                phenotype_state=phenotype_state,
+            ),
+            "derived_metastatic_context": burden_context,
+            "phenotype_state": phenotype_state,
+            **progression_gate,
         }
 
     @staticmethod
@@ -108,38 +136,49 @@ class StateClassifierService:
         return psa_postop > 0.1 or psa_current > 0.1 or phoenix >= 2.0
 
     @staticmethod
-    def _reason_for(module: str) -> str:
+    def _reason_for(
+        module: str,
+        *,
+        burden_context: dict | None = None,
+        metachronous: bool = False,
+        progression_gate: dict[str, object] | None = None,
+        phenotype_state: str = "",
+    ) -> str:
+        burden_context = burden_context or {}
+        progression_gate = progression_gate or {}
+        volume_reason = str(burden_context.get("volume_reason") or "").strip()
         reasons = {
             "diagnostic_workup": "No existe confirmación histológica previa y se requiere un estudio diagnóstico estructurado antes de entrar a una ruta terapéutica.",
             "post_negative_biopsy_followup": "Existe una biopsia prostática benigna previa sin diagnóstico confirmado de cáncer y debe priorizarse seguimiento de baja intensidad o reactivación diagnóstica según la nueva sospecha.",
             "localized_initial": "No se detectaron tratamientos locales previos ni marcadores de enfermedad avanzada.",
             "post_prostatectomy": "Se detectó prostatectomía radical previa sin criterios que desplacen el caso a recurrencia.",
             "recurrence_bcr": "Se detectaron marcadores de recurrencia o de segunda recurrencia bioquímica después de tratamiento local.",
-            "mcspc_oligo_metachronous": "Se detectó enfermedad metastásica sensible a la castración, oligometastásica y metacrónica.",
-            "mcspc_low_volume_sync_oligo": "Se detectó enfermedad metastásica sensible a la castración con patrón de bajo volumen u oligometastásico sincrónico.",
-            "mcspc_high_volume_sync": "Se detectó enfermedad metastásica sensible a la castración de alto volumen sincrónica / de novo.",
-            "mcspc_high_volume_metachronous": "Se detectó enfermedad metastásica sensible a la castración de alto volumen metacrónica.",
-            "mcspc_high_volume": "Se detectó enfermedad metastásica sensible a la castración de alto volumen.",
+            "post_radiotherapy_or_local_salvage": "Se detectó radioterapia previa con señal de recurrencia; debe separarse la ruta post-RT para confirmar Phoenix, restadificar y priorizar salvage local, MDT o redirección sistémica.",
+            "mcspc_oligo_metachronous": f"Se detectó enfermedad metastásica sensible a la castración, oligometastásica y metacrónica. {volume_reason}".strip(),
+            "mcspc_low_volume_sync_oligo": f"Se detectó enfermedad metastásica sensible a la castración con patrón de bajo volumen u oligometastásico sincrónico. {volume_reason}".strip(),
+            "mcspc_high_volume_sync": f"Se detectó enfermedad metastásica sensible a la castración de alto volumen sincrónica / de novo. {volume_reason}".strip(),
+            "mcspc_high_volume_metachronous": f"Se detectó enfermedad metastásica sensible a la castración de alto volumen metacrónica. {volume_reason}".strip(),
+            "mcspc_high_volume": f"Se detectó enfermedad metastásica sensible a la castración de alto volumen. {volume_reason}".strip(),
             "adt_progression_verification": "Se detectó progresión bajo terapia de privación androgénica o una etiqueta de CRPC sin castración confirmada, por lo que primero debe verificarse testosterona en rango de castración y reestadificación convencional.",
             "m0_crpc": "Se detectó enfermedad resistente a la castración sin metástasis.",
             "m1_crpc": "Se detectó enfermedad resistente a la castración con metástasis.",
         }
-        return reasons.get(module, "El módulo fue seleccionado por el clasificador de estado clínico.")
+        reason = reasons.get(module, "El módulo fue seleccionado por el clasificador de estado clínico.")
+        if module == "mcspc_low_volume_sync_oligo" and not metachronous and burden_context.get("oligometastatic_operational"):
+            reason = f"{reason} Patrón operativo oligometastásico sincrónico (<=5 lesiones sin criterio de alto volumen).".strip()
+        if progression_gate.get("progression_gate_active"):
+            gate_reason = str(progression_gate.get("progression_gate_reason") or "").strip()
+            if gate_reason and module == phenotype_state and module in MHSPC_STATES:
+                return f"{reason} {gate_reason}".strip()
+        return reason
 
     @staticmethod
     def _normalize_castrate_status(payload: dict) -> str:
-        explicit = str(payload.get("castrate_testosterone_status", "unknown") or "unknown")
-        if explicit in {"confirmed_castrate", "not_castrate", "unknown"}:
-            return explicit
-        if StateClassifierService._is_true(payload.get("castrate_testosterone_confirmed")):
-            return "confirmed_castrate"
-        testosterone_value = payload.get("testosterone_value")
-        if testosterone_value not in (None, ""):
-            try:
-                return "confirmed_castrate" if float(testosterone_value) <= 50 else "not_castrate"
-            except (TypeError, ValueError):
-                return "unknown"
-        return "unknown"
+        return normalize_castrate_status(
+            payload.get("castrate_testosterone_status", "unknown"),
+            testosterone_value=payload.get("testosterone_value"),
+            castrate_confirmed_flag=payload.get("castrate_testosterone_confirmed"),
+        )
 
     @staticmethod
     def _use_legacy_crpc_shortcut(payload: dict, *, legacy_crpc_signal: bool) -> bool:
@@ -166,21 +205,45 @@ class StateClassifierService:
         return True
 
     @staticmethod
-    def _requires_adt_verification(
+    def _resolve_phenotype_state(
         *,
-        systemic_progression_context: str,
-        on_adt: bool,
-        castrate_status: str,
-        progression_pattern: str,
+        known_cancer_diagnosis: bool,
+        prior_negative_biopsy: bool,
         prior_prostatectomy: bool,
         prior_radiation: bool,
-    ) -> bool:
-        if systemic_progression_context == "progression_on_adt_verify_castration":
-            return True
-        if systemic_progression_context == "confirmed_crpc" and castrate_status != "confirmed_castrate":
-            return True
-        if on_adt and castrate_status != "confirmed_castrate" and progression_pattern in {"biochemical_only", "radiographic", "clinical", "mixed"}:
-            return True
-        if (prior_prostatectomy or prior_radiation) and on_adt and castrate_status != "confirmed_castrate":
-            return True
-        return False
+        bcr2: bool,
+        castration_resistant: bool,
+        castrate_status: str,
+        conventional_imaging_status: str,
+        metastatic: bool,
+        metachronous: bool,
+        burden_context: dict,
+        metastasis_count: int,
+        legacy_crpc_shortcut: bool,
+        payload: dict,
+    ) -> str:
+        if not known_cancer_diagnosis:
+            return "post_negative_biopsy_followup" if prior_negative_biopsy else "diagnostic_workup"
+        if castration_resistant and (legacy_crpc_shortcut or castrate_status == "confirmed_castrate"):
+            if legacy_crpc_shortcut:
+                return "m1_crpc" if metastatic else "m0_crpc"
+            if conventional_imaging_status == "M1" or metastatic:
+                return "m1_crpc"
+            if conventional_imaging_status == "M0":
+                return "m0_crpc"
+        if metastatic:
+            volume_disease = str(burden_context.get("volume_disease") or "low").lower()
+            if volume_disease == "high":
+                return "mcspc_high_volume_metachronous" if metachronous else "mcspc_high_volume_sync"
+            if metachronous and burden_context.get("oligometastatic_operational"):
+                return "mcspc_oligo_metachronous"
+            if metachronous and metastasis_count and metastasis_count <= 5:
+                return "mcspc_oligo_metachronous"
+            return "mcspc_low_volume_sync_oligo"
+        if prior_radiation and not prior_prostatectomy and StateClassifierService._has_recurrence_signal(payload):
+            return "post_radiotherapy_or_local_salvage"
+        if bcr2 or (prior_prostatectomy and StateClassifierService._has_recurrence_signal(payload)):
+            return "recurrence_bcr"
+        if prior_prostatectomy:
+            return "post_prostatectomy"
+        return "localized_initial"

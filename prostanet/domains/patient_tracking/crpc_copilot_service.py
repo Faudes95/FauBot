@@ -24,15 +24,34 @@ from prostanet.domains.patient_tracking.laboratory_intelligence.service import (
 from prostanet.domains.patient_tracking.psma_imaging.service import (
     build_psma_structured_profile,
 )
+from prostanet.domains.patient_tracking.therapeutic_family_engine import family_label
+from prostanet.domains.patient_tracking.therapy_catalog import (
+    normalize_regimen_code,
+    regimen_metadata_bundle,
+)
 from prostanet.domains.patient_tracking.treatment_sequencer import TreatmentSequencer
+from prostanet.domains.patient_tracking.vertical_runtime import (
+    build_blocked_by_overlay,
+    build_decision_delta_since_last_visit,
+    build_evidence_basis_current_visit,
+    build_histopathology_summary,
+    build_shared_metastatic_summary,
+    enrich_recommendation_with_metastatic_summary,
+    prepend_metastatic_context,
+)
 from prostanet.engine.confidence_scoring import ConfidenceScorer
 from prostanet.shared.ddi_engine import DDIEngine
 from prostanet.shared.feature_flags import resolve_feature_flags
+from prostanet.shared.presentation_text import state_display_label
 
 
 CRPC_VERTICAL_STATES = {"adt_progression_verification", "m0_crpc", "m1_crpc"}
 ARPI_TOKENS = ("enza", "abirater", "apalut", "darolut")
 PARP_TOKENS = ("olapar", "rucapar", "nirapar", "talazopar")
+
+
+def _state_label(state: str) -> str:
+    return state_display_label(state)
 
 
 def _is_present(value: Any) -> bool:
@@ -101,7 +120,16 @@ def _overlay_present_values(
 
 def _normalize_for_compare(value: str) -> str:
     lowered = value.lower().strip()
-    for token in ("acetato de ", " + adt", "+ adt", " (post-arsi)", " (ar-v7 dirigido)"):
+    for token in (
+        "acetato de ",
+        " + adt",
+        "+ adt",
+        " + terapia de privacion androgenica",
+        " + terapia de privación androgénica",
+        " + tda",
+        " (post-arsi)",
+        " (ar-v7 dirigido)",
+    ):
         lowered = lowered.replace(token, "")
     lowered = lowered.replace(" ", "").replace("-", "")
     return lowered
@@ -124,6 +152,24 @@ def _treatment_family(value: str) -> str:
     return "other"
 
 
+def _structured_recommendation_family(
+    preferred_regimen: dict[str, Any] | None,
+    sequence_bundle: dict[str, Any] | None,
+    fallback: str,
+) -> str:
+    preferred_regimen = dict(preferred_regimen or {})
+    sequence_bundle = dict(sequence_bundle or {})
+    family_code = str(
+        preferred_regimen.get("family_code")
+        or preferred_regimen.get("family_label")
+        or sequence_bundle.get("active_family")
+        or ""
+    ).strip()
+    if family_code.endswith("_family"):
+        return family_label(family_code)
+    return family_code or fallback
+
+
 def _has_card_sequence_context(payload: dict[str, Any]) -> bool:
     prior_therapy = " ".join(str(item).lower() for item in (payload.get("prior_therapy") or []))
     has_prior_arpi = any(token in prior_therapy for token in ARPI_TOKENS)
@@ -136,6 +182,8 @@ class CRPCSequenceCandidate:
     line_number: int
     drug: str
     drug_label: str
+    regimen_code: str
+    regimen_label: str
     evidence_level: str
     expected_os_months: float | None
     expected_pfs_months: float | None
@@ -146,6 +194,12 @@ class CRPCSequenceCandidate:
     blocked_by: list[str] = field(default_factory=list)
     rationale: str = ""
     formulary: list[str] = field(default_factory=list)
+    component_drugs: list[dict[str, Any]] = field(default_factory=list)
+    dose: str = ""
+    route: str = ""
+    schedule: str = ""
+    imss_key: str = ""
+    description: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -251,6 +305,12 @@ class CRPCCopilotService:
             routing_reason=routing_reason,
             payload=payload,
         )
+        metastatic_composition_summary = build_shared_metastatic_summary(payload)
+        histopathology_summary = build_histopathology_summary(payload)
+        rule_based_recommendation = enrich_recommendation_with_metastatic_summary(
+            rule_based_recommendation,
+            metastatic_composition_summary,
+        )
         ai_advisory_overlay = self._build_ai_overlay(
             runtime_mode=runtime_mode,
             state_family=state_family,
@@ -258,6 +318,8 @@ class CRPCCopilotService:
             sequence_candidates=sequence_candidates,
             blocking_groups=blocking_groups,
             safety_gates=safety_gates,
+            preferred_regimen=dict(module_result.get("preferred_frontline_regimen") or {}),
+            sequence_transition_bundle=dict(module_result.get("sequence_transition_bundle") or {}),
         )
         qa_validation = self._run_qa_validation(
             runtime_patient,
@@ -272,6 +334,10 @@ class CRPCCopilotService:
             ai_overlay=ai_advisory_overlay,
             qa_validation=qa_validation,
             blocking_groups=blocking_groups,
+        )
+        final_presented_recommendation = enrich_recommendation_with_metastatic_summary(
+            final_presented_recommendation,
+            metastatic_composition_summary,
         )
         model_like_output = {
             "recommendations": [
@@ -294,6 +360,7 @@ class CRPCCopilotService:
             routing_reason=routing_reason,
             safety_gates=safety_gates,
         )
+        why_changed_today = prepend_metastatic_context(why_changed_today, metastatic_composition_summary)
         crpc_schedule_overlay = self._build_schedule_overlay(
             state_family=state_family,
             blocking_groups=blocking_groups,
@@ -305,6 +372,25 @@ class CRPCCopilotService:
             qa_validation=qa_validation,
             blocking_groups=blocking_groups,
             ai_overlay=ai_advisory_overlay,
+        )
+        blocked_by_overlay = build_blocked_by_overlay(
+            blocking_groups=blocking_groups,
+            safety_gates=safety_gates,
+        )
+        decision_delta_since_last_visit = build_decision_delta_since_last_visit(
+            runtime_patient,
+            effective_state=state_family,
+            phenotype_state=state_family,
+            rule_based_recommendation=rule_based_recommendation,
+            final_presented_recommendation=final_presented_recommendation,
+            blocking_groups=blocking_groups,
+            blocked_by_overlay=blocked_by_overlay,
+        )
+        guideline_basis = self._guideline_basis(module_result)
+        evidence_basis_current_visit = build_evidence_basis_current_visit(
+            guideline_basis,
+            rule_based_recommendation,
+            decision_delta_since_last_visit,
         )
         sequence_summary = [
             {
@@ -321,23 +407,37 @@ class CRPCCopilotService:
             "service_id": self.service_id,
             "status": status,
             "state_family": state_family,
+            "state_family_label": _state_label(state_family),
             "raw_state": state,
             "runtime_mode": runtime_mode,
             "rule_based_source_of_truth": True,
             "effective_state": state_family,
             "effective_management_track": effective_management_track,
+            "histopathology_summary": histopathology_summary,
             "routing_reason": routing_reason,
+            "metastatic_composition_summary": metastatic_composition_summary,
             "rule_based_recommendation": rule_based_recommendation,
             "ai_advisory_overlay": ai_advisory_overlay,
             "final_presented_recommendation": final_presented_recommendation,
+            "preferred_frontline_regimen": dict(module_result.get("preferred_frontline_regimen") or {}),
+            "preferred_regimen_code": str((module_result.get("preferred_frontline_regimen") or {}).get("regimen_code") or ""),
+            "eligible_treatments": list(module_result.get("eligible_treatments") or []),
+            "alternative_regimens": list(module_result.get("alternative_regimens") or []),
+            "comparative_eligibility_matrix": dict(module_result.get("comparative_eligibility_matrix") or {}),
+            "therapeutic_family_profiles": dict(module_result.get("comparative_eligibility_matrix") or {}),
+            "sequence_transition_bundle": dict(module_result.get("sequence_transition_bundle") or {}),
+            "active_regimen_monitoring_package": dict(module_result.get("active_regimen_monitoring_package") or {}),
             "sequence_candidates": sequence_candidates,
             "sequence_summary": sequence_summary,
             "blocking_inputs": blocking_groups,
+            "blocked_by_overlay": blocked_by_overlay,
             "safety_gates": safety_gates,
             "qa_validation": qa_validation,
-            "guideline_basis": self._guideline_basis(module_result),
+            "guideline_basis": guideline_basis,
+            "evidence_basis_current_visit": evidence_basis_current_visit,
             "confidence": confidence,
             "why_changed_today": why_changed_today,
+            "decision_delta_since_last_visit": decision_delta_since_last_visit,
             "crpc_schedule_overlay": crpc_schedule_overlay,
             "ddi_review": ddi_review,
             "laboratory_focus": {
@@ -360,18 +460,25 @@ class CRPCCopilotService:
             "show_card": False,
             "status": status,
             "state_family": state,
+            "state_family_label": _state_label(state),
             "runtime_mode": runtime_mode,
             "rule_based_source_of_truth": True,
+            "effective_management_track": "",
+            "histopathology_summary": "",
+            "metastatic_composition_summary": {"available": False},
             "rule_based_recommendation": {},
             "ai_advisory_overlay": {"available": False, "status": status},
             "final_presented_recommendation": {},
             "sequence_candidates": [],
             "blocking_inputs": [],
+            "blocked_by_overlay": [],
             "safety_gates": [],
             "qa_validation": {"approved": False, "flags": [], "missing_data_alerts": []},
             "guideline_basis": [],
+            "evidence_basis_current_visit": [],
             "confidence": {"composite_score": 0.0, "components": {}, "weights_used": {}},
             "why_changed_today": [],
+            "decision_delta_since_last_visit": {"available": False},
             "crpc_schedule_overlay": {},
             "sequence_summary": [],
         }
@@ -592,8 +699,20 @@ class CRPCCopilotService:
     ) -> dict[str, Any]:
         eligible = list(module_result.get("eligible_treatments") or [])
         primary = eligible[0] if eligible else {}
+        preferred_regimen = dict(module_result.get("preferred_frontline_regimen") or {})
+        sequence_bundle = dict(module_result.get("sequence_transition_bundle") or {})
         action = _normalize_text(primary.get("name") if isinstance(primary, dict) else primary)
         rationale = _normalize_text((primary.get("notes") if isinstance(primary, dict) else "") or module_result.get("recommended_trajectory") or module_result.get("report_sections", {}).get("summary"))
+        preferred_label = _normalize_text(preferred_regimen.get("name") or preferred_regimen.get("regimen_label"))
+        trigger_status = _normalize_text(sequence_bundle.get("trigger_status"))
+        if preferred_label and trigger_status in {"switch", "intensify", "continue", "confirm"}:
+            if trigger_status == "continue":
+                action = f"Continuar {preferred_label}"
+            elif trigger_status == "confirm":
+                action = "Completar datos críticos y recalcular secuencia"
+            else:
+                action = f"Priorizar {preferred_label}"
+            rationale = _normalize_text(sequence_bundle.get("line_change_reason") or rationale)
         original_state = _normalize_text(payload.get("effective_state"))
         if original_state == "adt_progression_verification" and state_family in {"m0_crpc", "m1_crpc"}:
             action = (
@@ -620,7 +739,7 @@ class CRPCCopilotService:
             "source": "rule_based_primary",
             "state_family": state_family,
             "recommended_action": action or _normalize_text(module_result.get("recommended_trajectory")) or "Sin recomendación estructurada",
-            "recommendation_family": _treatment_family(action or state_family),
+            "recommendation_family": _structured_recommendation_family(preferred_regimen, sequence_bundle, _treatment_family(action or state_family)),
             "rationale": rationale,
             "guideline_basis": self._guideline_basis(module_result),
             "routing_reason": routing_reason,
@@ -650,6 +769,8 @@ class CRPCCopilotService:
                         if requires_correlation
                         else "Completar verificación de castración y reestadificación convencional"
                     ),
+                    regimen_code="ADT_MONO",
+                    regimen_label="ADT sola",
                     evidence_level="guideline",
                     expected_os_months=None,
                     expected_pfs_months=None,
@@ -669,6 +790,8 @@ class CRPCCopilotService:
                     line_number=1,
                     drug="monitoring_only",
                     drug_label="Vigilancia estrecha con ADT",
+                    regimen_code="ADT_MONO",
+                    regimen_label="ADT sola",
                     evidence_level="guideline",
                     expected_os_months=None,
                     expected_pfs_months=None,
@@ -704,6 +827,8 @@ class CRPCCopilotService:
         candidates: list[CRPCSequenceCandidate] = []
         for item in raw_lines[:5]:
             drug_label = _normalize_text(item.get("drug_label") or item.get("label") or item.get("drug"))
+            regimen_code = normalize_regimen_code(item.get("regimen_code") or drug_label or item.get("drug"))
+            regimen_bundle = regimen_metadata_bundle(regimen_code)
             blocked_by = self._blocked_by(drug_label, safety_gates)
             if card_context and _treatment_family(drug_label) == "arpi":
                 blocked_by = list(dict.fromkeys(blocked_by + ["Evitar ARPI -> ARPI injustificado"]))
@@ -712,6 +837,8 @@ class CRPCCopilotService:
                     line_number=int(item.get("line_number") or 0),
                     drug=_normalize_text(item.get("drug")),
                     drug_label=drug_label,
+                    regimen_code=regimen_bundle.get("regimen_code", regimen_code if regimen_code else ""),
+                    regimen_label=regimen_bundle.get("regimen_label", ""),
                     evidence_level=_normalize_text(item.get("evidence_level")),
                     expected_os_months=_safe_float(item.get("expected_os_months")),
                     expected_pfs_months=_safe_float(item.get("expected_pfs_months")),
@@ -722,6 +849,12 @@ class CRPCCopilotService:
                     blocked_by=blocked_by,
                     rationale=_normalize_text(item.get("rationale")),
                     formulary=list(item.get("formulary") or []),
+                    component_drugs=list(regimen_bundle.get("component_drugs") or []),
+                    dose=str(regimen_bundle.get("dose") or ""),
+                    route=str(regimen_bundle.get("route") or ""),
+                    schedule=str(regimen_bundle.get("schedule") or ""),
+                    imss_key=str(regimen_bundle.get("imss_key") or ""),
+                    description=str(regimen_bundle.get("description") or ""),
                 )
             )
         if card_context and candidates:
@@ -759,12 +892,14 @@ class CRPCCopilotService:
                     candidate.line_number or 99,
                 )
             )
-        if candidates:
-            return [candidate.to_dict() for candidate in candidates[:3]]
+        if module_result.get("eligible_treatments"):
+            candidates = []
         for index, item in enumerate(module_result.get("eligible_treatments") or [], start=1):
             if not isinstance(item, dict):
                 continue
             drug_label = _normalize_text(item.get("name"))
+            regimen_code = normalize_regimen_code(item.get("regimen_code") or drug_label)
+            regimen_bundle = regimen_metadata_bundle(regimen_code)
             blocked_by = self._blocked_by(drug_label, safety_gates)
             if card_context and _treatment_family(drug_label) == "arpi":
                 blocked_by = list(dict.fromkeys(blocked_by + ["Evitar ARPI -> ARPI injustificado"]))
@@ -773,6 +908,8 @@ class CRPCCopilotService:
                     line_number=index,
                     drug=drug_label.lower().replace(" ", "_"),
                     drug_label=drug_label,
+                    regimen_code=regimen_bundle.get("regimen_code", regimen_code if regimen_code else ""),
+                    regimen_label=regimen_bundle.get("regimen_label", ""),
                     evidence_level="guideline",
                     expected_os_months=None,
                     expected_pfs_months=None,
@@ -782,20 +919,54 @@ class CRPCCopilotService:
                     blocked=bool(blocked_by),
                     blocked_by=blocked_by,
                     rationale=_normalize_text(item.get("notes")),
+                    component_drugs=list(item.get("component_drugs") or regimen_bundle.get("component_drugs") or []),
+                    dose=str(item.get("dose") or regimen_bundle.get("dose") or ""),
+                    route=str(item.get("route") or regimen_bundle.get("route") or ""),
+                    schedule=str(item.get("schedule") or regimen_bundle.get("schedule") or ""),
+                    imss_key=str(item.get("imss_key") or regimen_bundle.get("imss_key") or ""),
+                    description=str(item.get("description") or regimen_bundle.get("description") or item.get("notes") or ""),
                 )
             )
-        if card_context and candidates:
-            candidates.sort(
-                key=lambda candidate: (
-                    0 if "cabazitax" in candidate.drug_label.lower() else 1,
-                    0 if _treatment_family(candidate.drug_label) == "taxane" else 1,
-                    1 if _treatment_family(candidate.drug_label) == "arpi" else 0,
-                    0 if candidate.is_preferred else 1,
-                    1 if candidate.blocked else 0,
-                    candidate.line_number or 99,
+        if candidates:
+            if card_context:
+                candidates.sort(
+                    key=lambda candidate: (
+                        0 if "cabazitax" in candidate.drug_label.lower() else 1,
+                        0 if _treatment_family(candidate.drug_label) == "taxane" else 1,
+                        1 if _treatment_family(candidate.drug_label) == "arpi" else 0,
+                        0 if candidate.is_preferred else 1,
+                        1 if candidate.blocked else 0,
+                        candidate.line_number or 99,
+                    )
                 )
-            )
-        return [candidate.to_dict() for candidate in candidates[:3]]
+            elif first_line_standard_arpi_context:
+                candidates.sort(
+                    key=lambda candidate: (
+                        0 if "enzalut" in candidate.drug_label.lower() else 1,
+                        0 if "abirater" in candidate.drug_label.lower() else 1,
+                        0 if candidate.is_preferred else 1,
+                        1 if candidate.blocked else 0,
+                        candidate.line_number or 99,
+                    )
+                )
+            if preferred_rule_label:
+                candidates.sort(
+                    key=lambda candidate: (
+                        0 if self._concordance_label(preferred_rule_label, candidate.drug_label) == "concordant" else 1,
+                        0 if card_context and "cabazitax" in candidate.drug_label.lower() else 1,
+                        0 if card_context and _treatment_family(candidate.drug_label) == "taxane" else 1,
+                        0 if first_line_standard_arpi_context and "enzalut" in candidate.drug_label.lower() else 1,
+                        0 if first_line_standard_arpi_context and "abirater" in candidate.drug_label.lower() else 1,
+                        1 if card_context and _treatment_family(candidate.drug_label) == "arpi" else 0,
+                        0 if candidate.is_preferred else 1,
+                        1 if candidate.blocked else 0,
+                        candidate.line_number or 99,
+                    )
+                )
+            return [candidate.to_dict() for candidate in candidates[:3]]
+        if candidates:
+            return [candidate.to_dict() for candidate in candidates[:3]]
+        return []
 
     def _build_safety_gates(
         self,
@@ -973,6 +1144,8 @@ class CRPCCopilotService:
         sequence_candidates: list[dict[str, Any]],
         blocking_groups: list[dict[str, Any]],
         safety_gates: list[dict[str, Any]],
+        preferred_regimen: dict[str, Any],
+        sequence_transition_bundle: dict[str, Any],
     ) -> dict[str, Any]:
         unblocked = next((item for item in sequence_candidates if not item.get("blocked")), None)
         top_candidate = unblocked or (sequence_candidates[0] if sequence_candidates else None)
@@ -1002,7 +1175,11 @@ class CRPCCopilotService:
             "available": True,
             "status": status,
             "recommended_action": recommended_action,
-            "recommendation_family": _treatment_family(recommended_action),
+            "recommendation_family": _structured_recommendation_family(
+                dict(preferred_regimen or {}),
+                dict(sequence_transition_bundle or {}),
+                _treatment_family(recommended_action),
+            ),
             "sequence_candidate": top_candidate,
             "concordance_label": concordance,
             "shadow_reasons": [

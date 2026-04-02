@@ -23,8 +23,18 @@ from prostanet.domains.patient_tracking.psma_imaging import (
 )
 from prostanet.domains.patient_tracking.reconciled_state import (
     derive_post_prostatectomy_course,
+    derive_post_prostatectomy_truth,
 )
 from prostanet.domains.patient_tracking.risk_tools import build_risk_tools_panel
+from prostanet.domains.patient_tracking.vertical_runtime import (
+    build_blocked_by_overlay,
+    build_decision_delta_since_last_visit,
+    build_evidence_basis_current_visit,
+    build_histopathology_summary,
+    build_shared_metastatic_summary,
+    enrich_recommendation_with_metastatic_summary,
+    prepend_metastatic_context,
+)
 from prostanet.domains.post_prostatectomy.service import PostProstatectomyService
 from prostanet.domains.recurrence_bcr.service import RecurrenceBCRService
 from prostanet.engine.confidence_scoring import ConfidenceScorer
@@ -218,6 +228,7 @@ class PostRPSalvageCopilotService:
             latest_assessment,
             effective_state=state or "post_prostatectomy",
         )
+        histopathology_summary = build_histopathology_summary(payload)
         psma_profile = (
             build_psma_structured_profile_from_payload(payload)
             if any(
@@ -288,6 +299,11 @@ class PostRPSalvageCopilotService:
             payload=payload,
             psma_impact=psma_impact,
         )
+        metastatic_composition_summary = build_shared_metastatic_summary(payload)
+        rule_based_recommendation = enrich_recommendation_with_metastatic_summary(
+            rule_based_recommendation,
+            metastatic_composition_summary,
+        )
         restaging_strategy = self._build_restaging_strategy(
             salvage_window_status=salvage_window_status,
             psma_profile=psma_profile,
@@ -326,6 +342,10 @@ class PostRPSalvageCopilotService:
             qa_validation=qa_validation,
             blocking_groups=blocking_inputs,
         )
+        final_presented_recommendation = enrich_recommendation_with_metastatic_summary(
+            final_presented_recommendation,
+            metastatic_composition_summary,
+        )
         model_like_output = {
             "recommendations": [
                 {
@@ -347,6 +367,7 @@ class PostRPSalvageCopilotService:
             salvage_window_reason=salvage_window_reason,
             psma_impact=psma_impact,
         )
+        why_changed_today = prepend_metastatic_context(why_changed_today, metastatic_composition_summary)
         post_rp_schedule_overlay = self._build_schedule_overlay(
             post_rp_course=post_rp_course,
             salvage_window_status=salvage_window_status,
@@ -358,6 +379,25 @@ class PostRPSalvageCopilotService:
             qa_validation=qa_validation,
             blocking_groups=blocking_inputs,
             ai_overlay=ai_advisory_overlay,
+        )
+        blocked_by_overlay = build_blocked_by_overlay(
+            blocking_groups=blocking_inputs,
+            safety_gates=safety_gates,
+        )
+        decision_delta_since_last_visit = build_decision_delta_since_last_visit(
+            runtime_patient,
+            effective_state=resolved_state,
+            phenotype_state=resolved_state,
+            rule_based_recommendation=rule_based_recommendation,
+            final_presented_recommendation=final_presented_recommendation,
+            blocking_groups=blocking_inputs,
+            blocked_by_overlay=blocked_by_overlay,
+        )
+        guideline_basis = self._guideline_basis(module_result)
+        evidence_basis_current_visit = build_evidence_basis_current_visit(
+            guideline_basis,
+            rule_based_recommendation,
+            decision_delta_since_last_visit,
         )
         return {
             "enabled": True,
@@ -372,8 +412,10 @@ class PostRPSalvageCopilotService:
             "post_prostatectomy_course": post_rp_course,
             "effective_state": resolved_state,
             "effective_management_track": resolved_track,
+            "histopathology_summary": histopathology_summary,
             "salvage_window_status": salvage_window_status,
             "salvage_window_reason": salvage_window_reason,
+            "metastatic_composition_summary": metastatic_composition_summary,
             "rule_based_recommendation": rule_based_recommendation,
             "ai_advisory_overlay": ai_advisory_overlay,
             "final_presented_recommendation": final_presented_recommendation,
@@ -381,11 +423,14 @@ class PostRPSalvageCopilotService:
             "local_salvage_pathway": local_salvage_pathway,
             "sequence_candidates": sequence_candidates,
             "blocking_inputs": blocking_inputs,
+            "blocked_by_overlay": blocked_by_overlay,
             "safety_gates": safety_gates,
             "qa_validation": qa_validation,
-            "guideline_basis": self._guideline_basis(module_result),
+            "guideline_basis": guideline_basis,
+            "evidence_basis_current_visit": evidence_basis_current_visit,
             "confidence": confidence,
             "why_changed_today": why_changed_today,
+            "decision_delta_since_last_visit": decision_delta_since_last_visit,
             "post_rp_schedule_overlay": post_rp_schedule_overlay,
             "risk_tools_summary": self._risk_tools_summary(risk_tools_bundle),
             "prognostic_summary": {
@@ -422,6 +467,9 @@ class PostRPSalvageCopilotService:
             "state_family": state,
             "runtime_mode": runtime_mode,
             "rule_based_source_of_truth": True,
+            "effective_management_track": "",
+            "histopathology_summary": "",
+            "metastatic_composition_summary": {"available": False},
             "post_prostatectomy_course": post_rp_course,
             "salvage_window_status": "closed",
             "salvage_window_reason": "",
@@ -432,11 +480,14 @@ class PostRPSalvageCopilotService:
             "local_salvage_pathway": {},
             "sequence_candidates": [],
             "blocking_inputs": [],
+            "blocked_by_overlay": [],
             "safety_gates": [],
             "qa_validation": {"approved": False, "flags": [], "missing_data_alerts": []},
             "guideline_basis": [],
+            "evidence_basis_current_visit": [],
             "confidence": {"composite_score": 0.0, "components": {}, "weights_used": {}},
             "why_changed_today": [],
+            "decision_delta_since_last_visit": {"available": False},
             "post_rp_schedule_overlay": {},
             "risk_tools_summary": {},
             "prognostic_summary": {"modifier_keys": [], "recommended_actions": []},
@@ -523,8 +574,17 @@ class PostRPSalvageCopilotService:
             payload["psa_postop"] = bcr.get("bcr_psa") or latest_followup.get("psa_postop") or latest_followup.get("psa_current")
         if not _is_present(payload.get("psa_current")):
             payload["psa_current"] = bcr.get("bcr_psa") or latest_followup.get("psa_current") or payload.get("psa")
+        post_rp_truth = derive_post_prostatectomy_truth(patient) if _has_post_rp_context(patient) else {}
+        if not _is_present(payload.get("psa_current")) and _is_present(post_rp_truth.get("psa_current")):
+            payload["psa_current"] = post_rp_truth.get("psa_current")
+        if not _is_present(payload.get("psa_postop")) and _is_present(post_rp_truth.get("psa_current")):
+            payload["psa_postop"] = post_rp_truth.get("psa_current")
+        if not _is_present(payload.get("psa")):
+            payload["psa"] = payload.get("psa_postop") or payload.get("psa_current") or post_rp_truth.get("psa_current")
         if not _is_present(payload.get("psadt_months")):
-            payload["psadt_months"] = bcr.get("psadt_at_bcr")
+            payload["psadt_months"] = post_rp_truth.get("psadt_months") or bcr.get("psadt_at_bcr")
+        if post_rp_truth:
+            payload["post_rp_bcr_truth"] = post_rp_truth
         if not _is_present(payload.get("rp_date")):
             payload["rp_date"] = surgery.get("surgery_date") or (patient.get("prior_history") or {}).get("rp_date")
         if not _is_present(payload.get("prostatectomy_date")):
@@ -610,7 +670,7 @@ class PostRPSalvageCopilotService:
                 return (
                     "post_prostatectomy",
                     "salvage_evaluation",
-                    "uncertain_missing_data",
+                    "pending_inputs",
                     f"Persisten vacíos decisivos para cerrar la ventana de salvage: {', '.join(missing_for_window)}.",
                 )
             if salvage_feasible and not psma_done and (latest_psa is not None and latest_psa >= 0.2):
@@ -643,7 +703,7 @@ class PostRPSalvageCopilotService:
             return (
                 "recurrence_bcr",
                 "salvage",
-                "uncertain_missing_data",
+                "pending_inputs",
                 f"La recaída bioquímica ya es operativa, pero faltan datos para decidir si la ventana de salvage sigue abierta: {', '.join(missing_for_window)}.",
             )
         if salvage_feasible and not psma_done:
@@ -696,7 +756,7 @@ class PostRPSalvageCopilotService:
             return "Mantener vigilancia post prostatectomía y control bioquímico"
         if post_rp_course == "persistent_psa":
             return "Iniciar evaluación temprana de salvage por PSA persistente"
-        if salvage_window_status in {"open", "open_pending_restaging"}:
+        if salvage_window_status in {"open", "open_pending_restaging", "pending_inputs"}:
             return "Activar salvage y reestadificación dirigida"
         if salvage_window_status == "redirect_systemic":
             return "Redirigir a intensificación sistémica y staging avanzado"
@@ -731,11 +791,16 @@ class PostRPSalvageCopilotService:
         elif salvage_window_status in {"redirect_systemic", "closed"} and "BCR2" in nccn_label and first_treatment:
             action = _normalize_text(first_treatment.get("name")) or action
             rationale = _normalize_text(first_treatment.get("notes")) or rationale
+        recommendation_family = "surveillance"
+        if salvage_window_status in {"open", "open_pending_restaging", "pending_inputs"} or (
+            resolved_state == "recurrence_bcr" and salvage_window_status not in {"redirect_systemic", "closed"}
+        ):
+            recommendation_family = "salvage"
         return {
             "source": "rule_based_primary",
             "state_family": resolved_state,
             "recommended_action": action,
-            "recommendation_family": "salvage" if salvage_window_status in {"open", "open_pending_restaging"} else "surveillance",
+            "recommendation_family": recommendation_family,
             "rationale": rationale,
             "guideline_basis": self._guideline_basis(module_result),
         }
@@ -760,7 +825,7 @@ class PostRPSalvageCopilotService:
                 "recommended_action": "Completar PSMA o imagen dirigida antes de cerrar la ruta de salvage.",
                 "rationale": "La ventana de salvage sigue siendo plausible, pero falta reestadificación dirigida para definir alcance y localización.",
             }
-        if salvage_window_status == "uncertain_missing_data":
+        if salvage_window_status == "pending_inputs":
             return {
                 "status": "need_core_inputs",
                 "recommended_action": "Completar cinética bioquímica y factibilidad local antes de reestadificar.",
@@ -785,7 +850,7 @@ class PostRPSalvageCopilotService:
         salvage_window_status: str,
         psma_impact: dict[str, Any],
     ) -> dict[str, Any]:
-        visible = salvage_window_status in {"open", "open_pending_restaging"}
+        visible = salvage_window_status in {"open", "open_pending_restaging", "pending_inputs"}
         if not visible:
             return {
                 "visible": False,
@@ -797,6 +862,8 @@ class PostRPSalvageCopilotService:
             path = "Evaluación temprana de RT de salvage por PSA persistente"
         elif _normalize_text(psma_impact.get("clinical_pattern")).lower() == "oligometastatic":
             path = "MDT / salvage multimodal guiado por PSMA"
+        elif salvage_window_status == "pending_inputs":
+            path = "Salvage post-RP pendiente de completar PSADT / factibilidad local"
         else:
             path = "RT de salvage y staging dirigido por recurrencia bioquímica"
         return {
@@ -848,7 +915,7 @@ class PostRPSalvageCopilotService:
                     rationale=psma_impact.get("rationale") or "La PSMA de bajo burden mantiene visible una ruta metastasis-directed o multimodal.",
                 ),
             )
-        if salvage_window_status == "uncertain_missing_data":
+        if salvage_window_status == "pending_inputs":
             candidates.append(
                 PostRPSequenceCandidate(
                     pathway_key="complete_missing_inputs",
@@ -1024,7 +1091,7 @@ class PostRPSalvageCopilotService:
             "available": True,
             "status": status,
             "recommended_action": recommended_action,
-            "recommendation_family": "salvage" if "salvage" in recommended_action.lower() else "surveillance",
+            "recommendation_family": str(rule_based_recommendation.get("recommendation_family") or "salvage"),
             "sequence_candidate": top_candidate,
             "concordance_label": concordance,
             "shadow_reasons": [

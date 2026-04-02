@@ -396,6 +396,15 @@ def patient_schedule(patient_ref: str) -> tuple:
     """Genera el calendario de seguimiento programado para el paciente."""
     import tracking_db
     from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
+    from prostanet.domains.patient_tracking.vertical_runtime import (
+        build_decision_delta_since_last_visit,
+        build_evidence_basis_current_visit,
+        build_runtime_patient,
+        build_runtime_payload,
+        build_shared_metastatic_summary,
+        derive_display_sequence_summary,
+        select_primary_vertical_bundle,
+    )
 
     try:
         resolved, error = _resolve_patient_api_ref(patient_ref)
@@ -417,8 +426,12 @@ def patient_schedule(patient_ref: str) -> tuple:
             management_track=track,
             horizon_months=horizon,
         )
-        patient = tracking_db.get_patient_full_record(patient_id) or patient
-        longitudinal_bundle = tracking_db.refresh_longitudinal_intelligence(patient_id, force_recompute=False) or {}
+        longitudinal_bundle = tracking_db.refresh_longitudinal_intelligence(
+            patient_id,
+            force_recompute=False,
+            record=patient,
+            include_live_benchmark=False,
+        ) or {}
         latest_result_snapshot = dict((patient.get("latest_assessment") or {}).get("result_snapshot") or {})
         guideline_followup_plan = longitudinal_bundle.get("guideline_followup_plan") or patient.get("guideline_followup_plan", {})
         care_intent_contract = longitudinal_bundle.get("care_intent_contract") or patient.get("care_intent_contract", {})
@@ -426,22 +439,68 @@ def patient_schedule(patient_ref: str) -> tuple:
         decision_trace = longitudinal_bundle.get("decision_recalculation_trace") or patient.get("decision_recalculation_trace", {})
         latest_decisive_visit = longitudinal_bundle.get("latest_clinically_decisive_visit") or patient.get("latest_clinically_decisive_visit", {})
         decision_input_requirements = longitudinal_bundle.get("decision_input_requirements") or patient.get("decision_input_requirements", {})
+        comparative_eligibility_matrix = longitudinal_bundle.get("comparative_eligibility_matrix") or {}
+        sequence_transition_bundle = longitudinal_bundle.get("sequence_transition_bundle") or {}
+        active_regimen_monitoring_package = longitudinal_bundle.get("active_regimen_monitoring_package") or {}
+        palliative_transition_bundle = longitudinal_bundle.get("palliative_transition_bundle") or {}
+        palliative_monitoring_package = longitudinal_bundle.get("palliative_monitoring_package") or {}
         crpc_copilot_bundle = longitudinal_bundle.get("crpc_copilot_bundle") or {}
         post_rp_salvage_bundle = longitudinal_bundle.get("post_rp_salvage_bundle") or {}
-        qa_passed = (
-            (post_rp_salvage_bundle.get("qa_validation") or {}).get("approved")
-            if post_rp_salvage_bundle.get("available")
-            else (crpc_copilot_bundle.get("qa_validation") or {}).get("approved")
+        mhspc_copilot_bundle = longitudinal_bundle.get("mhspc_copilot_bundle") or {}
+        diagnostic_biopsy_bundle = longitudinal_bundle.get("diagnostic_biopsy_bundle") or {}
+        localized_surveillance_bundle = longitudinal_bundle.get("localized_surveillance_bundle") or {}
+        post_rt_salvage_bundle = longitudinal_bundle.get("post_rt_salvage_bundle") or {}
+        _, active_copilot_bundle = select_primary_vertical_bundle(
+            {
+                "crpc_copilot_bundle": crpc_copilot_bundle,
+                "post_rp_salvage_bundle": post_rp_salvage_bundle,
+                "mhspc_copilot_bundle": mhspc_copilot_bundle,
+                "diagnostic_biopsy_bundle": diagnostic_biopsy_bundle,
+                "localized_surveillance_bundle": localized_surveillance_bundle,
+                "post_rt_salvage_bundle": post_rt_salvage_bundle,
+            }
         )
-        sequence_summary = (
-            post_rp_salvage_bundle.get("sequence_candidates", [])
-            if post_rp_salvage_bundle.get("available")
-            else crpc_copilot_bundle.get("sequence_summary", [])
+        qa_passed = (active_copilot_bundle.get("qa_validation") or {}).get("approved")
+        sequence_summary = derive_display_sequence_summary(active_copilot_bundle)
+        runtime_patient = build_runtime_patient(patient, longitudinal_bundle)
+        runtime_payload = build_runtime_payload(
+            runtime_patient,
+            patient.get("latest_assessment"),
+            effective_state=reconciliation.get("reconciled_state", state),
         )
+        metastatic_composition_summary = (
+            active_copilot_bundle.get("metastatic_composition_summary")
+            or build_shared_metastatic_summary(runtime_payload)
+        )
+        blocked_by_overlay = list(active_copilot_bundle.get("blocked_by_overlay") or [])
+        decision_delta_since_last_visit = (
+            active_copilot_bundle.get("decision_delta_since_last_visit")
+            or build_decision_delta_since_last_visit(
+                patient,
+                effective_state=reconciliation.get("reconciled_state", state),
+                phenotype_state=reconciliation.get("phenotype_state", state),
+                rule_based_recommendation=active_copilot_bundle.get("rule_based_recommendation") or {},
+                final_presented_recommendation=active_copilot_bundle.get("final_presented_recommendation") or {},
+                blocking_groups=active_copilot_bundle.get("blocking_inputs") or [],
+                blocked_by_overlay=blocked_by_overlay,
+            )
+        )
+        evidence_basis_current_visit = (
+            active_copilot_bundle.get("evidence_basis_current_visit")
+            or build_evidence_basis_current_visit(
+                active_copilot_bundle.get("guideline_basis")
+                or (schedule_bundle.get("master_followup_plan") or {}).get("guideline_basis", []),
+                active_copilot_bundle.get("rule_based_recommendation") or {},
+                decision_delta_since_last_visit,
+            )
+        )
+        histopathology_summary = active_copilot_bundle.get("histopathology_summary") or ""
+        qa_validation = active_copilot_bundle.get("qa_validation") or {}
 
         return jsonify({
             "success": True,
             "state": schedule_bundle.get("state", state),
+            "phenotype_state": reconciliation.get("phenotype_state", state),
             "management_track": schedule_bundle.get("management_track", track),
             "schedule_state": schedule_bundle.get("schedule_state", state),
             "schedule_management_track": schedule_bundle.get("schedule_management_track", track),
@@ -449,6 +508,10 @@ def patient_schedule(patient_ref: str) -> tuple:
             "reconciled_state": reconciliation.get("reconciled_state", state),
             "state_conflict_flag": reconciliation.get("state_conflict_flag", False),
             "state_conflict_reason": reconciliation.get("state_conflict_reason", ""),
+            "progression_gate_active": reconciliation.get("progression_gate_active", False),
+            "progression_gate_target": reconciliation.get("progression_gate_target", ""),
+            "progression_gate_reason": reconciliation.get("progression_gate_reason", ""),
+            "systemic_progression_context_resolved": reconciliation.get("systemic_progression_context_resolved", "none"),
             "anchor_date": schedule_bundle.get("anchor_date", ""),
             "anchor_source": schedule_bundle.get("anchor_source", ""),
             "protocol_trace": schedule_bundle.get("protocol_trace", {}),
@@ -472,17 +535,48 @@ def patient_schedule(patient_ref: str) -> tuple:
             "action_schedule_consistency": guideline_followup_plan.get("action_schedule_consistency", True),
             "crpc_copilot_status": crpc_copilot_bundle.get("status", "not_applicable"),
             "post_rp_copilot_status": post_rp_salvage_bundle.get("status", "not_applicable"),
+            "mhspc_copilot_status": mhspc_copilot_bundle.get("status", "not_applicable"),
+            "diagnostic_copilot_status": diagnostic_biopsy_bundle.get("status", "not_applicable"),
+            "localized_copilot_status": localized_surveillance_bundle.get("status", "not_applicable"),
+            "post_rt_copilot_status": post_rt_salvage_bundle.get("status", "not_applicable"),
             "salvage_window_status": post_rp_salvage_bundle.get("salvage_window_status", ""),
             "salvage_window_reason": post_rp_salvage_bundle.get("salvage_window_reason", ""),
+            "post_rt_salvage_window_status": post_rt_salvage_bundle.get("post_rt_salvage_window_status", ""),
             "qa_passed": qa_passed,
+            "qa_validation": qa_validation,
             "sequence_summary": sequence_summary,
+            "histopathology_summary": histopathology_summary,
+            "metastatic_composition_summary": metastatic_composition_summary,
+            "decision_delta_since_last_visit": decision_delta_since_last_visit,
+            "blocked_by_overlay": blocked_by_overlay,
+            "evidence_basis_current_visit": evidence_basis_current_visit,
             "crpc_schedule_overlay": crpc_copilot_bundle.get("crpc_schedule_overlay", {}),
             "post_rp_schedule_overlay": post_rp_salvage_bundle.get("post_rp_schedule_overlay", {}),
+            "mhspc_schedule_overlay": mhspc_copilot_bundle.get("mhspc_schedule_overlay", {}),
+            "diagnostic_schedule_overlay": diagnostic_biopsy_bundle.get("diagnostic_schedule_overlay", {}),
+            "localized_schedule_overlay": localized_surveillance_bundle.get("localized_schedule_overlay", {}),
+            "post_rt_schedule_overlay": post_rt_salvage_bundle.get("post_rt_schedule_overlay", {}),
+            "mhspc_copilot_bundle": mhspc_copilot_bundle,
+            "diagnostic_biopsy_bundle": diagnostic_biopsy_bundle,
+            "localized_surveillance_bundle": localized_surveillance_bundle,
+            "post_rt_salvage_bundle": post_rt_salvage_bundle,
+            "post_rt_failure_definition": post_rt_salvage_bundle.get("post_rt_failure_definition", {}),
+            "post_rt_local_salvage_ranking": post_rt_salvage_bundle.get("post_rt_local_salvage_ranking", []),
+            "post_rt_transition_bundle": post_rt_salvage_bundle.get("post_rt_transition_bundle", {}),
             "blocking_inputs": decision_input_requirements.get("blocking_inputs", []),
             "hard_blocking_inputs": decision_input_requirements.get("hard_blocking_inputs", []),
             "decision_blocking_inputs": decision_input_requirements.get("decision_blocking_inputs", []),
             "supportive_gaps": decision_input_requirements.get("supportive_gaps", []),
             "required_to_recalculate": decision_input_requirements.get("required_to_recalculate", []),
+            "monitoring_required_fields": decision_input_requirements.get("monitoring_required_fields", []),
+            "monitoring_capture_block": decision_input_requirements.get("monitoring_capture_block", {}),
+            "palliative_required_fields": decision_input_requirements.get("palliative_required_fields", []),
+            "palliative_missing_inputs": decision_input_requirements.get("palliative_missing_inputs", []),
+            "palliative_stale_inputs": decision_input_requirements.get("palliative_stale_inputs", []),
+            "palliative_capture_block": decision_input_requirements.get("palliative_capture_block", {}),
+            "goals_of_care_capture_block": decision_input_requirements.get("goals_of_care_capture_block", {}),
+            "family_missing_inputs": decision_input_requirements.get("family_missing_inputs", {}),
+            "family_stale_inputs": decision_input_requirements.get("family_stale_inputs", {}),
             "plan_key": (schedule_bundle.get("master_followup_plan") or {}).get("plan_key", ""),
             "guideline_basis": (schedule_bundle.get("master_followup_plan") or {}).get("guideline_basis", []),
             "cadence_adjustment_reasons": guideline_followup_plan.get("cadence_adjustment_reasons", []),
@@ -507,6 +601,22 @@ def patient_schedule(patient_ref: str) -> tuple:
             "preferred_frontline_regimen": latest_result_snapshot.get("preferred_frontline_regimen", {}),
             "frontline_regimen_rankings": latest_result_snapshot.get("frontline_regimen_rankings", []),
             "drug_component_metadata": latest_result_snapshot.get("drug_component_metadata", {}),
+            "comparative_eligibility_matrix": comparative_eligibility_matrix,
+            "sequence_transition_bundle": sequence_transition_bundle,
+            "active_regimen_monitoring_package": active_regimen_monitoring_package,
+            "palliative_transition_bundle": palliative_transition_bundle,
+            "palliative_monitoring_package": palliative_monitoring_package,
+            "symptom_burden_profile": longitudinal_bundle.get("symptom_burden_profile", {}),
+            "advance_care_planning_status": longitudinal_bundle.get("advance_care_planning_status", {}),
+            "hospice_eligibility": longitudinal_bundle.get("hospice_eligibility", {}),
+            "acute_palliative_alerts": longitudinal_bundle.get("acute_palliative_alerts", []),
+            "recommended_supportive_referrals": longitudinal_bundle.get("recommended_supportive_referrals", []),
+            "survivorship_transition_bundle": longitudinal_bundle.get("survivorship_transition_bundle", {}),
+            "survivorship_monitoring_package": longitudinal_bundle.get("survivorship_monitoring_package", {}),
+            "late_effects_profile": longitudinal_bundle.get("late_effects_profile", {}),
+            "functional_recovery_profile": longitudinal_bundle.get("functional_recovery_profile", {}),
+            "survivorship_schedule_overlay": longitudinal_bundle.get("survivorship_schedule_overlay", {}),
+            "survivorship_plan": longitudinal_bundle.get("survivorship_plan", {}),
             "total_events": len(schedule_bundle.get("scheduled_items", schedule_bundle.get("schedule", []))),
             "resolved_patient_id": patient_id,
             "resolved_patient_ref": resolved.get("nss") or resolved.get("patient_ref") or str(patient_ref),
@@ -845,7 +955,13 @@ def patient_tumor_board(patient_id: int) -> tuple:
 def patient_survivorship_plan(patient_id: int) -> tuple:
     """Genera plan de cuidado de sobrevivencia personalizado."""
     import tracking_db
-    from prostanet.domains.patient_tracking.survivorship import SurvivorshipCarePlan
+    from prostanet.domains.patient_tracking.longitudinal_intelligence import build_longitudinal_intelligence_bundle
+    from prostanet.domains.patient_tracking.survivorship_longitudinal import (
+        build_survivorship_monitoring_package,
+        build_survivorship_plan_alias,
+        build_survivorship_schedule_overlay,
+        build_survivorship_transition_bundle,
+    )
     from prostanet.domains.patient_tracking.followup_agenda import infer_management_track
 
     try:
@@ -853,10 +969,40 @@ def patient_survivorship_plan(patient_id: int) -> tuple:
         if not patient:
             return jsonify({"success": False, "error": "Paciente no encontrado."}), 404
 
-        state = (patient.get("latest_assessment") or {}).get("state") or "diagnostic_workup"
-        track = infer_management_track(patient, state, patient.get("latest_assessment"))
-        plan = SurvivorshipCarePlan.generate(patient, state, track)
-        return jsonify({"success": True, "survivorship_plan": plan})
+        latest_assessment = patient.get("latest_assessment")
+        state = (latest_assessment or {}).get("state") or "diagnostic_workup"
+        track = infer_management_track(patient, state, latest_assessment)
+        longitudinal_bundle = build_longitudinal_intelligence_bundle(patient, latest_assessment)
+        transition_bundle = dict(longitudinal_bundle.get("survivorship_transition_bundle") or {})
+        monitoring_package = dict(longitudinal_bundle.get("survivorship_monitoring_package") or {})
+        if not transition_bundle:
+            transition_bundle = build_survivorship_transition_bundle(
+                patient,
+                state=state,
+                management_track=track,
+                latest_assessment=latest_assessment,
+            )
+        if not monitoring_package:
+            monitoring_package = build_survivorship_monitoring_package(
+                patient,
+                state=state,
+                management_track=track,
+                latest_assessment=latest_assessment,
+                transition_bundle=transition_bundle,
+            )
+        schedule_overlay = build_survivorship_schedule_overlay(transition_bundle, monitoring_package)
+        plan = build_survivorship_plan_alias(transition_bundle, monitoring_package)
+        return jsonify(
+            {
+                "success": True,
+                "survivorship_plan": plan,
+                "survivorship_transition_bundle": transition_bundle,
+                "survivorship_monitoring_package": monitoring_package,
+                "survivorship_schedule_overlay": schedule_overlay,
+                "late_effects_profile": longitudinal_bundle.get("late_effects_profile") or {},
+                "functional_recovery_profile": longitudinal_bundle.get("functional_recovery_profile") or {},
+            }
+        )
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500
 
@@ -1050,16 +1196,50 @@ def patient_psa_forecast(patient_id: int) -> tuple:
 def patient_live_benchmark(patient_id: int) -> tuple:
     """Devuelve benchmarking vivo del paciente contra cohorte similar y referencia publicada."""
     import tracking_db
+    from prostanet.domains.patient_tracking.live_benchmark import resolve_live_benchmark_from_snapshot
 
     try:
         if not tracking_db.patient_exists(patient_id):
             return jsonify({"success": False, "error": "Paciente no encontrado."}), 404
-        bundle = tracking_db.refresh_longitudinal_intelligence(patient_id, force_recompute=False)
+        refresh_requested = str(request.args.get("refresh") or "").strip().lower() in {"1", "true", "yes"}
+        patient = tracking_db.get_patient_full_record(patient_id)
+        if not patient:
+            return jsonify({"success": False, "error": "Paciente no encontrado."}), 404
+        if refresh_requested:
+            bundle = tracking_db.refresh_longitudinal_intelligence(
+                patient_id,
+                force_recompute=False,
+                record=patient,
+                include_live_benchmark=True,
+            )
+            live_benchmark = bundle.get("live_benchmark", {})
+            benchmark_reliability = bundle.get("benchmark_reliability", {})
+        else:
+            state = str(
+                (patient.get("latest_signal_snapshot") or {}).get("effective_state_final")
+                or (patient.get("latest_signal_snapshot") or {}).get("effective_state")
+                or (patient.get("latest_signal_snapshot") or {}).get("reconciled_state")
+                or (patient.get("latest_assessment") or {}).get("state")
+                or (patient.get("prior_history") or {}).get("current_state")
+                or ""
+            )
+            management_track = str(
+                (patient.get("latest_signal_snapshot") or {}).get("effective_management_track_final")
+                or (patient.get("latest_signal_snapshot") or {}).get("effective_management_track")
+                or (patient.get("latest_signal_snapshot") or {}).get("reconciled_management_track")
+                or patient.get("management_track")
+                or ""
+            )
+            live_benchmark, benchmark_reliability = resolve_live_benchmark_from_snapshot(
+                patient,
+                state=state,
+                management_track=management_track,
+            )
         return jsonify(
             {
                 "success": True,
-                "live_benchmark": bundle.get("live_benchmark", {}),
-                "benchmark_reliability": bundle.get("benchmark_reliability", {}),
+                "live_benchmark": live_benchmark,
+                "benchmark_reliability": benchmark_reliability,
             }
         )
     except Exception as exc:
@@ -1510,7 +1690,11 @@ def diagnostic_calculators() -> tuple:
 @modular_api.route("/api/patients/<int:patient_id>/response-visualization", methods=["POST"])
 def response_visualization(patient_id: int) -> tuple:
     """Genera datos de visualización terapéutica con swimmer legacy y timeline integrado en PSA."""
-    from prostanet.domains.reporting.response_visualization import ResponseVisualizationService
+    from prostanet.domains.reporting.response_visualization import (
+        ResponseVisualizationService,
+        build_waterfall_from_line_segments,
+    )
+    from prostanet.domains.patient_tracking.psa_line_monitor import build_psa_by_treatment_line
     from tracking_db import get_full_record
 
     try:
@@ -1531,6 +1715,18 @@ def response_visualization(patient_id: int) -> tuple:
             baseline_psa=float(baseline_psa) if baseline_psa else None,
             diagnosis_date=diagnosis_date,
         )
+        monitoring = build_psa_by_treatment_line(record)
+        if monitoring.get("line_segments"):
+            bundle.waterfall = build_waterfall_from_line_segments(monitoring.get("line_segments") or [])
+            if monitoring.get("points") and not bundle.psa_trajectory.get("points"):
+                bundle.psa_trajectory["points"] = list(monitoring.get("points") or [])
+            if monitoring.get("treatment_bands") and not bundle.psa_trajectory.get("treatment_bands"):
+                bundle.psa_trajectory["treatment_bands"] = list(monitoring.get("treatment_bands") or [])
+            bundle.psa_trajectory["has_data"] = bool(
+                bundle.psa_trajectory.get("points")
+                or bundle.psa_trajectory.get("treatment_bands")
+                or (bundle.psa_trajectory.get("integrated_treatment_timeline") or {}).get("has_integrated_timeline")
+            )
 
         return jsonify({"success": True, "visualization": bundle.to_dict()})
     except Exception as exc:
@@ -1574,14 +1770,58 @@ def _build_rule_based_recommendation(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_crpc_copilot_payload(patient_id: int) -> dict[str, Any]:
-    longitudinal_bundle = tracking_db.refresh_longitudinal_intelligence(patient_id, force_recompute=False) or {}
+def _build_crpc_copilot_payload(patient_id: int, longitudinal_bundle: dict[str, Any] | None = None) -> dict[str, Any]:
+    longitudinal_bundle = longitudinal_bundle or tracking_db.refresh_longitudinal_intelligence(
+        patient_id,
+        force_recompute=False,
+        include_live_benchmark=False,
+    ) or {}
     return dict(longitudinal_bundle.get("crpc_copilot_bundle") or {})
 
 
-def _build_post_rp_salvage_payload(patient_id: int) -> dict[str, Any]:
-    longitudinal_bundle = tracking_db.refresh_longitudinal_intelligence(patient_id, force_recompute=False) or {}
+def _build_post_rp_salvage_payload(patient_id: int, longitudinal_bundle: dict[str, Any] | None = None) -> dict[str, Any]:
+    longitudinal_bundle = longitudinal_bundle or tracking_db.refresh_longitudinal_intelligence(
+        patient_id,
+        force_recompute=False,
+        include_live_benchmark=False,
+    ) or {}
     return dict(longitudinal_bundle.get("post_rp_salvage_bundle") or {})
+
+
+def _build_mhspc_copilot_payload(patient_id: int, longitudinal_bundle: dict[str, Any] | None = None) -> dict[str, Any]:
+    longitudinal_bundle = longitudinal_bundle or tracking_db.refresh_longitudinal_intelligence(
+        patient_id,
+        force_recompute=False,
+        include_live_benchmark=False,
+    ) or {}
+    return dict(longitudinal_bundle.get("mhspc_copilot_bundle") or {})
+
+
+def _build_diagnostic_biopsy_payload(patient_id: int, longitudinal_bundle: dict[str, Any] | None = None) -> dict[str, Any]:
+    longitudinal_bundle = longitudinal_bundle or tracking_db.refresh_longitudinal_intelligence(
+        patient_id,
+        force_recompute=False,
+        include_live_benchmark=False,
+    ) or {}
+    return dict(longitudinal_bundle.get("diagnostic_biopsy_bundle") or {})
+
+
+def _build_localized_surveillance_payload(patient_id: int, longitudinal_bundle: dict[str, Any] | None = None) -> dict[str, Any]:
+    longitudinal_bundle = longitudinal_bundle or tracking_db.refresh_longitudinal_intelligence(
+        patient_id,
+        force_recompute=False,
+        include_live_benchmark=False,
+    ) or {}
+    return dict(longitudinal_bundle.get("localized_surveillance_bundle") or {})
+
+
+def _build_post_rt_salvage_payload(patient_id: int, longitudinal_bundle: dict[str, Any] | None = None) -> dict[str, Any]:
+    longitudinal_bundle = longitudinal_bundle or tracking_db.refresh_longitudinal_intelligence(
+        patient_id,
+        force_recompute=False,
+        include_live_benchmark=False,
+    ) or {}
+    return dict(longitudinal_bundle.get("post_rt_salvage_bundle") or {})
 
 
 def _serialize_agent_objects(items: list[Any]) -> list[dict[str, Any]]:
@@ -2115,6 +2355,7 @@ def ai_models_list():
     """List available AI models and their status."""
     try:
         from prostanet.ai.config import get_ai_config
+        from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
 
         reg = _build_ai_registry()
         return jsonify({
@@ -2202,6 +2443,98 @@ def post_rp_copilot_bundle(patient_ref):
         return jsonify({"success": False, "error": str(exc)}), 500
 
 
+@modular_api.route("/api/mhspc-copilot/<patient_ref>", methods=["GET"])
+def mhspc_copilot_bundle(patient_ref):
+    try:
+        resolved, error = _resolve_patient_api_ref(patient_ref)
+        if error:
+            return error
+        patient_id = resolved["patient_id"]
+        record = tracking_db.get_patient_full_record(patient_id)
+        if not record:
+            return jsonify({"success": False, "error": "Paciente no encontrado"}), 404
+        bundle = _build_mhspc_copilot_payload(patient_id)
+        return jsonify(
+            {
+                "success": True,
+                "patient_id": patient_id,
+                "resolved_patient_ref": resolved.get("nss") or resolved.get("patient_ref") or str(patient_ref),
+                "mhspc_decision_bundle": bundle,
+            }
+        )
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/diagnostic-copilot/<patient_ref>", methods=["GET"])
+def diagnostic_copilot_bundle(patient_ref):
+    try:
+        resolved, error = _resolve_patient_api_ref(patient_ref)
+        if error:
+            return error
+        patient_id = resolved["patient_id"]
+        record = tracking_db.get_patient_full_record(patient_id)
+        if not record:
+            return jsonify({"success": False, "error": "Paciente no encontrado"}), 404
+        bundle = _build_diagnostic_biopsy_payload(patient_id)
+        return jsonify(
+            {
+                "success": True,
+                "patient_id": patient_id,
+                "resolved_patient_ref": resolved.get("nss") or resolved.get("patient_ref") or str(patient_ref),
+                "diagnostic_decision_bundle": bundle,
+            }
+        )
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/localized-copilot/<patient_ref>", methods=["GET"])
+def localized_copilot_bundle(patient_ref):
+    try:
+        resolved, error = _resolve_patient_api_ref(patient_ref)
+        if error:
+            return error
+        patient_id = resolved["patient_id"]
+        record = tracking_db.get_patient_full_record(patient_id)
+        if not record:
+            return jsonify({"success": False, "error": "Paciente no encontrado"}), 404
+        bundle = _build_localized_surveillance_payload(patient_id)
+        return jsonify(
+            {
+                "success": True,
+                "patient_id": patient_id,
+                "resolved_patient_ref": resolved.get("nss") or resolved.get("patient_ref") or str(patient_ref),
+                "localized_decision_bundle": bundle,
+            }
+        )
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/post-rt-copilot/<patient_ref>", methods=["GET"])
+def post_rt_copilot_bundle(patient_ref):
+    try:
+        resolved, error = _resolve_patient_api_ref(patient_ref)
+        if error:
+            return error
+        patient_id = resolved["patient_id"]
+        record = tracking_db.get_patient_full_record(patient_id)
+        if not record:
+            return jsonify({"success": False, "error": "Paciente no encontrado"}), 404
+        bundle = _build_post_rt_salvage_payload(patient_id)
+        return jsonify(
+            {
+                "success": True,
+                "patient_id": patient_id,
+                "resolved_patient_ref": resolved.get("nss") or resolved.get("patient_ref") or str(patient_ref),
+                "post_rt_decision_bundle": bundle,
+            }
+        )
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
 @modular_api.route("/api/ai/full-assessment/<patient_ref>", methods=["POST"])
 def ai_full_assessment(patient_ref):
     """
@@ -2223,6 +2556,7 @@ def ai_full_assessment(patient_ref):
     t_start = time.perf_counter()
     try:
         from prostanet.ai.config import get_ai_config
+        from prostanet.domains.patient_tracking.reconciled_state import build_reconciled_state
 
         resolved, error = _resolve_patient_api_ref(patient_ref)
         if error:
@@ -2235,6 +2569,12 @@ def ai_full_assessment(patient_ref):
         data = request.get_json(silent=True) or {}
         trigger_event = data.get("trigger_event", "manual_full_assessment")
         runtime_mode = get_ai_config().runtime_mode
+        longitudinal_bundle = tracking_db.refresh_longitudinal_intelligence(
+            patient_id,
+            force_recompute=False,
+            record=record,
+            include_live_benchmark=False,
+        ) or {}
 
         from prostanet.agents.contracts import AgentInput
         agent_input = AgentInput(
@@ -2301,8 +2641,32 @@ def ai_full_assessment(patient_ref):
         cda_output = outputs.get("clinical_decision_agent")
         qa_validation = _validate_cda_output(cda_output, record)
         rule_based_recommendation = _build_rule_based_recommendation(record)
-        crpc_decision_bundle = _build_crpc_copilot_payload(patient_id)
-        post_rp_decision_bundle = _build_post_rp_salvage_payload(patient_id)
+        from prostanet.domains.patient_tracking.vertical_runtime import (
+            build_decision_delta_since_last_visit,
+            build_evidence_basis_current_visit,
+            build_histopathology_summary,
+            build_runtime_patient,
+            build_runtime_payload,
+            build_shared_metastatic_summary,
+            derive_display_sequence_summary,
+            select_primary_vertical_bundle,
+        )
+
+        crpc_decision_bundle = _build_crpc_copilot_payload(patient_id, longitudinal_bundle=longitudinal_bundle)
+        post_rp_decision_bundle = _build_post_rp_salvage_payload(patient_id, longitudinal_bundle=longitudinal_bundle)
+        mhspc_decision_bundle = _build_mhspc_copilot_payload(patient_id, longitudinal_bundle=longitudinal_bundle)
+        diagnostic_decision_bundle = _build_diagnostic_biopsy_payload(patient_id, longitudinal_bundle=longitudinal_bundle)
+        localized_decision_bundle = _build_localized_surveillance_payload(patient_id, longitudinal_bundle=longitudinal_bundle)
+        post_rt_decision_bundle = _build_post_rt_salvage_payload(patient_id, longitudinal_bundle=longitudinal_bundle)
+        vertical_bundles = {
+            "crpc_decision_bundle": crpc_decision_bundle,
+            "post_rp_decision_bundle": post_rp_decision_bundle,
+            "mhspc_decision_bundle": mhspc_decision_bundle,
+            "diagnostic_decision_bundle": diagnostic_decision_bundle,
+            "localized_decision_bundle": localized_decision_bundle,
+            "post_rt_decision_bundle": post_rt_decision_bundle,
+        }
+        _, active_vertical_bundle = select_primary_vertical_bundle(vertical_bundles)
         ai_advisory_overlay = {
             "mode": runtime_mode,
             "qa_validation": qa_validation,
@@ -2312,35 +2676,150 @@ def ai_full_assessment(patient_ref):
             "alerts": [_to_dict(a) for a in alerts_all],
             "crpc_copilot_status": crpc_decision_bundle.get("status", "not_applicable"),
             "post_rp_copilot_status": post_rp_decision_bundle.get("status", "not_applicable"),
+            "mhspc_copilot_status": mhspc_decision_bundle.get("status", "not_applicable"),
+            "diagnostic_copilot_status": diagnostic_decision_bundle.get("status", "not_applicable"),
+            "localized_copilot_status": localized_decision_bundle.get("status", "not_applicable"),
+            "post_rt_copilot_status": post_rt_decision_bundle.get("status", "not_applicable"),
         }
-        if post_rp_decision_bundle.get("available"):
-            rule_based_recommendation = post_rp_decision_bundle.get("rule_based_recommendation") or rule_based_recommendation
-            ai_advisory_overlay["qa_validation"] = post_rp_decision_bundle.get("qa_validation") or qa_validation
-            ai_advisory_overlay["post_rp_salvage_copilot"] = post_rp_decision_bundle
-        if crpc_decision_bundle.get("available"):
-            rule_based_recommendation = crpc_decision_bundle.get("rule_based_recommendation") or rule_based_recommendation
-            ai_advisory_overlay["qa_validation"] = crpc_decision_bundle.get("qa_validation") or qa_validation
-            ai_advisory_overlay["crpc_copilot"] = crpc_decision_bundle
+        for overlay_key, bundle in (
+            ("crpc_copilot", crpc_decision_bundle),
+            ("post_rp_salvage_copilot", post_rp_decision_bundle),
+            ("mhspc_copilot", mhspc_decision_bundle),
+            ("diagnostic_biopsy_copilot", diagnostic_decision_bundle),
+            ("localized_surveillance_copilot", localized_decision_bundle),
+            ("post_rt_salvage_copilot", post_rt_decision_bundle),
+        ):
+            if bundle.get("available"):
+                ai_advisory_overlay[overlay_key] = bundle
+        if active_vertical_bundle.get("available"):
+            rule_based_recommendation = active_vertical_bundle.get("rule_based_recommendation") or rule_based_recommendation
+            ai_advisory_overlay["qa_validation"] = active_vertical_bundle.get("qa_validation") or qa_validation
+            ai_advisory_overlay["active_vertical_bundle"] = active_vertical_bundle
+            ai_advisory_overlay["sequence_summary"] = derive_display_sequence_summary(active_vertical_bundle)
         top_recommendation = ai_advisory_overlay["recommendations"][0] if ai_advisory_overlay["recommendations"] else None
         can_present_advisory = (
             runtime_mode == "advisory"
             and bool(top_recommendation)
-            and (qa_validation is None or qa_validation.get("approved", False))
+            and (
+                ai_advisory_overlay.get("qa_validation") is None
+                or ai_advisory_overlay.get("qa_validation", {}).get("approved", False)
+            )
         )
         final_presented_recommendation = (
             {
                 "source": "rule_based_plus_ai_advisory",
                 "state": rule_based_recommendation.get("state", ""),
                 "primary_recommendation": top_recommendation,
-                "qa_passed": qa_validation.get("approved", False) if qa_validation else None,
+                "qa_passed": (
+                    ai_advisory_overlay.get("qa_validation", {}).get("approved", False)
+                    if ai_advisory_overlay.get("qa_validation")
+                    else None
+                ),
             }
             if can_present_advisory
             else rule_based_recommendation
         )
-        if post_rp_decision_bundle.get("available"):
-            final_presented_recommendation = post_rp_decision_bundle.get("final_presented_recommendation") or final_presented_recommendation
-        if crpc_decision_bundle.get("available"):
-            final_presented_recommendation = crpc_decision_bundle.get("final_presented_recommendation") or final_presented_recommendation
+        active_vertical_status = str(active_vertical_bundle.get("status") or "").strip().lower()
+        if active_vertical_bundle.get("available") and active_vertical_status not in {
+            "",
+            "shadow",
+            "shadow-blocked",
+            "unavailable",
+            "not_applicable",
+            "advisory_candidate",
+        }:
+            final_presented_recommendation = (
+                active_vertical_bundle.get("final_presented_recommendation")
+                or final_presented_recommendation
+            )
+        signals_snapshot = dict(record.get("latest_signal_snapshot") or {})
+        reconciliation_snapshot = build_reconciled_state(record, record.get("latest_assessment"))
+        progression_gate_active = bool(
+            active_vertical_bundle.get("progression_gate_active")
+            or signals_snapshot.get("progression_gate_active")
+            or reconciliation_snapshot.get("progression_gate_active")
+        )
+        progression_gate_target = (
+            active_vertical_bundle.get("progression_gate_target")
+            or signals_snapshot.get("progression_gate_target")
+            or reconciliation_snapshot.get("progression_gate_target")
+            or ""
+        )
+        progression_gate_reason = (
+            active_vertical_bundle.get("progression_gate_reason")
+            or signals_snapshot.get("progression_gate_reason")
+            or reconciliation_snapshot.get("progression_gate_reason")
+            or ""
+        )
+        systemic_progression_context_resolved = (
+            active_vertical_bundle.get("systemic_progression_context_resolved")
+            or signals_snapshot.get("systemic_progression_context_resolved")
+            or reconciliation_snapshot.get("systemic_progression_context_resolved")
+            or "none"
+        )
+        phenotype_state = (
+            active_vertical_bundle.get("phenotype_state")
+            or signals_snapshot.get("phenotype_state")
+            or reconciliation_snapshot.get("phenotype_state")
+            or record.get("latest_signal_snapshot", {}).get("phenotype_state", "")
+        )
+
+        if progression_gate_active and not str(final_presented_recommendation.get("recommended_action") or "").strip():
+            final_presented_recommendation = {
+                "source": progression_gate_target or "adt_progression_verification",
+                "state_family": phenotype_state or active_vertical_bundle.get("state_family") or "",
+                "recommended_action": "Confirmar testosterona en rango de castración y reestadificación convencional antes de intensificar la enfermedad metastásica.",
+                "rationale": progression_gate_reason or "El fenotipo metastásico ya está resuelto, pero la progresión resistente sigue bloqueada hasta cerrar castración y reestadificación.",
+                "systemic_progression_context_resolved": systemic_progression_context_resolved,
+            }
+        runtime_patient = build_runtime_patient(record, None)
+        runtime_payload = build_runtime_payload(
+            runtime_patient,
+            record.get("latest_assessment"),
+            effective_state=active_vertical_bundle.get("effective_state") or phenotype_state or "",
+        )
+        metastatic_composition_summary = (
+            active_vertical_bundle.get("metastatic_composition_summary")
+            or build_shared_metastatic_summary(runtime_payload)
+        )
+        blocked_by_overlay = list(active_vertical_bundle.get("blocked_by_overlay") or [])
+        decision_delta_since_last_visit = (
+            active_vertical_bundle.get("decision_delta_since_last_visit")
+            or build_decision_delta_since_last_visit(
+                record,
+                effective_state=active_vertical_bundle.get("effective_state") or phenotype_state or "",
+                phenotype_state=phenotype_state or active_vertical_bundle.get("phenotype_state") or "",
+                rule_based_recommendation=rule_based_recommendation,
+                final_presented_recommendation=final_presented_recommendation,
+                blocking_groups=active_vertical_bundle.get("blocking_inputs") or [],
+                blocked_by_overlay=blocked_by_overlay,
+            )
+        )
+        evidence_basis_current_visit = (
+            active_vertical_bundle.get("evidence_basis_current_visit")
+            or build_evidence_basis_current_visit(
+                active_vertical_bundle.get("guideline_basis") or rule_based_recommendation.get("guideline_basis") or [],
+                rule_based_recommendation,
+                decision_delta_since_last_visit,
+            )
+        )
+        effective_state = (
+            active_vertical_bundle.get("effective_state")
+            or reconciliation_snapshot.get("reconciled_state")
+            or (record.get("latest_assessment") or {}).get("state")
+            or ""
+        )
+        effective_management_track = (
+            active_vertical_bundle.get("effective_management_track")
+            or reconciliation_snapshot.get("reconciled_management_track")
+            or ""
+        )
+        histopathology_summary = (
+            active_vertical_bundle.get("histopathology_summary")
+            or build_histopathology_summary(runtime_payload)
+            or ""
+        )
+        qa_validation_top_level = active_vertical_bundle.get("qa_validation") or qa_validation or {}
 
         return jsonify({
             "success": True,
@@ -2358,8 +2837,28 @@ def ai_full_assessment(patient_ref):
             "explanation": explanation,
             "rule_based_recommendation": rule_based_recommendation,
             "ai_advisory_overlay": ai_advisory_overlay,
+            "effective_state": effective_state,
+            "effective_management_track": effective_management_track,
+            "phenotype_state": phenotype_state,
+            "progression_gate_active": progression_gate_active,
+            "progression_gate_target": progression_gate_target,
+            "progression_gate_reason": progression_gate_reason,
+            "systemic_progression_context_resolved": systemic_progression_context_resolved,
+            "histopathology_summary": histopathology_summary,
+            "metastatic_composition_summary": metastatic_composition_summary,
+            "decision_delta_since_last_visit": decision_delta_since_last_visit,
+            "blocked_by_overlay": blocked_by_overlay,
+            "evidence_basis_current_visit": evidence_basis_current_visit,
+            "qa_validation": qa_validation_top_level,
             "crpc_decision_bundle": crpc_decision_bundle,
             "post_rp_decision_bundle": post_rp_decision_bundle,
+            "mhspc_decision_bundle": mhspc_decision_bundle,
+            "diagnostic_decision_bundle": diagnostic_decision_bundle,
+            "localized_decision_bundle": localized_decision_bundle,
+            "post_rt_decision_bundle": post_rt_decision_bundle,
+            "post_rt_failure_definition": post_rt_decision_bundle.get("post_rt_failure_definition", {}),
+            "post_rt_local_salvage_ranking": post_rt_decision_bundle.get("post_rt_local_salvage_ranking", []),
+            "post_rt_transition_bundle": post_rt_decision_bundle.get("post_rt_transition_bundle", {}),
             "final_presented_recommendation": final_presented_recommendation,
             "elapsed_ms": elapsed_ms,
         })

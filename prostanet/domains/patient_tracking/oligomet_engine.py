@@ -53,6 +53,11 @@ class OligometDecisionEngine:
         """Evalúa candidatura oligometastásica completa."""
         lesions = patient.get("lesions") or []
         lesion_count = len(lesions) if lesions else int(patient.get("metastasis_count") or patient.get("lesion_count") or 0)
+        volume_disease = str(
+            patient.get("volume_disease")
+            or patient.get("metastasis_volume_context")
+            or ""
+        ).strip().lower()
         psma_profile = dict(patient.get("psma_structured_profile") or {})
         psma_avid = bool(psma_profile.get("psma_positive")) if psma_profile else str(patient.get("psma_positive", "0")) == "1"
         psma_pattern = str(psma_profile.get("psma_uptake_pattern") or "")
@@ -62,18 +67,29 @@ class OligometDecisionEngine:
             str(l.get("anatomical_location", "")).lower() in {"liver", "hígado", "lung", "pulmón", "brain", "cerebro"}
             for l in lesions
         ) if lesions else str(patient.get("metastasis_site", "")).lower() in {"visceral", "liver", "lung"}
+        is_oligometastatic = lesion_count <= 5 and lesion_count > 0 and not has_visceral and volume_disease != "high"
 
         result: dict[str, Any] = {
             "lesion_count": lesion_count,
-            "is_oligometastatic": lesion_count <= 5 and lesion_count > 0,
+            "is_oligometastatic": is_oligometastatic,
             "psma_avid": psma_avid,
             "psma_pattern": psma_pattern,
             "psma_rads_score": psma_rads,
             "has_visceral": has_visceral,
+            "volume_disease": volume_disease,
         }
 
         # SBRT eligibility
-        result["sbrt_eligibility"] = cls._evaluate_sbrt_eligibility(lesions, lesion_count, psma_avid, has_visceral, psma_pattern, psma_rads, psma_negative_dominant)
+        result["sbrt_eligibility"] = cls._evaluate_sbrt_eligibility(
+            lesions,
+            lesion_count,
+            psma_avid,
+            has_visceral,
+            psma_pattern,
+            psma_rads,
+            psma_negative_dominant,
+            high_volume=volume_disease == "high",
+        )
 
         # Oligoprogression detection
         result["oligoprogression"] = cls._detect_oligoprogression(patient, lesions)
@@ -84,14 +100,14 @@ class OligometDecisionEngine:
         # SBRT dose recommendations per lesion
         result["sbrt_doses"] = cls._sbrt_dose_recommendations(lesions)
 
-        result["has_data"] = lesion_count > 0
+        result["has_data"] = bool(result["is_oligometastatic"] or result["oligoprogression"].get("detected"))
 
         return result
 
     @staticmethod
     def _evaluate_sbrt_eligibility(lesions: list, lesion_count: int,
                                     psma_avid: bool, has_visceral: bool, psma_pattern: str, psma_rads: str,
-                                    psma_negative_dominant: bool) -> dict[str, Any]:
+                                    psma_negative_dominant: bool, high_volume: bool = False) -> dict[str, Any]:
         eligible = True
         reasons: list[str] = []
         disqualifiers: list[str] = []
@@ -102,6 +118,12 @@ class OligometDecisionEngine:
         if lesion_count == 0:
             eligible = False
             disqualifiers.append("Sin lesiones documentadas")
+        if has_visceral:
+            eligible = False
+            disqualifiers.append("Metástasis viscerales documentadas — no sostener etiqueta oligometastásica/SBRT como vía principal")
+        if high_volume:
+            eligible = False
+            disqualifiers.append("Fenotipo de alto volumen — priorizar intensificación sistémica sobre vía oligometastásica")
 
         # Check individual lesion size
         oversized: list[str] = []

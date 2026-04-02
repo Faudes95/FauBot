@@ -7,6 +7,13 @@ from prostanet.domains.guideline_comparison.service import GuidelineComparisonSe
 from prostanet.domains.localized_initial.rules_eau import classify_eau
 from prostanet.domains.localized_initial.rules_nccn import active_surveillance_position, classify_nccn
 from prostanet.domains.localized_initial.schemas import LOCALIZED_SCHEMA
+from prostanet.domains.patient_tracking.therapeutic_family_engine import (
+    build_active_regimen_monitoring_package,
+    build_comparative_bundle,
+    build_family_profile,
+    build_ranked_option,
+    build_sequence_transition_bundle,
+)
 from prostanet.shared.contracts import evaluation_result
 from prostanet.shared.recommendation_enrichment import enrich_evaluation_result
 
@@ -75,6 +82,93 @@ class LocalizedInitialService:
             genomic_result,
             adverse_variant_type,
         )
+        ranked_treatments = [
+            self._hydrate_localized_treatment_item(
+                item,
+                rank=index,
+                risk_group=nccn["risk_group"],
+                as_position=as_position,
+            )
+            for index, item in enumerate(eligible_treatments, start=1)
+        ]
+        grouped: dict[str, list[dict]] = {}
+        family_order: list[str] = []
+        for item in ranked_treatments:
+            family_code = str(item.get("family_code") or "observation_family")
+            grouped.setdefault(family_code, []).append(item)
+            if family_code not in family_order:
+                family_order.append(family_code)
+        preferred_family_order = self._family_order_for_localized(nccn["risk_group"], as_position, family_order)
+        family_profiles: dict[str, dict] = {}
+        if grouped.get("active_surveillance_family"):
+            family_profiles["active_surveillance_family"] = build_family_profile(
+                family_code="active_surveillance_family",
+                ordered_regimens=grouped["active_surveillance_family"],
+                context={
+                    "eligibility_status": "eligible" if as_position.get("eligible") else "conditional",
+                    "caution_drivers": [as_position.get("summary")] if as_position.get("status") in {"selected_candidate", "not_preferred"} else [],
+                    "winner_reason": "La vigilancia activa solo lidera cuando la biología, la RM/biopsia confirmatoria y la esperanza de vida sostienen esa vía.",
+                    "why_not_preferred": "Pierde prioridad con histología adversa, MRI de mayor riesgo o expectativa de vida limitada.",
+                },
+            )
+        if grouped.get("radiotherapy_family"):
+            family_profiles["radiotherapy_family"] = build_family_profile(
+                family_code="radiotherapy_family",
+                ordered_regimens=grouped["radiotherapy_family"],
+                context={
+                    "eligibility_status": "eligible",
+                    "winner_reason": "La familia radioterapia se ordena por grupo de riesgo y necesidad de ADT corta o prolongada.",
+                },
+            )
+        if grouped.get("multimodal_local_family"):
+            family_profiles["multimodal_local_family"] = build_family_profile(
+                family_code="multimodal_local_family",
+                ordered_regimens=grouped["multimodal_local_family"],
+                context={
+                    "eligibility_status": "eligible",
+                    "winner_reason": "La intensificación multimodal local domina cuando el riesgo muy alto o regional exige control local y sistémico combinados.",
+                },
+            )
+        if grouped.get("surgery_family"):
+            family_profiles["surgery_family"] = build_family_profile(
+                family_code="surgery_family",
+                ordered_regimens=grouped["surgery_family"],
+                context={
+                    "eligibility_status": "eligible",
+                    "winner_reason": "La cirugía permanece visible para candidatos apropiados, pero su prioridad depende del riesgo y del contexto funcional basal.",
+                },
+            )
+        if grouped.get("observation_family"):
+            family_profiles["observation_family"] = build_family_profile(
+                family_code="observation_family",
+                ordered_regimens=grouped["observation_family"],
+                context={
+                    "eligibility_status": "eligible",
+                    "winner_reason": "La observación solo sube cuando la expectativa de vida o el balance beneficio-riesgo reducen la utilidad de terapia local definitiva.",
+                },
+            )
+        comparative_bundle = build_comparative_bundle(
+            family_profiles=family_profiles,
+            family_order=preferred_family_order,
+        )
+        preferred_regimen = dict(comparative_bundle.get("preferred_regimen") or {})
+        active_monitoring_package = build_active_regimen_monitoring_package(
+            preferred_regimen.get("regimen_code"),
+            family_code=preferred_regimen.get("family_code") or "observation_family",
+            field_values=payload,
+        )
+        sequence_transition_bundle = build_sequence_transition_bundle(
+            state=self.module_id,
+            preferred_regimen=preferred_regimen,
+            eligible_treatments=comparative_bundle.get("eligible_treatments") or ranked_treatments,
+            current_treatment=payload.get("current_treatment") or "",
+            missing_critical_inputs=missing,
+            progression_pattern=str(payload.get("progression_pattern") or ""),
+            line_context="localized_initial",
+            field_values=payload,
+            monitoring_package=active_monitoring_package,
+            comparative_eligibility_matrix=comparative_bundle.get("comparative_eligibility_matrix") or {},
+        )
         not_recommended = self._not_recommended(nccn["risk_group"], as_position, genomic_result, adverse_variant_type, prior_pirads, payload)
         durations = self._durations(nccn["risk_group"])
         applicability = as_position["status"] if as_position["eligible"] else ("not_recommended" if as_position.get("requires_escalation") else "guideline-consistent")
@@ -127,7 +221,7 @@ class LocalizedInitialService:
                 "treatment_intent": eau["treatment_intent"],
                 "comparison": comparison,
             },
-            eligible_treatments=eligible_treatments,
+            eligible_treatments=comparative_bundle.get("eligible_treatments") or ranked_treatments,
             not_recommended=not_recommended,
             missing_critical_inputs=missing,
             contraindications=[],
@@ -139,7 +233,25 @@ class LocalizedInitialService:
             ],
             applicability_badge=applicability,
             report_sections=report_sections,
+            decision_quality={
+                "recommendation_family": preferred_regimen.get("family_label") or nccn["label"],
+                "confidence_category": "vigilada" if missing else "alta",
+                "requires_human_review": bool(as_position.get("requires_escalation")),
+            },
         )
+        result["comparative_eligibility_matrix"] = comparative_bundle.get("comparative_eligibility_matrix") or {}
+        result["therapeutic_family_profiles"] = comparative_bundle.get("comparative_eligibility_matrix") or {}
+        result["preferred_frontline_regimen"] = preferred_regimen
+        result["preferred_regimen_code"] = preferred_regimen.get("regimen_code", "")
+        result["alternative_regimens"] = comparative_bundle.get("alternative_regimens") or []
+        result["variant_ranking"] = ((family_profiles.get("active_surveillance_family") or {}).get("variant_ranking") or {})
+        result["care_setting_contract"] = {
+            "care_setting": "curative_local",
+            "family_code": preferred_regimen.get("family_code") or "",
+            "family_label": preferred_regimen.get("family_label") or "",
+        }
+        result["sequence_transition_bundle"] = sequence_transition_bundle
+        result["active_regimen_monitoring_package"] = active_monitoring_package
         if as_position.get("requires_escalation"):
             result["state_classification_override"] = "unsupported_or_escalate"
         return enrich_evaluation_result(
@@ -206,7 +318,7 @@ class LocalizedInitialService:
         if as_position.get("requires_escalation"):
             return [
                 {
-                    "name": "Revisión por uropatología y tumor board",
+                    "name": "Revisión por uropatología y comité oncológico",
                     "priority": "preferente",
                     "notes": "La variante histológica adversa obliga a revisión experta y definición individualizada de estadificación y tratamiento definitivo.",
                 },
@@ -217,50 +329,50 @@ class LocalizedInitialService:
                 },
             ]
         if as_position["eligible"]:
-            treatments.append({"name": "Active surveillance", "priority": as_position["status"], "notes": as_position["summary"]})
+            treatments.append({"name": "Vigilancia activa", "priority": as_position["status"], "notes": as_position["summary"]})
         if nccn_group == "LOW":
             if life_expectancy < 10:
-                treatments.append({"name": "Observation", "priority": "preferred", "notes": "Observation is preferred below 10-year life expectancy."})
-            treatments.append({"name": "Definitive RT", "priority": "eligible", "notes": "Consider when surveillance is not acceptable, especially if urinary baseline is already fragile and surgery would be less attractive." if urinary_qol < 60 else "Consider when surveillance is not acceptable."})
-            treatments.append({"name": "Radical prostatectomy", "priority": "eligible", "notes": "For appropriate surgical candidates after shared decision-making, particularly if bowel baseline disfavors RT." if bowel_qol < 60 else "For appropriate surgical candidates after shared decision-making."})
+                treatments.append({"name": "Observación clínica", "priority": "preferred", "notes": "La observación clínica suele ser preferente cuando la esperanza de vida es menor de 10 años."})
+            treatments.append({"name": "Radioterapia definitiva", "priority": "eligible", "notes": "Considérese cuando la vigilancia activa no es aceptable, especialmente si la línea basal urinaria ya es frágil y la cirugía sería menos atractiva." if urinary_qol < 60 else "Considérese cuando la vigilancia activa no es aceptable."})
+            treatments.append({"name": "Prostatectomía radical", "priority": "eligible", "notes": "Para candidatos quirúrgicos apropiados tras decisión compartida, sobre todo si la función intestinal basal hace menos atractiva la radioterapia." if bowel_qol < 60 else "Para candidatos quirúrgicos apropiados tras decisión compartida."})
         elif nccn_group == "FAVORABLE INTERMEDIATE":
             treatments.extend([
-                {"name": "Definitive RT", "priority": "eligible", "notes": "Reasonable standard option for FIR disease, especially if sexual baseline preservation is a major concern." if sexual_qol > 60 else "Reasonable standard option for FIR disease."},
-                {"name": "Radical prostatectomy", "priority": "eligible", "notes": "Standard option for suitable surgical candidates." if bowel_qol >= 60 else "Standard option for suitable surgical candidates, particularly if baseline bowel function makes RT less attractive."},
+                {"name": "Radioterapia definitiva", "priority": "eligible", "notes": "Opción estándar razonable para enfermedad intermedia favorable, especialmente si preservar la función sexual basal es prioritario." if sexual_qol > 60 else "Opción estándar razonable para enfermedad intermedia favorable."},
+                {"name": "Prostatectomía radical", "priority": "eligible", "notes": "Opción estándar para candidatos quirúrgicos apropiados." if bowel_qol >= 60 else "Opción estándar para candidatos quirúrgicos apropiados, particularmente si la función intestinal basal hace menos atractiva la radioterapia."},
             ])
             if life_expectancy <= 10:
-                treatments.append({"name": "Observation", "priority": "preferred", "notes": "Preferred in selected men with 5-10 years life expectancy."})
+                treatments.append({"name": "Observación clínica", "priority": "preferred", "notes": "Puede ser preferente en hombres seleccionados con esperanza de vida de 5 a 10 años."})
         elif nccn_group == "UNFAVORABLE INTERMEDIATE":
             treatments.extend([
-                {"name": "RT + ADT", "priority": "preferred", "notes": "Short-course ADT should be paired with RT in most eligible patients."},
-                {"name": "Radical prostatectomy", "priority": "eligible", "notes": "Use in properly selected patients with pelvic nodal planning as indicated."},
+                {"name": "Radioterapia + terapia de privación androgénica", "priority": "preferred", "notes": "La terapia de privación androgénica de curso corto debe acompañar a la radioterapia en la mayoría de los pacientes elegibles."},
+                {"name": "Prostatectomía radical", "priority": "eligible", "notes": "Úsese en pacientes seleccionados apropiadamente, con planeación ganglionar pélvica cuando esté indicada."},
             ])
         elif nccn_group == "HIGH":
             treatments.extend([
-                {"name": "EBRT + ADT", "priority": "preferred", "notes": "Long-course ADT intensification path."},
-                {"name": "Radical prostatectomy + PLND", "priority": "eligible", "notes": "For selected surgical candidates in experienced centers."},
+                {"name": "Radioterapia externa + terapia de privación androgénica", "priority": "preferred", "notes": "Ruta de intensificación con terapia de privación androgénica prolongada."},
+                {"name": "Prostatectomía radical + disección ganglionar pélvica", "priority": "eligible", "notes": "Para candidatos quirúrgicos seleccionados en centros con experiencia."},
             ])
         elif nccn_group == "VERY HIGH":
             treatments.extend([
-                {"name": "EBRT + ADT", "priority": "preferred", "notes": "Use long-course ADT and intensification for eligible men."},
-                {"name": "EBRT + ADT + abiraterone", "priority": "preferred", "notes": "Systemic intensification path for very-high-risk disease."},
-                {"name": "Radical prostatectomy + PLND", "priority": "selected_candidate", "notes": "Reserved for carefully chosen surgical candidates."},
+                {"name": "Radioterapia externa + terapia de privación androgénica", "priority": "preferred", "notes": "Úsese terapia de privación androgénica prolongada e intensificación en hombres elegibles."},
+                {"name": "Radioterapia externa + terapia de privación androgénica + abiraterona", "priority": "preferred", "notes": "Ruta de intensificación sistémica para enfermedad de muy alto riesgo."},
+                {"name": "Prostatectomía radical + disección ganglionar pélvica", "priority": "selected_candidate", "notes": "Reservada para candidatos quirúrgicos cuidadosamente seleccionados."},
             ])
         else:
             treatments.extend([
-                {"name": "Definitive RT + ADT", "priority": "preferred", "notes": "Regional N1M0 pathway."},
-                {"name": "Systemic intensification", "priority": "eligible", "notes": "Use in eligible regional node-positive disease per NCCN 2026 pathway."},
+                {"name": "Radioterapia definitiva + terapia de privación androgénica", "priority": "preferred", "notes": "Ruta preferente para enfermedad regional N1M0."},
+                {"name": "Intensificación sistémica", "priority": "eligible", "notes": "Úsese en enfermedad regional con ganglios positivos cuando el paciente sea elegible según NCCN 2026."},
             ])
         if genomic_result == "Alto":
             for item in treatments:
-                if item["name"] == "Active surveillance":
+                if item["name"] == "Vigilancia activa":
                     item["priority"] = "not_preferred"
-                    item["notes"] = "A high genomic classifier signal lowers confidence in surveillance despite otherwise favorable clinicopathologic features."
+                    item["notes"] = "Una señal genómica de alto riesgo reduce la confianza en vigilancia activa pese a características clinicopatológicas aparentemente favorables."
         if adverse_variant_type == "ductal_predominant":
             for item in treatments:
-                if item["name"] == "Active surveillance":
+                if item["name"] == "Vigilancia activa":
                     item["priority"] = "not_preferred"
-                    item["notes"] = "Ductal-predominant histology should move the discussion away from routine active surveillance."
+                    item["notes"] = "El predominio ductal debe alejar la conversación de una vigilancia activa rutinaria."
         return treatments
 
     @staticmethod
@@ -274,11 +386,11 @@ class LocalizedInitialService:
     ) -> list[str]:
         items = []
         if nccn_group in {"UNFAVORABLE INTERMEDIATE", "HIGH", "VERY HIGH", "REGIONAL N1M0"}:
-            items.append("Active surveillance should not be presented as a standard management strategy.")
+            items.append("La vigilancia activa no debe presentarse como estrategia estándar de manejo en este escenario.")
         if not as_position["eligible"] and nccn_group == "FAVORABLE INTERMEDIATE":
-            items.append("Avoid presenting favorable-intermediate AS as equivalent to low-risk surveillance.")
+            items.append("Evite presentar la vigilancia activa en intermedio favorable como equivalente a la de bajo riesgo.")
         if genomic_result == "Alto":
-            items.append("Avoid downplaying a high genomic classifier result when choosing between surveillance and definitive local therapy.")
+            items.append("No minimice un clasificador genómico alto al elegir entre vigilancia y terapia local definitiva.")
         if adverse_variant_type not in {"", "none"}:
             items.append("No presentar vigilancia activa como equivalente a terapia definitiva cuando existe una variante histológica adversa específica.")
         if prior_pirads in {"4", "5"} and str(payload.get("prior_mpmri_targeted_biopsy_status", "desconocido")) != "si":
@@ -288,10 +400,10 @@ class LocalizedInitialService:
     @staticmethod
     def _durations(nccn_group: str) -> list[str]:
         mapping = {
-            "UNFAVORABLE INTERMEDIATE": ["If RT is selected, pair with ADT for 4-6 months."],
-            "HIGH": ["If EBRT is selected, use ADT for 18-36 months.", "If EBRT + brachytherapy is used, 12 months may be considered."],
-            "VERY HIGH": ["If EBRT is selected, use ADT for 18-36 months.", "Systemic intensification with abiraterone can be considered for eligible patients."],
-            "REGIONAL N1M0": ["Long-course ADT is usually required with definitive RT.", "Escalate systemic therapy in eligible patients."],
+            "UNFAVORABLE INTERMEDIATE": ["Si se selecciona radioterapia, acompáñela con terapia de privación androgénica por 4 a 6 meses."],
+            "HIGH": ["Si se selecciona radioterapia externa, use terapia de privación androgénica por 18 a 36 meses.", "Si se utiliza radioterapia externa con braquiterapia, pueden considerarse 12 meses en pacientes seleccionados."],
+            "VERY HIGH": ["Si se selecciona radioterapia externa, use terapia de privación androgénica por 18 a 36 meses.", "Puede considerarse intensificación sistémica con abiraterona en pacientes elegibles."],
+            "REGIONAL N1M0": ["La terapia de privación androgénica prolongada suele ser necesaria junto con radioterapia definitiva.", "Escale terapia sistémica en pacientes elegibles."],
         }
         return mapping.get(nccn_group, [])
 
@@ -303,3 +415,124 @@ class LocalizedInitialService:
         if str(payload.get("rare_histology_variant", "0")) == "1":
             return "other_aggressive_unspecified"
         return "none"
+
+    @staticmethod
+    def _family_order_for_localized(nccn_group: str, as_position: dict, discovered: list[str]) -> list[str]:
+        if nccn_group == "LOW":
+            preferred = ["active_surveillance_family", "observation_family", "radiotherapy_family", "surgery_family"]
+            if as_position.get("status") == "observation_preferred":
+                preferred = ["observation_family", "active_surveillance_family", "radiotherapy_family", "surgery_family"]
+        elif nccn_group == "FAVORABLE INTERMEDIATE":
+            preferred = ["radiotherapy_family", "surgery_family", "active_surveillance_family", "observation_family"]
+        elif nccn_group in {"UNFAVORABLE INTERMEDIATE", "HIGH"}:
+            preferred = ["radiotherapy_family", "surgery_family", "multimodal_local_family", "active_surveillance_family", "observation_family"]
+        else:
+            preferred = ["multimodal_local_family", "radiotherapy_family", "surgery_family", "observation_family", "active_surveillance_family"]
+        for family_code in discovered:
+            if family_code not in preferred:
+                preferred.append(family_code)
+        return preferred
+
+    @staticmethod
+    def _hydrate_localized_treatment_item(
+        item: dict[str, Any],
+        *,
+        rank: int,
+        risk_group: str,
+        as_position: dict,
+    ) -> dict[str, Any]:
+        name = str(item.get("name") or "").strip()
+        notes = str(item.get("notes") or "").strip()
+        priority = str(item.get("priority") or "eligible").strip()
+        lower_name = name.lower()
+        regimen_code = "OBSERVATION"
+        family_code = "observation_family"
+        description = notes or name
+        dose = ""
+        route = ""
+        schedule = ""
+        duration = ""
+        component_drugs: list[dict[str, Any]] = []
+        therapy_class = ""
+        evidence_tags: list[str] = []
+
+        if "vigilancia activa" in lower_name:
+            regimen_code = "ACTIVE_SURVEILLANCE"
+            family_code = "active_surveillance_family"
+            route = "Seguimiento estructurado"
+            schedule = "PSA seriado + mpMRI + biopsia confirmatoria"
+            duration = "Continuo mientras no exista upgrade o progresión"
+            description = notes or "Seguimiento estructurado para evitar tratamiento local inmediato sin perder ventana curativa."
+        elif "observación clínica" in lower_name:
+            regimen_code = "OBSERVATION"
+            family_code = "observation_family"
+            route = "Seguimiento clínico"
+            schedule = "PSA seriado y reevaluación por expectativa de vida/comorbilidad"
+            description = notes or "Observación clínica cuando el beneficio de tratamiento local definitivo es bajo."
+        elif "prostatectomía radical" in lower_name:
+            regimen_code = "RP_PLND" if "ganglionar" in lower_name else "RADICAL_PROSTATECTOMY"
+            family_code = "surgery_family"
+            route = "Cirugía"
+            schedule = "Evento único con seguimiento posoperatorio"
+            description = notes or "Tratamiento quirúrgico local definitivo."
+        elif "abiraterona" in lower_name:
+            regimen_code = "RT_ADT_ABIRATERONE" if risk_group == "VERY HIGH" else "REGIONAL_RT_ADT_ABIRATERONE"
+            family_code = "multimodal_local_family"
+            dose = "RT definitiva + ADT prolongada + abiraterona"
+            route = "Radioterapia externa + Sistémica oral"
+            schedule = "RT + ADT prolongada con intensificación"
+            duration = "ADT 18-36 meses; abiraterona según elegibilidad"
+            description = notes or "Intensificación multimodal local para riesgo muy alto o regional."
+        elif "radioterapia" in lower_name:
+            family_code = "radiotherapy_family"
+            if "privación androgénica" in lower_name or "adt" in lower_name:
+                regimen_code = "RT_SHORT_ADT" if risk_group == "UNFAVORABLE INTERMEDIATE" else "RT_LONG_ADT"
+                dose = "Radioterapia definitiva + ADT"
+                route = "Radioterapia externa + Supresión androgénica"
+                schedule = "RT diaria + ADT concomitante"
+                duration = "4-6 meses" if risk_group == "UNFAVORABLE INTERMEDIATE" else "18-36 meses"
+            else:
+                regimen_code = "DEFINITIVE_RT"
+                dose = "RT definitiva según técnica elegida"
+                route = "Radioterapia externa"
+                schedule = "20-39 fracciones según protocolo"
+            description = notes or "Tratamiento local definitivo con radioterapia."
+        elif "uropatología" in lower_name or "comité oncológico" in lower_name:
+            regimen_code = "RESTAGING"
+            family_code = "observation_family"
+            route = "Revisión multidisciplinaria"
+            schedule = "Confirmación histológica y board oncológico"
+            description = notes or "Revisión experta antes de cerrar terapia definitiva."
+
+        eligibility_status = (
+            "preferred"
+            if priority in {"preferred", "preferente", "observation_preferred"}
+            else "eligible_with_caution"
+            if priority in {"selected_candidate", "not_preferred"}
+            else "eligible_nonpreferred"
+        )
+        why = [notes] if notes else []
+        if family_code == "active_surveillance_family" and as_position.get("status") != "preferred":
+            why.append(as_position.get("summary") or "La vigilancia activa sigue condicionada por la selección clínica fina.")
+        return build_ranked_option(
+            name=name,
+            regimen_code=regimen_code,
+            rank=rank,
+            priority="preferred" if eligibility_status == "preferred" else "eligible",
+            eligibility_status=eligibility_status,
+            family_code=family_code,
+            molecule_or_backbone=name,
+            description=description,
+            dose=dose,
+            route=route,
+            schedule=schedule,
+            duration=duration,
+            component_drugs=component_drugs,
+            metadata_source="guideline_backbone",
+            therapy_class=therapy_class,
+            evidence_tags=evidence_tags,
+            notes=notes,
+            why_this_rank=why,
+            selection_rationale=why,
+            caution_flags=[] if eligibility_status == "preferred" else why[:1],
+        )

@@ -93,6 +93,7 @@ NCCN_PRIMARY = citation(
         "localized_initial",
         "post_prostatectomy",
         "recurrence_bcr",
+        "post_radiotherapy_or_local_salvage",
         "adt_progression_verification",
         "mcspc_oligo_metachronous",
         "mcspc_low_volume_sync_oligo",
@@ -101,6 +102,7 @@ NCCN_PRIMARY = citation(
         "mcspc_high_volume",
         "m0_crpc",
         "m1_crpc",
+        "survivorship_and_toxicity_followup",
     ],
     field_implications=["guideline_versions", "primary_recommendation"],
     ui_surfaces=["wizard.sidebar", "wizard.results", "patient_profile", "dashboard"],
@@ -124,6 +126,7 @@ EAU_PRIMARY = citation(
         "localized_initial",
         "post_prostatectomy",
         "recurrence_bcr",
+        "post_radiotherapy_or_local_salvage",
         "adt_progression_verification",
         "mcspc_oligo_metachronous",
         "mcspc_low_volume_sync_oligo",
@@ -132,6 +135,7 @@ EAU_PRIMARY = citation(
         "mcspc_high_volume",
         "m0_crpc",
         "m1_crpc",
+        "survivorship_and_toxicity_followup",
     ],
     field_implications=["guideline_versions", "comparison_layer"],
     ui_surfaces=["wizard.sidebar", "wizard.results", "patient_profile"],
@@ -187,7 +191,12 @@ LATE_RT_TOXICITY = citation(
     toxicity_scope="Toxicidad genitourinaria tardía tras radioterapia",
     followup_implications="Refuerza la necesidad de seguimiento prolongado de toxicidad urinaria tardía tras radioterapia definitiva o de rescate.",
     supports_rule_ids=["localized_initial.radiotherapy_survivorship", "recurrence_bcr.salvage_radiotherapy_toxicity"],
-    applies_to_modules=["localized_initial", "recurrence_bcr"],
+    applies_to_modules=[
+        "localized_initial",
+        "recurrence_bcr",
+        "post_radiotherapy_or_local_salvage",
+        "survivorship_and_toxicity_followup",
+    ],
     field_implications=["baseline_bowel_qol", "baseline_urinary_qol"],
     ui_surfaces=["wizard.results", "patient_profile"],
 )
@@ -305,7 +314,7 @@ PSMAFORE_REGULATORY = citation(
     followup_implications="Permite abrir una rama pre-taxano conservadora para lutecio-177 PSMA-617 cuando se documenta necesidad clínica de diferir o evitar docetaxel.",
     supports_rule_ids=["m1_crpc.psmafore_pre_taxane"],
     applies_to_modules=["m1_crpc"],
-    field_implications=["psma_positive", "psma_negative_dominant_lesions", "docetaxel_fit", "chemotherapy_delay_candidate", "mcrpc_line_context"],
+    field_implications=["psma_positive", "psma_negative_dominant_lesions", "docetaxel_base_eligibility", "docetaxel_verification_status", "chemotherapy_delay_candidate", "mcrpc_line_context"],
     ui_surfaces=["wizard.sidebar", "wizard.results", "patient_profile"],
 )
 
@@ -730,6 +739,18 @@ MODULES = {
         ],
         source_citations=[NCCN_PRIMARY, EAU_PRIMARY, LATE_RT_TOXICITY, EMBARK_FDA, APCCC_2024, CAPRA_UCSF],
     ),
+    "post_radiotherapy_or_local_salvage": ModuleEvidence(
+        module="post_radiotherapy_or_local_salvage",
+        title="Recurrencia post-radioterapia y salvage local",
+        nccn_panels=["PROS-10", "PROS-11", "PROS-12", "PROS-H"],
+        eau_sections=["Biochemical recurrence", "Salvage after radiotherapy"],
+        pivotal_trials=["Salvage modalities post-RT", "PSMA-directed restaging"],
+        core_questions=[
+            "¿La recurrencia post-RT cumple Phoenix o una confirmación local equivalente antes de abrir salvage curativo?",
+            "¿Qué modalidad de salvage local domina hoy frente a MDT o redirección sistémica?",
+        ],
+        source_citations=[NCCN_PRIMARY, EAU_PRIMARY, LATE_RT_TOXICITY, APCCC_2024],
+    ),
     "adt_progression_verification": ModuleEvidence(
         module="adt_progression_verification",
         title="Progresión bajo ADT / verificación de castración",
@@ -826,5 +847,17 @@ MODULES = {
             "¿Existen opciones guiadas por biomarcadores?",
         ],
         source_citations=[NCCN_PRIMARY, EAU_PRIMARY, CARD_TRIAL, VISION_TRIAL, PROFOUND_TRIAL, PSMAFORE_REGULATORY, TALAPRO2_REGULATORY, PROPEL_SYMPTOMATIC, APCCC_2024, ARSI_CV_META, FRAILTY_COMORBIDITY, ARPI_DDI_REVIEW, ABIRATERONE_DILI],
+    ),
+    "survivorship_and_toxicity_followup": ModuleEvidence(
+        module="survivorship_and_toxicity_followup",
+        title="Survivorship y toxicidad por tratamiento",
+        nccn_panels=["Survivorship", "Supportive Care"],
+        eau_sections=["Quality of life", "Treatment toxicity follow-up", "Survivorship"],
+        pivotal_trials=["IRRADIaTE late toxicity", "ICHOM PROs", "ADT survivorship"],
+        core_questions=[
+            "¿Qué secuela tardía o toxicidad domina hoy la conducta clínica?",
+            "¿Debe priorizarse rehabilitación, referencia específica o reabrir una decisión oncológica desde survivorship?",
+        ],
+        source_citations=[NCCN_PRIMARY, EAU_PRIMARY, LATE_RT_TOXICITY],
     ),
 }

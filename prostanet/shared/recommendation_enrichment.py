@@ -65,8 +65,10 @@ def enrich_evaluation_result(
 ) -> dict[str, Any]:
     enriched = deepcopy(result)
     nccn_primary = enriched.setdefault("nccn_primary", {})
+    preferred_regimen = dict(enriched.get("preferred_frontline_regimen") or {})
     eligible_treatments = enriched.get("eligible_treatments", [])
-    derived_alternatives = [_treatment_text(item) for item in eligible_treatments[1:3]]
+    alternative_regimens = list(enriched.get("alternative_regimens") or [])
+    derived_alternatives = [_treatment_text(item) for item in (alternative_regimens or eligible_treatments[1:3])]
     not_prioritized = enriched.get("not_recommended", [])
     durations = enriched.get("durations_and_conditions", [])
     missing = enriched.get("missing_critical_inputs", [])
@@ -83,7 +85,12 @@ def enrich_evaluation_result(
         [*missing, *contraindications]
     )
     nccn_primary["mensaje_para_toma_de_decisiones_compartida"] = shared_decision_message.strip()
-    nccn_primary["tratamiento_principal"] = _treatment_name(eligible_treatments[0]) if eligible_treatments else ""
+    nccn_primary["tratamiento_principal"] = (
+        _treatment_name(preferred_regimen)
+        or _treatment_name(eligible_treatments[0])
+        if eligible_treatments or preferred_regimen
+        else ""
+    )
 
     eau_comparison = enriched.setdefault("eau_comparison", {})
     eau_comparison["explicacion_breve"] = (

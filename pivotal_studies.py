@@ -52,6 +52,16 @@ VALID_SCENARIOS = (
     "nmCRPC",
     "mCRPC",
 )
+POST_RP_SALVAGE_TRIAL_NAMES = {
+    "ARTISTIC",
+    "EMBARK",
+    "EMPIRE-1",
+    "GETUG-AFU 16",
+    "RADICALS-RT",
+    "RAVES",
+    "RTOG 9601",
+    "SPPORT",
+}
 
 # Mapeo ISUP <-> Gleason
 _GLEASON_TO_ISUP: dict[int, int] = {
@@ -74,6 +84,17 @@ _STAGE_ORDER: dict[str, int] = {
 def _stage_rank(stage: str) -> int:
     """Retorna un valor numerico ordinal para comparar estadios clinicos."""
     return _STAGE_ORDER.get(stage.upper().strip(), 0)
+
+
+def _coerce_bool(value: Any) -> bool | None:
+    if value in (None, "", "unknown", "Unknown"):
+        return None
+    lowered = str(value).strip().lower()
+    if lowered in {"1", "true", "yes", "si", "sí"}:
+        return True
+    if lowered in {"0", "false", "no"}:
+        return False
+    return None
 
 
 # ===========================================================================
@@ -363,6 +384,98 @@ PIVOTAL_STUDIES: list[dict[str, Any]] = [
         ),
         "nccn_category": "1",
         "year": 2020,
+    },
+    {
+        "name": "RTOG 9601",
+        "phase": "III",
+        "scenario": "rescate",
+        "intervention": "RT de rescate + bicalutamida 150 mg diaria por 24 meses",
+        "control": "RT de rescate + placebo",
+        "primary_endpoint": "Supervivencia global",
+        "key_result": "La adición de bicalutamida prolongada a la RT de rescate mejoró supervivencia global y redujo metástasis a distancia en el escenario adecuado.",
+        "population": "Recurrencia bioquímica post-prostatectomía con PSA detectable, sin metástasis.",
+        "eligibility_criteria": {
+            "psa_min": 0.2, "psa_max": 4.0,
+            "gleason_min": 6, "gleason_max": 10,
+            "stage_min": "T1A", "stage_max": "T4",
+            "ecog_max": 2,
+            "metastasis": "M0",
+            "prior_prostatectomy": True,
+        },
+        "mexican_applicability": (
+            "Alta aplicabilidad. La RT de rescate está ampliamente disponible y bicalutamida es accesible; "
+            "el estudio respalda intensificar la RT de rescate en pacientes seleccionados con recurrencia post-RP."
+        ),
+        "nccn_category": "1",
+        "year": 2017,
+    },
+    {
+        "name": "SPPORT",
+        "phase": "III",
+        "scenario": "rescate",
+        "intervention": "RT de lecho prostático + RT pélvica + ADT corta",
+        "control": "RT de lecho sola o RT de lecho + ADT corta",
+        "primary_endpoint": "Supervivencia libre de progresión",
+        "key_result": "La combinación de RT de lecho, nodos pélvicos y ADT corta mejoró el control de progresión frente a estrategias menos intensificadas.",
+        "population": "Recurrencia bioquímica post-prostatectomía con PSA detectable y sin metástasis.",
+        "eligibility_criteria": {
+            "psa_min": 0.1, "psa_max": 2.0,
+            "gleason_min": 6, "gleason_max": 10,
+            "stage_min": "T1A", "stage_max": "T4",
+            "ecog_max": 2,
+            "metastasis": "M0",
+            "prior_prostatectomy": True,
+        },
+        "mexican_applicability": (
+            "Alta aplicabilidad en centros con radioterapia de lecho y nodos pélvicos. Ayuda a decidir intensificación locorregional y ADT corta en salvage seleccionado."
+        ),
+        "nccn_category": "1",
+        "year": 2022,
+    },
+    {
+        "name": "EMPIRE-1",
+        "phase": "II/III",
+        "scenario": "rescate",
+        "intervention": "Planificación de RT de salvage guiada por imagen molecular",
+        "control": "Planificación convencional de RT de salvage",
+        "primary_endpoint": "Supervivencia libre de evento",
+        "key_result": "La reestadificación guiada por imagen modificó la planificación y mejoró el control del evento en el contexto de salvage.",
+        "population": "Recurrencia bioquímica post-prostatectomía candidata a RT de salvage.",
+        "eligibility_criteria": {
+            "psa_min": 0.1, "psa_max": 10.0,
+            "gleason_min": 6, "gleason_max": 10,
+            "ecog_max": 2,
+            "metastasis": "M0",
+            "prior_prostatectomy": True,
+        },
+        "mexican_applicability": (
+            "Aplicabilidad contextual. La disponibilidad de PSMA o imagen molecular aún varía, pero el estudio respalda usar reestadificación dirigida antes de cerrar la RT de rescate."
+        ),
+        "nccn_category": "2A",
+        "year": 2021,
+    },
+    {
+        "name": "EMBARK",
+        "phase": "III",
+        "scenario": "rescate",
+        "intervention": "Enzalutamida con o sin leuprolida",
+        "control": "Leuprolida sola",
+        "primary_endpoint": "Supervivencia libre de metástasis",
+        "key_result": "En recurrencia bioquímica de alto riesgo no metastásica, enzalutamida con o sin ADT mejoró la supervivencia libre de metástasis.",
+        "population": "Recurrencia bioquímica de alto riesgo no metastásica, fuera de una ruta curativa local razonable.",
+        "eligibility_criteria": {
+            "psa_min": 1.0, "psa_max": 99999,
+            "gleason_min": 6, "gleason_max": 10,
+            "ecog_max": 1,
+            "metastasis": "M0",
+            "prior_prostatectomy": True,
+            "psadt_max_months": 9,
+        },
+        "mexican_applicability": (
+            "Aplicabilidad selectiva. EMBARK corresponde a BCR no metastásica de alto riesgo cuando la ruta de salvage local ya no es la dominante o no es razonable."
+        ),
+        "nccn_category": "1",
+        "year": 2023,
     },
 
     # ===================================================================
@@ -1091,6 +1204,7 @@ def match_patient_to_studies(patient_data: dict[str, Any]) -> list[dict[str, Any
     msi_status = patient_data.get("msi_status", "Estable")
     psma_result = patient_data.get("psma_pet_result", "No realizado")
     prior_prostatectomy = patient_data.get("prior_prostatectomy", False)
+    salvage_local_feasible = _coerce_bool(patient_data.get("salvage_local_feasible"))
     bone_mets = patient_data.get("bone_metastases")
     visceral_mets = patient_data.get("visceral_metastases")
     symptomatic_bone = patient_data.get("symptomatic_bone")
@@ -1111,9 +1225,25 @@ def match_patient_to_studies(patient_data: dict[str, Any]) -> list[dict[str, Any
     if psadt is not None:
         psadt = float(psadt)
 
-    results: list[dict[str, Any]] = []
+    post_rp_salvage_context = str(patient_data.get("state") or "") == "recurrence_bcr" or bool(prior_prostatectomy and patient_data.get("post_rp_context"))
+    if post_rp_salvage_context:
+        recurrence_psa = (
+            patient_data.get("psa_postop_current")
+            or patient_data.get("psa_current")
+            or patient_data.get("psa_postop")
+            or patient_data.get("bcr_psa")
+            or psa
+        )
+        psa = float(recurrence_psa) if recurrence_psa not in (None, "") else None
 
-    for study in PIVOTAL_STUDIES:
+    results: list[dict[str, Any]] = []
+    candidate_studies = (
+        [study for study in PIVOTAL_STUDIES if study.get("name") in POST_RP_SALVAGE_TRIAL_NAMES]
+        if post_rp_salvage_context
+        else PIVOTAL_STUDIES
+    )
+
+    for study in candidate_studies:
         criteria = study.get("eligibility_criteria", {})
         met: list[str] = []
         failed: list[str] = []
@@ -1278,6 +1408,16 @@ def match_patient_to_studies(patient_data: dict[str, Any]) -> list[dict[str, Any
                     failed.append("PEACE-1 se restringe a enfermedad de novo/sincrónica de alto volumen en esta correlación clínica")
                 elif not bool(mhspc_triplet.get("is_triplet_candidate")):
                     failed.append("PEACE-1 requiere aptitud actual para triplete con docetaxel")
+        if post_rp_salvage_context:
+            if study_name == "EMBARK":
+                if salvage_local_feasible is True:
+                    failed.append("Existe una ruta de salvage local potencialmente curativa; EMBARK no lidera mientras esa vía siga abierta")
+                if psadt is None:
+                    failed.append("PSADT no documentado para comprobar recurrencia bioquímica de alto riesgo tipo EMBARK")
+                elif psadt > 9:
+                    failed.append(f"PSADT: {psadt} meses > 9 (no corresponde al riesgo alto tipo EMBARK)")
+            if study_name == "EMPIRE-1" and salvage_local_feasible is False:
+                failed.append("La factibilidad local ya no parece dominante; EMPIRE-1 es más útil cuando la planificación de salvage sigue abierta")
 
         # -- Calcular score de elegibilidad --
         total_criteria = len(met) + len(failed)

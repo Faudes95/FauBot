@@ -9,7 +9,7 @@ from prostanet.shared.contracts import EncounterPlan, EncounterTask
 
 DIAGNOSTIC_STATES = {"diagnostic_workup", "post_negative_biopsy_followup"}
 LOCALIZED_STATES = {"localized_initial"}
-POSTLOCAL_STATES = {"post_prostatectomy", "recurrence_bcr"}
+POSTLOCAL_STATES = {"post_prostatectomy", "recurrence_bcr", "post_radiotherapy_or_local_salvage"}
 
 _STATUS_ORDER = {
     "overdue": 0,

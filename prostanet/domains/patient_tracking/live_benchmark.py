@@ -18,6 +18,98 @@ BENCHMARKABLE_ADVANCED_STATES = {
 }
 
 
+def _default_benchmark_reliability() -> dict[str, Any]:
+    return {
+        "cohort_size": 0,
+        "percentile_available": False,
+        "curve_available": False,
+        "published_reference_available": False,
+        "confidence_label": "not_available",
+        "cohort_tier": "none",
+    }
+
+
+def is_live_benchmark_applicable_state(state: str) -> bool:
+    return str(state or "") in BENCHMARKABLE_ADVANCED_STATES
+
+
+def build_live_benchmark_placeholder(
+    *,
+    state: str = "",
+    management_track: str = "",
+    status: str = "deferred",
+    show: bool | None = None,
+    narrative: str | None = None,
+) -> dict[str, Any]:
+    applicable = is_live_benchmark_applicable_state(state)
+    resolved_status = "not_applicable" if not applicable else status
+    resolved_show = bool(applicable) if show is None else bool(show)
+    if narrative is None:
+        if applicable:
+            narrative = "Benchmark Vivo se carga desde snapshots persistidos y puede hidratarse de forma diferida."
+        else:
+            narrative = "Benchmark Vivo no aplica para este escenario clínico."
+    return {
+        "status": resolved_status,
+        "show": resolved_show and resolved_status != "not_applicable",
+        "state": str(state or ""),
+        "management_track": str(management_track or ""),
+        "primary_endpoint_type": "",
+        "primary_endpoint_label": "Comparación longitudinal",
+        "patient_endpoint": {},
+        "patient_percentile": None,
+        "cohort_size": 0,
+        "cohort_tier": "none",
+        "curve": {},
+        "published_reference": {"available": False},
+        "flags": ["snapshot_pending"] if applicable else [],
+        "narrative": narrative,
+        "reliability": _default_benchmark_reliability(),
+    }
+
+
+def resolve_live_benchmark_from_snapshot(
+    record: dict[str, Any] | None,
+    *,
+    state: str = "",
+    management_track: str = "",
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    patient_record = record or {}
+    snapshot_container = dict(
+        ((patient_record.get("latest_trial_benchmark_snapshot") or {}).get("benchmark_snapshot") or {})
+    )
+    live_benchmark = dict(snapshot_container.get("live_benchmark") or {})
+    reliability = dict(snapshot_container.get("benchmark_reliability") or {})
+    if live_benchmark:
+        requested_state = str(state or "")
+        snapshot_state = str(live_benchmark.get("state") or "")
+        if (
+            is_live_benchmark_applicable_state(requested_state)
+            and live_benchmark.get("status") == "not_applicable"
+            and not is_live_benchmark_applicable_state(snapshot_state)
+        ):
+            placeholder = build_live_benchmark_placeholder(
+                state=requested_state,
+                management_track=management_track,
+            )
+            return placeholder, dict(placeholder.get("reliability") or _default_benchmark_reliability())
+        if reliability and not live_benchmark.get("reliability"):
+            live_benchmark["reliability"] = dict(reliability)
+        live_benchmark.setdefault("status", "ready")
+        live_benchmark.setdefault("show", live_benchmark.get("status") != "not_applicable")
+        live_benchmark.setdefault("state", str(state or live_benchmark.get("state") or ""))
+        live_benchmark.setdefault(
+            "management_track",
+            str(management_track or live_benchmark.get("management_track") or ""),
+        )
+        return live_benchmark, dict(live_benchmark.get("reliability") or reliability or _default_benchmark_reliability())
+    placeholder = build_live_benchmark_placeholder(
+        state=state,
+        management_track=management_track,
+    )
+    return placeholder, dict(placeholder.get("reliability") or _default_benchmark_reliability())
+
+
 def _is_present(value: Any) -> bool:
     return value not in (None, "", [], {}, "No aplica", "No documentado", "No realizado", "Desconocido", "Desconocida")
 

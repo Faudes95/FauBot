@@ -94,6 +94,36 @@ FIELD_GROUP_HINTS = {
     "nodal_status": ("official_diagnosis", "official_diagnosis"),
     "clinical_stage_group": ("official_diagnosis", "official_diagnosis"),
     "clinical_risk_group": ("official_diagnosis", "official_diagnosis"),
+    "pain": ("palliative_symptom_control", "symptom_control"),
+    "bpi_worst_pain": ("palliative_symptom_control", "symptom_control"),
+    "bone_pain": ("palliative_rt_bone", "palliative_rt"),
+    "neuropathic_pain": ("palliative_symptom_control", "symptom_control"),
+    "current_analgesics": ("opioid_safety", "opioid_safety"),
+    "opioid_use": ("opioid_safety", "opioid_safety"),
+    "breakthrough_pain": ("opioid_safety", "opioid_safety"),
+    "bowel_regimen_started": ("opioid_safety", "opioid_safety"),
+    "dyspnea_score": ("palliative_symptom_control", "symptom_control"),
+    "nausea_score": ("palliative_symptom_control", "symptom_control"),
+    "constipation_score": ("opioid_safety", "opioid_safety"),
+    "appetite_loss": ("palliative_symptom_control", "symptom_control"),
+    "insomnia_score": ("psychosocial_caregiver", "psychosocial_support"),
+    "depression_score": ("psychosocial_caregiver", "psychosocial_support"),
+    "anxiety_score": ("psychosocial_caregiver", "psychosocial_support"),
+    "ecog_delta_3mo": ("palliative_symptom_control", "symptom_control"),
+    "albumin": ("hospice_readiness", "hospice_eligibility"),
+    "refractory_pain": ("palliative_symptom_control", "symptom_control"),
+    "visceral_crisis": ("oncologic_emergency", "urgent_local_palliation"),
+    "spinal_cord_compression": ("oncologic_emergency", "urgent_local_palliation"),
+    "epidural_compression": ("oncologic_emergency", "urgent_local_palliation"),
+    "pathological_fracture_risk": ("palliative_rt_bone", "bone_event_risk"),
+    "obstructive_uropathy": ("oncologic_emergency", "urgent_local_palliation"),
+    "hematuria_severe": ("oncologic_emergency", "urgent_local_palliation"),
+    "brain_metastasis": ("oncologic_emergency", "urgent_local_palliation"),
+    "advance_directive_documented": ("advance_care_planning", "goals_of_care"),
+    "goals_of_care_discussed": ("advance_care_planning", "goals_of_care"),
+    "healthcare_surrogate_designated": ("advance_care_planning", "goals_of_care"),
+    "patient_prefers_comfort": ("hospice_readiness", "supportive_only"),
+    "prior_systemic_lines": ("hospice_readiness", "hospice_eligibility"),
 }
 
 GROUP_META = {
@@ -138,6 +168,48 @@ GROUP_META = {
         "rationale": "Permite mostrar un diagnóstico oncológico formal, preciso y trazable en vez de depender solo del módulo clínico operativo.",
         "module_owner": "official_diagnosis",
         "decision_affected": "official_diagnosis",
+    },
+    "palliative_symptom_control": {
+        "title": "Completar control sintomático paliativo",
+        "rationale": "Define si hoy la prioridad dominante es aliviar dolor, disnea, fatiga u otros síntomas antes de intensificar tratamiento antitumoral.",
+        "module_owner": "palliative_transition_bundle",
+        "decision_affected": "symptom_control",
+    },
+    "opioid_safety": {
+        "title": "Completar seguridad analgésica y opioides",
+        "rationale": "Asegura que el alivio sintomático sea eficaz y seguro, incluyendo dolor irruptivo y prevención de estreñimiento.",
+        "module_owner": "palliative_monitoring_package",
+        "decision_affected": "opioid_safety",
+    },
+    "oncologic_emergency": {
+        "title": "Completar urgencias oncológicas paliativas",
+        "rationale": "Permite distinguir crisis que deben sobreponerse al siguiente paso sistémico, como compresión medular, fractura o hematuria severa.",
+        "module_owner": "palliative_transition_bundle",
+        "decision_affected": "urgent_local_palliation",
+    },
+    "advance_care_planning": {
+        "title": "Completar objetivos de cuidado",
+        "rationale": "Alinea la conducta visible con voluntades anticipadas, representante y preferencia real del paciente.",
+        "module_owner": "palliative_transition_bundle",
+        "decision_affected": "goals_of_care",
+    },
+    "hospice_readiness": {
+        "title": "Completar elegibilidad hospice",
+        "rationale": "Determina si el beneficio oncológico esperado ya no supera la carga clínica y si debe proponerse soporte exclusivo.",
+        "module_owner": "palliative_transition_bundle",
+        "decision_affected": "hospice_eligibility",
+    },
+    "palliative_rt_bone": {
+        "title": "Completar paliación local / RT ósea",
+        "rationale": "Alinea dolor óseo, fractura inminente o compresión con radioterapia paliativa y soporte ortopédico/urológico.",
+        "module_owner": "palliative_transition_bundle",
+        "decision_affected": "palliative_rt",
+    },
+    "psychosocial_caregiver": {
+        "title": "Completar soporte psicosocial y cuidador",
+        "rationale": "Define necesidades emocionales, del cuidador y de soporte social que cambian la conducta real del seguimiento.",
+        "module_owner": "palliative_monitoring_package",
+        "decision_affected": "psychosocial_support",
     },
 }
 
@@ -283,6 +355,51 @@ def build_missing_input_capture_bundle(
             force_target="followup",
             always_show=True,
         )
+        latest_signal_snapshot = dict(patient.get("latest_signal_snapshot") or {})
+        palliative_bundle = dict(latest_signal_snapshot.get("palliative_transition_bundle") or {})
+        palliative_package = dict(latest_signal_snapshot.get("palliative_monitoring_package") or {})
+        palliative_missing = _dedupe(list(palliative_bundle.get("missing_inputs") or []))
+        if palliative_bundle.get("available") and (
+            str(palliative_bundle.get("trigger_status") or "") not in {"", "observe"}
+            or palliative_missing
+        ):
+            add_task(
+                key="palliative_symptom_control",
+                raw_fields=[field for field in palliative_missing if field in {"pain", "bpi_worst_pain", "bone_pain", "neuropathic_pain", "fatigue_score", "dyspnea_score", "nausea_score", "constipation_score", "appetite_loss", "ecog", "ecog_delta_3mo"}],
+                input_group="palliative_symptom_control",
+                force_target="followup",
+            )
+            add_task(
+                key="opioid_safety",
+                raw_fields=[field for field in palliative_missing if field in {"current_analgesics", "opioid_use", "breakthrough_pain", "bowel_regimen_started", "constipation_score"}],
+                input_group="opioid_safety",
+                force_target="followup",
+            )
+            add_task(
+                key="oncologic_emergency",
+                raw_fields=[field for field in palliative_missing if field in {"spinal_cord_compression", "epidural_compression", "pathological_fracture_risk", "obstructive_uropathy", "hematuria_severe", "brain_metastasis", "visceral_crisis"}],
+                input_group="oncologic_emergency",
+                force_target="followup",
+            )
+            add_task(
+                key="advance_care_planning",
+                raw_fields=[field for field in palliative_missing if field in {"advance_directive_documented", "goals_of_care_discussed", "healthcare_surrogate_designated"}],
+                input_group="advance_care_planning",
+                force_target="followup",
+            )
+            add_task(
+                key="hospice_readiness",
+                raw_fields=[field for field in palliative_missing if field in {"patient_prefers_comfort", "prior_systemic_lines", "albumin", "weight_loss_6m_pct", "ecog"}],
+                input_group="hospice_readiness",
+                force_target="followup",
+            )
+            add_task(
+                key="psychosocial_caregiver",
+                raw_fields=[field for field in palliative_missing if field in {"depression_score", "anxiety_score", "insomnia_score", "healthcare_surrogate_designated", "goals_of_care_discussed", "patient_prefers_comfort"}],
+                input_group="psychosocial_caregiver",
+                rationale=str(palliative_package.get("monitoring_focus") or ""),
+                force_target="followup",
+            )
 
     deduped_tasks: list[dict[str, Any]] = []
     seen = set()

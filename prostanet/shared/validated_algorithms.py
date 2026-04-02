@@ -14,7 +14,7 @@ from clinical_scores import (
 
 
 LOCALIZED_MODULES = {"localized_initial"}
-POSTLOCAL_MODULES = {"post_prostatectomy", "recurrence_bcr"}
+POSTLOCAL_MODULES = {"post_prostatectomy", "recurrence_bcr", "post_radiotherapy_or_local_salvage"}
 ADVANCED_MODULES = {
     "mcspc_oligo_metachronous",
     "mcspc_low_volume_sync_oligo",

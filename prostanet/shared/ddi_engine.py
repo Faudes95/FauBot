@@ -70,6 +70,11 @@ _DDI_RULES: list[dict[str, Any]] = [
      "impact": "Toxicidad hematológica aumentada", "action": "Reducir dosis de olaparib 50% o evitar inhibidor CYP3A4 fuerte.",
      "alternative": "Fluconazol (inhibidor CYP3A4 moderado)", "ref": "PharmGKB / Label FDA"},
     # Docetaxel
+    {"drug_a": "docetaxel", "drug_b": "abiraterona", "severity": "major",
+     "mechanism": "Abiraterona inhibe CYP3A4 — docetaxel se metaboliza por CYP3A4",
+     "impact": "Aumento potencial de toxicidad hematológica de docetaxel (neutropenia)",
+     "action": "Monitorear hemograma estrechamente durante triplete ADT+docetaxel+abiraterona. Considerar ajuste de dosis si toxicidad grado 3-4.",
+     "alternative": "Secuenciar en lugar de combinar cuando sea posible", "ref": "PharmGKB / ARASENS protocol safety"},
     {"drug_a": "docetaxel", "drug_b": "ketoconazol", "severity": "major",
      "mechanism": "Ketoconazol inhibe CYP3A4 — aumenta exposición a docetaxel",
      "impact": "Neutropenia severa aumentada", "action": "Evitar coadministración. Antifúngico alternativo.",
@@ -152,6 +157,7 @@ class DDIEngine:
         """Verifica interacciones entre fármacos oncológicos y medicamentos concomitantes."""
         alerts: list[DDIAlert] = []
         all_drugs = [d.lower().strip() for d in oncology_drugs + concomitant_medications if d]
+        all_drug_set = set(all_drugs)
 
         for rule in _DDI_RULES:
             a = rule["drug_a"]
@@ -182,6 +188,20 @@ class DDIEngine:
                         alternative="Darolutamida",
                         reference="SPARTAN, PROSPER safety data / Shore ND 2019",
                     ))
+            # Triple check: seizure_history + ARPI proconvulsivo + tramadol = contraindicación absoluta
+            arpi_proconvulsivo = all_drug_set & {"enzalutamida", "apalutamida"}
+            if arpi_proconvulsivo and "tramadol" in all_drug_set:
+                arpi_name = next(iter(arpi_proconvulsivo)).title()
+                alerts.append(DDIAlert(
+                    severity="contraindicated",
+                    drug_a=f"{arpi_name} + Tramadol",
+                    drug_b="Historia de convulsiones",
+                    mechanism=f"Triple riesgo convulsivo: {arpi_name} (proconvulsivo) + tramadol (baja umbral) + historia de convulsiones",
+                    clinical_impact="Riesgo convulsivo inaceptablemente alto — combinación triple absolutamente contraindicada",
+                    recommended_action=f"Suspender {arpi_name} y tramadol. Cambiar a darolutamida + opioide sin efecto proconvulsivo (morfina, hidromorfona).",
+                    alternative="Darolutamida + morfina/hidromorfona",
+                    reference="SPARTAN safety / Shore ND 2019 / NCCN Pain Management",
+                ))
 
         return alerts
 

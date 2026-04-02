@@ -15,7 +15,12 @@ from prostanet.domains.patient_tracking.master_followup_plan import build_master
 from prostanet.domains.patient_tracking.mhspc_evidence import (
     build_triplet_decision,
     is_mhspc_state,
+    resolve_mhspc_state,
     visible_trials_for_mhspc_state,
+)
+from prostanet.domains.patient_tracking.live_benchmark import (
+    is_live_benchmark_applicable_state,
+    resolve_live_benchmark_from_snapshot,
 )
 from prostanet.domains.patient_tracking.psa_line_monitor import build_psa_by_treatment_line
 from prostanet.domains.patient_tracking.prognostic_impact import build_prognostic_impact_bundle
@@ -23,6 +28,11 @@ from prostanet.domains.patient_tracking.reconciled_state import build_reconciled
 from prostanet.domains.patient_tracking.risk_tools import build_risk_tools_panel
 from prostanet.domains.patient_tracking.therapy_catalog import summarize_trial_backbones, trial_backbone
 from prostanet.domains.patient_tracking.therapy_catalog import regimen_label, therapy_select_options
+from prostanet.domains.patient_tracking.vertical_runtime import (
+    derive_display_sequence_summary,
+    normalize_text,
+    select_primary_vertical_bundle,
+)
 from prostanet.shared.official_diagnosis import build_official_diagnosis_context, diagnosis_field_label
 from prostanet.shared.presentation_text import resolve_option_label
 from prostanet.shared.ui_value_normalizer import (
@@ -44,7 +54,7 @@ from prostanet.shared.ui_value_normalizer import (
 
 DIAGNOSTIC_STATES = {"diagnostic_workup", "post_negative_biopsy_followup"}
 LOCALIZED_STATES = {"localized_initial"}
-POSTLOCAL_STATES = {"post_prostatectomy", "recurrence_bcr"}
+POSTLOCAL_STATES = {"post_prostatectomy", "recurrence_bcr", "post_radiotherapy_or_local_salvage"}
 ADVANCED_STATES = {
     "adt_progression_verification",
     "mcspc_oligo_metachronous",
@@ -55,6 +65,25 @@ ADVANCED_STATES = {
     "m0_crpc",
     "m1_crpc",
 }
+POST_RP_SALVAGE_TRIALS = {
+    "ARTISTIC",
+    "EMBARK",
+    "EMPIRE-1",
+    "GETUG-AFU 16",
+    "RADICALS-RT",
+    "RAVES",
+    "RTOG 9601",
+    "SPPORT",
+}
+POST_RP_CONTEXTUAL_SUPPORT_TRIALS = {
+    "ARTISTIC",
+    "EMPIRE-1",
+    "GETUG-AFU 16",
+    "RADICALS-RT",
+    "RAVES",
+    "RTOG 9601",
+    "SPPORT",
+}
 
 PRIMARY_QUESTION_MAP = {
     "diagnostic_workup": "¿Debemos confirmar histología, repetir MRI o activar biopsia?",
@@ -62,6 +91,7 @@ PRIMARY_QUESTION_MAP = {
     "localized_initial": "¿Conviene vigilancia activa, cirugía o radioterapia hoy?",
     "post_prostatectomy": "¿Basta vigilancia o hay que acelerar rescate posoperatorio?",
     "recurrence_bcr": "¿Existe una ventana curativa de rescate o ya hay que intensificar?",
+    "post_radiotherapy_or_local_salvage": "¿La recurrencia post-RT cumple Phoenix y qué modalidad de salvage domina hoy?",
     "adt_progression_verification": "¿Es CRPC confirmado o primero hay que verificar castración?",
     "mcspc_oligo_metachronous": "¿Qué intensificación sistémica y soporte concurrente corresponden en mHSPC?",
     "mcspc_low_volume_sync_oligo": "¿Qué intensificación sistémica y soporte concurrente corresponden en mHSPC?",
@@ -78,6 +108,7 @@ STATE_DISPLAY_MAP = {
     "localized_initial": "Enfermedad localizada o regional N1M0",
     "post_prostatectomy": "Seguimiento posprostatectomía",
     "recurrence_bcr": "Recurrencia bioquímica",
+    "post_radiotherapy_or_local_salvage": "Recurrencia post-RT",
     "adt_progression_verification": "Progresión bajo ADT / verificación",
     "mcspc_oligo_metachronous": "mHSPC oligometastásico metacrónico",
     "mcspc_low_volume_sync_oligo": "mHSPC sincrónico de bajo volumen",
@@ -471,6 +502,57 @@ def _decorate_patient_alerts(alerts: list[dict[str, Any]]) -> list[dict[str, Any
     return decorated
 
 
+def _merge_longitudinal_runtime_context(
+    patient: dict[str, Any],
+    longitudinal_bundle: dict[str, Any] | None,
+) -> dict[str, Any]:
+    context = dict(patient or {})
+    bundle = dict(longitudinal_bundle or {})
+    if not bundle:
+        return context
+    merged_signals = dict(context.get("latest_signal_snapshot") or {})
+    merged_signals.update(dict(bundle.get("signals") or {}))
+    for key in (
+        "transition_resolution",
+        "care_intent_contract",
+        "palliative_transition_bundle",
+        "palliative_monitoring_package",
+        "symptom_burden_profile",
+        "advance_care_planning_status",
+        "hospice_eligibility",
+        "acute_palliative_alerts",
+        "recommended_supportive_referrals",
+        "guideline_followup_plan",
+        "longitudinal_truth_snapshot",
+        "decision_recalculation_trace",
+        "laboratory_intelligence_profile",
+        "latest_clinically_decisive_visit",
+        "crpc_copilot_bundle",
+        "post_rp_salvage_bundle",
+        "mhspc_copilot_bundle",
+        "diagnostic_biopsy_bundle",
+        "localized_surveillance_bundle",
+        "post_rt_salvage_bundle",
+        "post_rt_schedule_overlay",
+        "blocking_inputs",
+        "hard_blocking_inputs",
+        "decision_blocking_inputs",
+        "supportive_gaps",
+        "required_to_recalculate",
+        "optional_context_inputs",
+        "decision_domains_blocked",
+        "why_these_fields_now",
+    ):
+        value = bundle.get(key)
+        if value not in (None, "", [], {}):
+            context[key] = value
+            merged_signals[key] = value
+    if bundle.get("copilot_alerts") is not None:
+        context["alerts"] = list(bundle.get("copilot_alerts") or [])
+    context["latest_signal_snapshot"] = merged_signals
+    return context
+
+
 def _build_missing_input_actions(
     *,
     patient: dict[str, Any],
@@ -699,8 +781,8 @@ def _build_profile_decision_view_model(
         "El copiloto no ha emitido una narrativa adicional.",
     )
     canonical_family = _first_nonempty(
-        care_intent_contract.get("headline"),
         care_intent_contract.get("recommendation_family"),
+        care_intent_contract.get("headline"),
         canonical_headline,
         clinical_compass.get("recommendation_family"),
         clinical_compass.get("current_stage_label"),
@@ -934,7 +1016,21 @@ def _build_clinical_compass(
     truth_values = dict(truth_snapshot.get("field_values") or {})
     guideline_plan = dict(guideline_followup_plan or {})
     care_intent = dict(care_intent_contract or {})
+    runtime_signal_snapshot = dict(patient.get("latest_signal_snapshot") or {})
+    runtime_post_rt_bundle = dict(
+        patient.get("post_rt_salvage_bundle")
+        or runtime_signal_snapshot.get("post_rt_salvage_bundle")
+        or {}
+    )
+    runtime_post_rt_transition = dict(runtime_post_rt_bundle.get("post_rt_transition_bundle") or {})
+    runtime_post_rt_failure = dict(runtime_post_rt_bundle.get("post_rt_failure_definition") or {})
     freshness = _build_data_freshness(patient, state)
+    assessment_state = normalize_text(
+        (display_assessment or {}).get("state")
+        or (raw_assessment or {}).get("state")
+    )
+    resolved_stage_label = _first_nonempty(STATE_DISPLAY_MAP.get(state), state)
+    assessment_state_mismatch = bool(assessment_state and assessment_state != state)
     last_decisive = (
         recalculation_trace.get("latest_clinically_decisive_visit")
         or truth_snapshot.get("latest_clinically_decisive_visit")
@@ -945,7 +1041,11 @@ def _build_clinical_compass(
         STATE_DISPLAY_MAP.get(state),
         "Diagnóstico en consolidación",
     )
-    operational_module_label = _first_nonempty(display_assessment.get("module_label"), STATE_DISPLAY_MAP.get(state), state)
+    operational_module_label = (
+        resolved_stage_label
+        if assessment_state_mismatch
+        else _first_nonempty(display_assessment.get("module_label"), resolved_stage_label, state)
+    )
     modifier_bundle = copilot_modifiers or {}
     what_could_change_course = _merge_unique_text(
         _as_list(display_result.get("decision_changing_inputs"))[:4] or _as_list(display_result.get("missing_critical_inputs"))[:4],
@@ -967,9 +1067,19 @@ def _build_clinical_compass(
         modifier_bundle.get("next_actions", []),
         limit=6,
     )
+    salvage_conflict_override = state in {"recurrence_bcr", "post_radiotherapy_or_local_salvage"} and (
+        normalize_text(care_intent.get("recommendation_family")) == "salvage"
+        or normalize_text(runtime_action.get("recommendation_family")) in {"salvage", "ruta de rescate", "post_rt_salvage"}
+        or "salvage" in _first_nonempty(
+            care_intent.get("headline"),
+            runtime_action.get("title"),
+            care_intent.get("narrative"),
+            runtime_action.get("rationale"),
+        ).lower()
+    )
     recommended_direction = (
         "La etapa longitudinal reconciliada requiere confirmar transición y reemitir recomendación modular sobre el estado vigente."
-        if state_conflict
+        if state_conflict and not salvage_conflict_override
         else _first_nonempty(
             care_intent.get("narrative"),
             runtime_action.get("rationale"),
@@ -992,7 +1102,7 @@ def _build_clinical_compass(
     )
     recommendation_family = (
         "Estado reconciliado por confirmar"
-        if state_conflict
+        if state_conflict and not salvage_conflict_override
         else _first_nonempty(
             care_intent.get("recommendation_family"),
             runtime_action.get("recommendation_family"),
@@ -1001,11 +1111,64 @@ def _build_clinical_compass(
             "No documentada",
         )
     )
+    if state in {"recurrence_bcr", "post_radiotherapy_or_local_salvage"} and str(recommendation_family or "").strip().lower() in {"ruta de rescate", "post_rt_salvage"}:
+        recommendation_family = "salvage"
     why_this_now = _merge_unique_text(
         recalculation_trace.get("what_changed_today", []),
         _as_list(nccn.get("fundamentos_personalizados"))[:3] or _as_list(display_result.get("report_sections", {}).get("risk_features"))[:3],
         limit=6,
     )
+    if state == "post_radiotherapy_or_local_salvage":
+        runtime_missing = _displayize_field_list(
+            runtime_post_rt_transition.get("required_missing_fields")
+            or runtime_post_rt_failure.get("required_missing_fields")
+            or runtime_action.get("data_that_could_change_course")
+            or [],
+            limit=6,
+        )
+        why_this_now = _merge_unique_text(
+            runtime_post_rt_transition.get("trigger_reasons", []),
+            runtime_post_rt_bundle.get("why_changed_today", []),
+            limit=6,
+        )
+        if not why_this_now:
+            why_this_now = _merge_unique_text(
+                runtime_action.get("immediate_actions", []),
+                recalculation_trace.get("what_changed_today", []),
+                limit=6,
+            )
+        what_could_change_course = _merge_unique_text(
+            _displayize_field_list(runtime_action.get("data_that_could_change_course") or [], limit=6),
+            runtime_missing,
+            limit=6,
+        )
+        if not what_could_change_course:
+            what_could_change_course = _merge_unique_text(
+                what_could_change_course,
+                _displayize_field_list(_as_list(display_result.get("missing_critical_inputs"))[:4], limit=6),
+                limit=6,
+            )
+    why_not_more_confident = _as_list(decision_quality.get("why_not_more_confident")) or _as_list(display_result.get("why_not_more_confident"))
+    if state == "post_radiotherapy_or_local_salvage":
+        active_runtime_missing = set(
+            str(item).strip().lower()
+            for item in (
+                runtime_post_rt_transition.get("required_missing_fields")
+                or runtime_post_rt_failure.get("required_missing_fields")
+                or runtime_action.get("data_that_could_change_course")
+                or []
+            )
+            if str(item).strip()
+        )
+        if not active_runtime_missing:
+            why_not_more_confident = [
+                item
+                for item in why_not_more_confident
+                if not any(
+                    token in str(item).lower()
+                    for token in ("phoenix", "psma", "modalidad local", "salvage feasible")
+                )
+            ]
     return {
         "current_diagnosis": normalize_ui_value(current_diagnosis),
         "official_diagnosis": normalize_ui_value(current_diagnosis),
@@ -1013,7 +1176,7 @@ def _build_clinical_compass(
         "official_diagnosis_missing_fields": diagnosis_context.get("official_diagnosis_missing_fields", []),
         "official_diagnosis_source_summary": normalize_ui_value(diagnosis_context.get("official_diagnosis_source_summary", ""), default=""),
         "operational_module_label": normalize_ui_value(operational_module_label),
-        "current_stage_label": normalize_ui_value(_first_nonempty(STATE_DISPLAY_MAP.get(state), state) if state_conflict else operational_module_label),
+        "current_stage_label": normalize_ui_value(resolved_stage_label if (state_conflict or assessment_state_mismatch) else operational_module_label),
         "explicit_stage_label": normalize_ui_value(_first_nonempty(STATE_DISPLAY_MAP.get(reconciliation.get("explicit_state")), reconciliation.get("explicit_state")), default=""),
         "state_conflict_flag": state_conflict,
         "state_conflict_reason": reconciliation.get("state_conflict_reason", ""),
@@ -1031,7 +1194,7 @@ def _build_clinical_compass(
         "confidence_category": normalize_ui_label(confidence_category),
         "recommendation_family": normalize_ui_value(recommendation_family),
         "decision_changing_inputs": _as_list(display_result.get("decision_changing_inputs")),
-        "why_not_more_confident": _as_list(decision_quality.get("why_not_more_confident")) or _as_list(display_result.get("why_not_more_confident")),
+        "why_not_more_confident": why_not_more_confident,
         "active_modifiers": modifier_bundle.get("active_modifiers", []),
         "safety_modifiers": modifier_bundle.get("safety_modifiers", []),
         "longitudinal_truth_summary": truth_values,
@@ -1164,7 +1327,7 @@ def _localized_panels(patient: dict[str, Any], raw_assessment: dict[str, Any], d
         _localized_shared_decision_panel(patient, raw_assessment, display_result),
     ]
     eligible_names = {item.get("name") for item in raw_result.get("eligible_treatments", [])}
-    if "Radical prostatectomy" in eligible_names:
+    if "Prostatectomía radical" in eligible_names or "Radical prostatectomy" in eligible_names:
         panels.insert(
             2,
             {
@@ -1894,6 +2057,13 @@ def _normalize_pivotal_match(match: dict[str, Any]) -> dict[str, Any]:
                 "recommended_trial_backbone_label": backbone_bundle.get("recommended_trial_backbone_label", ""),
                 "recommended_trial_backbone_source": backbone_bundle.get("recommended_trial_backbone_source", ""),
                 "recommended_trial_backbone_note": backbone_bundle.get("recommended_trial_backbone_note", ""),
+                "recommended_trial_backbone_description": backbone_bundle.get("recommended_trial_backbone_description", ""),
+                "recommended_trial_backbone_dose": backbone_bundle.get("recommended_trial_backbone_dose", ""),
+                "recommended_trial_backbone_route": backbone_bundle.get("recommended_trial_backbone_route", ""),
+                "recommended_trial_backbone_schedule": backbone_bundle.get("recommended_trial_backbone_schedule", ""),
+                "recommended_trial_backbone_duration": backbone_bundle.get("recommended_trial_backbone_duration", ""),
+                "recommended_trial_backbone_total_dose_gy": backbone_bundle.get("recommended_trial_backbone_total_dose_gy", ""),
+                "recommended_trial_backbone_fractions": backbone_bundle.get("recommended_trial_backbone_fractions", ""),
             }
         )
     return normalized
@@ -1910,7 +2080,15 @@ def _build_triplet_decision_for_profile(
     payload = dict((raw_assessment or {}).get("input_snapshot", {}) or {})
     existing = dict(raw_result.get("triplet_decision") or raw_result.get("triplet_decision_card") or {})
     if existing:
-        return existing
+        existing_state = resolve_mhspc_state(str(existing.get("state") or state), payload)
+        requested_state = resolve_mhspc_state(state, payload)
+        if existing_state == requested_state:
+            return existing
+    if existing:
+        payload = {
+            **payload,
+            "volume_disease": payload.get("volume_disease") or "High" if "high_volume" in state else payload.get("volume_disease"),
+        }
     return build_triplet_decision(
         state,
         payload,
@@ -1925,6 +2103,28 @@ def _build_pivotal_panel(matches: list[dict[str, Any]], *, state: str = "") -> d
         _, hidden_trials = visible_trials_for_mhspc_state(state, {})
         hidden_cross_scenario = sum(1 for item in normalized if str(item.get("study_name") or "") in hidden_trials)
         normalized = [item for item in normalized if str(item.get("study_name") or "") not in hidden_trials]
+    elif state == "recurrence_bcr":
+        hidden_cross_scenario = sum(
+            1
+            for item in normalized
+            if str(item.get("study_name") or "") not in POST_RP_SALVAGE_TRIALS
+        )
+        normalized = [
+            item
+            for item in normalized
+            if str(item.get("study_name") or "") in POST_RP_SALVAGE_TRIALS
+        ]
+    elif state == "post_radiotherapy_or_local_salvage":
+        hidden_cross_scenario = sum(
+            1
+            for item in normalized
+            if str(item.get("study_name") or "") in POST_RP_SALVAGE_TRIALS
+        )
+        normalized = [
+            item
+            for item in normalized
+            if str(item.get("study_name") or "") not in POST_RP_SALVAGE_TRIALS
+        ]
     eligible = [item for item in normalized if item.get("eligible")]
     partial = [item for item in normalized if not item.get("eligible") and (item.get("match_score") or 0) >= 0.7]
     ineligible = [item for item in normalized if item not in eligible and item not in partial]
@@ -1952,6 +2152,8 @@ def _scenario_for_state(state: str) -> str:
         return "adyuvancia"
     if state == "recurrence_bcr":
         return "rescate"
+    if state == "post_radiotherapy_or_local_salvage":
+        return "post_rt_salvage"
     if state == "m0_crpc":
         return "nmCRPC"
     if state in {"m1_crpc"}:
@@ -1970,21 +2172,153 @@ def _build_evidence_applicability(
     display_assessment: dict[str, Any],
 ) -> dict[str, Any]:
     scenario = _scenario_for_state(state)
-    current_recommendation = _first_nonempty(
-        ((display_assessment or {}).get("display_result", {}) or {}).get("nccn_primary", {}).get("titulo_clinico"),
-        ((display_assessment or {}).get("display_result", {}) or {}).get("nccn_primary", {}).get("label"),
-        STATE_DISPLAY_MAP.get(state),
-    )
-    all_matches = (
-        list(pivotal_panel.get("eligible_matches") or [])
-        + list(pivotal_panel.get("partial_matches") or [])
-        + list(pivotal_panel.get("ineligible_matches") or [])
-    )
-    scenario_matches = [item for item in all_matches if str(item.get("scenario", "")).lower() == scenario.lower()] if scenario else all_matches
-    prioritized = [
-        item for item in (list(pivotal_panel.get("eligible_matches") or []) + list(pivotal_panel.get("partial_matches") or []))
-        if not scenario or str(item.get("scenario", "")).lower() == scenario.lower()
-    ]
+    if state == "recurrence_bcr":
+        current_recommendation = _first_nonempty(
+            ((display_assessment or {}).get("display_result", {}) or {}).get("nccn_primary", {}).get("titulo_clinico"),
+            ((display_assessment or {}).get("display_result", {}) or {}).get("nccn_primary", {}).get("label"),
+            "Activar salvage y reestadificación dirigida",
+        )
+        all_matches = (
+            list(pivotal_panel.get("eligible_matches") or [])
+            + list(pivotal_panel.get("partial_matches") or [])
+            + list(pivotal_panel.get("ineligible_matches") or [])
+        )
+        scenario_matches = [
+            item for item in all_matches
+            if str(item.get("study_name") or "") in POST_RP_SALVAGE_TRIALS
+        ]
+        supporting_trials = []
+        strictly_eligible = []
+        contextual_support = []
+        not_eligible_for_this_case = []
+        for match in scenario_matches:
+            study_name = str(match.get("study_name") or "")
+            is_eligible = bool(match.get("eligible"))
+            criteria_met = (match.get("criteria_met") or [])[:3]
+            criteria_failed = (match.get("criteria_failed") or [])[:3]
+            if is_eligible:
+                group_key = "strictly_eligible"
+                status = "Aplicable"
+                eligibility_rationale = (
+                    f"Elegible porque cumple: {', '.join(criteria_met)}."
+                    if criteria_met
+                    else "Elegible por concordancia directa con el escenario post-RP de salvage."
+                )
+                clinical_takeaway = f"Puede respaldar la decisión activa: {current_recommendation}."
+            elif study_name in POST_RP_CONTEXTUAL_SUPPORT_TRIALS:
+                group_key = "contextual_support"
+                status = "Contextual"
+                if criteria_failed:
+                    eligibility_rationale = (
+                        f"Apoyo contextual: el estudio respalda la familia de salvage, aunque hoy no sea estrictamente elegible por {', '.join(criteria_failed)}."
+                    )
+                else:
+                    eligibility_rationale = "Apoyo contextual para rescate temprano o reestadificación dirigida en recurrencia post-RP."
+                clinical_takeaway = "Sustenta la estrategia de salvage temprano o la reestadificación dirigida, aunque no siempre equivalga a elegibilidad estricta actual."
+            else:
+                group_key = "not_eligible_for_this_case"
+                status = "No elegible"
+                eligibility_rationale = (
+                    f"No elegible para este caso por: {', '.join(criteria_failed)}."
+                    if criteria_failed
+                    else "No elegible para este caso con los datos acumulados actuales."
+                )
+                clinical_takeaway = "No debe desplazar una ruta curativa local plausible sin justificar el cambio de escenario."
+            card = {
+                "study_name": study_name or "Estudio",
+                "scenario": match.get("scenario", ""),
+                "status": status,
+                "group_key": group_key,
+                "expected_outcome": match.get("expected_outcome") or match.get("key_result") or "",
+                "criteria_met": criteria_met,
+                "criteria_failed": criteria_failed,
+                "match_score": match.get("match_score"),
+                "applicability": match.get("applicability") or "",
+                "decision_supported": current_recommendation,
+                "eligibility_rationale": eligibility_rationale,
+                "clinical_takeaway": clinical_takeaway,
+                "evidence_strength": "Alta" if is_eligible else ("Contextual" if group_key == "contextual_support" else "No aplicable"),
+                "recommended_trial_backbone": match.get("recommended_trial_backbone", ""),
+                "recommended_trial_backbone_label": match.get("recommended_trial_backbone_label", ""),
+                "recommended_trial_backbone_source": match.get("recommended_trial_backbone_source", ""),
+                "recommended_trial_backbone_note": match.get("recommended_trial_backbone_note", ""),
+                "recommended_trial_backbone_description": match.get("recommended_trial_backbone_description", ""),
+                "recommended_trial_backbone_dose": match.get("recommended_trial_backbone_dose", ""),
+                "recommended_trial_backbone_route": match.get("recommended_trial_backbone_route", ""),
+                "recommended_trial_backbone_schedule": match.get("recommended_trial_backbone_schedule", ""),
+                "recommended_trial_backbone_duration": match.get("recommended_trial_backbone_duration", ""),
+                "recommended_trial_backbone_total_dose_gy": match.get("recommended_trial_backbone_total_dose_gy", ""),
+                "recommended_trial_backbone_fractions": match.get("recommended_trial_backbone_fractions", ""),
+            }
+            if group_key == "strictly_eligible":
+                strictly_eligible.append(card)
+            elif group_key == "contextual_support":
+                contextual_support.append(card)
+            else:
+                not_eligible_for_this_case.append(card)
+        supporting_trials = strictly_eligible[:2] + contextual_support[:4]
+        return {
+            "scenario": scenario,
+            "recommendation_label": current_recommendation,
+            "eligible_count": len(strictly_eligible),
+            "partial_count": len(contextual_support),
+            "supporting_trials": supporting_trials,
+            "strictly_eligible": strictly_eligible,
+            "contextual_support": contextual_support,
+            "not_eligible_for_this_case": not_eligible_for_this_case,
+            "has_results": bool(scenario_matches),
+            "gaps": _merge_unique_text([], [gap for card in supporting_trials for gap in (card.get("criteria_failed") or [])], limit=5),
+            "summary": "La evidencia visible se restringe al carril post-RP salvage/BCR y separa elegibilidad estricta, apoyo contextual y estudios no elegibles hoy para este caso.",
+        }
+    if state == "post_radiotherapy_or_local_salvage":
+        current_recommendation = _first_nonempty(
+            ((display_assessment or {}).get("display_result", {}) or {}).get("nccn_primary", {}).get("titulo_clinico"),
+            ((display_assessment or {}).get("display_result", {}) or {}).get("nccn_primary", {}).get("label"),
+            "Ruta priorizada post-radioterapia / salvage local",
+        )
+        scenario_matches = (
+            list(pivotal_panel.get("eligible_matches") or [])
+            + list(pivotal_panel.get("partial_matches") or [])
+            + list(pivotal_panel.get("ineligible_matches") or [])
+        )
+        prioritized = list(pivotal_panel.get("eligible_matches") or []) + list(pivotal_panel.get("partial_matches") or [])
+        return {
+            "scenario": scenario,
+            "recommendation_label": current_recommendation,
+            "eligible_count": len(pivotal_panel.get("eligible_matches") or []),
+            "partial_count": len(pivotal_panel.get("partial_matches") or []),
+            "supporting_trials": prioritized[:6],
+            "strictly_eligible": list(pivotal_panel.get("eligible_matches") or []),
+            "contextual_support": list(pivotal_panel.get("partial_matches") or []),
+            "not_eligible_for_this_case": list(pivotal_panel.get("ineligible_matches") or []),
+            "has_results": bool(scenario_matches),
+            "gaps": _merge_unique_text([], [gap for item in prioritized for gap in (item.get("criteria_failed") or [])], limit=5),
+            "summary": "La evidencia visible para post-RT debe leerse con Phoenix, confirmación local equivalente y reestadificación completa; no debe mezclarse con el carril post-RP salvage.",
+        }
+    if is_mhspc_state(state):
+        current_recommendation = STATE_DISPLAY_MAP.get(state) or state
+        scenario_matches = (
+            list(pivotal_panel.get("eligible_matches") or [])
+            + list(pivotal_panel.get("partial_matches") or [])
+            + list(pivotal_panel.get("ineligible_matches") or [])
+        )
+        prioritized = list(pivotal_panel.get("eligible_matches") or []) + list(pivotal_panel.get("partial_matches") or [])
+    else:
+        current_recommendation = _first_nonempty(
+            ((display_assessment or {}).get("display_result", {}) or {}).get("nccn_primary", {}).get("titulo_clinico"),
+            ((display_assessment or {}).get("display_result", {}) or {}).get("nccn_primary", {}).get("label"),
+            STATE_DISPLAY_MAP.get(state),
+        )
+        all_matches = (
+            list(pivotal_panel.get("eligible_matches") or [])
+            + list(pivotal_panel.get("partial_matches") or [])
+            + list(pivotal_panel.get("ineligible_matches") or [])
+        )
+        scenario_matches = [item for item in all_matches if str(item.get("scenario", "")).lower() == scenario.lower()] if scenario else all_matches
+        prioritized = [
+            item for item in (list(pivotal_panel.get("eligible_matches") or []) + list(pivotal_panel.get("partial_matches") or []))
+            if not scenario or str(item.get("scenario", "")).lower() == scenario.lower()
+        ]
     applicability_cards = []
     for match in prioritized[:4]:
         is_eligible = bool(match.get("eligible"))
@@ -2022,6 +2356,13 @@ def _build_evidence_applicability(
                 "recommended_trial_backbone_label": match.get("recommended_trial_backbone_label", ""),
                 "recommended_trial_backbone_source": match.get("recommended_trial_backbone_source", ""),
                 "recommended_trial_backbone_note": match.get("recommended_trial_backbone_note", ""),
+                "recommended_trial_backbone_description": match.get("recommended_trial_backbone_description", ""),
+                "recommended_trial_backbone_dose": match.get("recommended_trial_backbone_dose", ""),
+                "recommended_trial_backbone_route": match.get("recommended_trial_backbone_route", ""),
+                "recommended_trial_backbone_schedule": match.get("recommended_trial_backbone_schedule", ""),
+                "recommended_trial_backbone_duration": match.get("recommended_trial_backbone_duration", ""),
+                "recommended_trial_backbone_total_dose_gy": match.get("recommended_trial_backbone_total_dose_gy", ""),
+                "recommended_trial_backbone_fractions": match.get("recommended_trial_backbone_fractions", ""),
             }
         )
     return {
@@ -2734,6 +3075,7 @@ def build_patient_profile_view_model(
     recommendations: dict[str, Any] | None = None,
     longitudinal_bundle: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    patient = _merge_longitudinal_runtime_context(patient, longitudinal_bundle)
     assessment = latest_assessment or {}
     raw_assessment = latest_assessment_raw or {}
     reconciliation_input = dict(raw_assessment)
@@ -2772,7 +3114,27 @@ def build_patient_profile_view_model(
     diagnostic_state = state in DIAGNOSTIC_STATES
     display_result = assessment.get("display_result", {}) if assessment else {}
     management_track = reconciliation.get("reconciled_management_track") or infer_management_track(patient, state, raw_assessment)
-    operational_module_label = _first_nonempty(assessment.get("module_label"), STATE_DISPLAY_MAP.get(state), state)
+    benchmark_state = str(
+        bundle_signals.get("effective_state_final")
+        or bundle_signals.get("effective_state")
+        or bundle_signals.get("phenotype_state")
+        or state
+    )
+    fallback_benchmark_state = str(
+        raw_assessment.get("state")
+        or assessment.get("state")
+        or patient.get("prior_history", {}).get("current_state")
+        or ""
+    )
+    if not is_live_benchmark_applicable_state(benchmark_state) and is_live_benchmark_applicable_state(fallback_benchmark_state):
+        benchmark_state = fallback_benchmark_state
+    assessment_state = normalize_text(assessment.get("state") or raw_assessment.get("state") or "")
+    resolved_state_label = _first_nonempty(STATE_DISPLAY_MAP.get(state), state)
+    operational_module_label = (
+        resolved_state_label
+        if assessment_state and assessment_state != state
+        else _first_nonempty(assessment.get("module_label"), resolved_state_label, state)
+    )
     diagnosis_context = build_official_diagnosis_context(
         patient=patient,
         state=state,
@@ -2793,7 +3155,13 @@ def build_patient_profile_view_model(
         raw_assessment=raw_assessment,
     )
     triplet_decision = _decorate_triplet_decision(triplet_decision)
-    agenda_board = build_agenda_board(patient, state, management_track, raw_assessment)
+    agenda_board = build_agenda_board(
+        patient,
+        state,
+        management_track,
+        raw_assessment,
+        longitudinal_bundle=longitudinal_bundle,
+    )
     persisted_agenda_items = [dict(item) for item in (patient.get("agenda_items") or agenda_board.get("items", []))]
     scheduled_by_key = {
         str(item.get("schedule_key") or ""): item
@@ -2870,6 +3238,22 @@ def build_patient_profile_view_model(
         latest_signal_snapshot["care_intent_contract"] = dict(longitudinal_bundle.get("care_intent_contract") or {})
     elif patient.get("care_intent_contract"):
         latest_signal_snapshot["care_intent_contract"] = dict(patient.get("care_intent_contract") or {})
+    if longitudinal_bundle and longitudinal_bundle.get("palliative_transition_bundle"):
+        latest_signal_snapshot["palliative_transition_bundle"] = dict(longitudinal_bundle.get("palliative_transition_bundle") or {})
+    elif patient.get("palliative_transition_bundle"):
+        latest_signal_snapshot["palliative_transition_bundle"] = dict(patient.get("palliative_transition_bundle") or {})
+    if longitudinal_bundle and longitudinal_bundle.get("palliative_monitoring_package"):
+        latest_signal_snapshot["palliative_monitoring_package"] = dict(longitudinal_bundle.get("palliative_monitoring_package") or {})
+    elif patient.get("palliative_monitoring_package"):
+        latest_signal_snapshot["palliative_monitoring_package"] = dict(patient.get("palliative_monitoring_package") or {})
+    if longitudinal_bundle and longitudinal_bundle.get("survivorship_transition_bundle"):
+        latest_signal_snapshot["survivorship_transition_bundle"] = dict(longitudinal_bundle.get("survivorship_transition_bundle") or {})
+    elif patient.get("survivorship_transition_bundle"):
+        latest_signal_snapshot["survivorship_transition_bundle"] = dict(patient.get("survivorship_transition_bundle") or {})
+    if longitudinal_bundle and longitudinal_bundle.get("survivorship_monitoring_package"):
+        latest_signal_snapshot["survivorship_monitoring_package"] = dict(longitudinal_bundle.get("survivorship_monitoring_package") or {})
+    elif patient.get("survivorship_monitoring_package"):
+        latest_signal_snapshot["survivorship_monitoring_package"] = dict(patient.get("survivorship_monitoring_package") or {})
     adjudication_snapshot = dict(patient.get("latest_adjudication_snapshot") or {})
     trial_benchmark_snapshot = dict(patient.get("latest_trial_benchmark_snapshot") or {})
     if not adjudication_snapshot or not trial_benchmark_snapshot:
@@ -2903,14 +3287,16 @@ def build_patient_profile_view_model(
         patient_outcome_events = list(patient.get("outcome_events") or [])
     current_trial_profile = dict(trial_benchmark_snapshot.get("current_trial_profile") or {})
     preferred_frontline_regimen = dict(raw_assessment.get("result_snapshot", {}).get("preferred_frontline_regimen") or {})
+    frontline_ranking_trace = dict(raw_assessment.get("result_snapshot", {}).get("frontline_ranking_trace") or {})
     if is_mhspc_state(state) and preferred_frontline_regimen:
         rationale = list(preferred_frontline_regimen.get("selection_rationale") or [])
+        winner_reason = normalize_text(frontline_ranking_trace.get("winner_reason"))
         current_trial_profile.update(
             {
                 "recommended_trial_backbone": [preferred_frontline_regimen.get("regimen_code", "")],
                 "recommended_trial_backbone_label": preferred_frontline_regimen.get("regimen_label", ""),
                 "recommended_trial_backbone_source": ", ".join((preferred_frontline_regimen.get("pivotal_trial_fit") or {}).get("matched_trials") or []),
-                "recommended_trial_backbone_note": " ".join(rationale[:2]) or "Esquema frontline individualizado según elegibilidad clínica, guideline fit y evidencia pivote.",
+                "recommended_trial_backbone_note": winner_reason or " ".join(rationale[:2]) or "Esquema frontline individualizado según elegibilidad clínica, guideline fit y evidencia pivote.",
                 "preferred_frontline_regimen": preferred_frontline_regimen,
                 "recommended_component_drugs": list(preferred_frontline_regimen.get("component_drugs") or []),
             }
@@ -2979,6 +3365,54 @@ def build_patient_profile_view_model(
         or patient.get("care_intent_contract")
         or {}
     )
+    palliative_transition_bundle = dict(
+        longitudinal_bundle.get("palliative_transition_bundle")
+        or patient.get("palliative_transition_bundle")
+        or latest_signal_snapshot.get("palliative_transition_bundle")
+        or {}
+    )
+    palliative_monitoring_package = dict(
+        longitudinal_bundle.get("palliative_monitoring_package")
+        or patient.get("palliative_monitoring_package")
+        or latest_signal_snapshot.get("palliative_monitoring_package")
+        or {}
+    )
+    survivorship_transition_bundle = dict(
+        longitudinal_bundle.get("survivorship_transition_bundle")
+        or patient.get("survivorship_transition_bundle")
+        or latest_signal_snapshot.get("survivorship_transition_bundle")
+        or {}
+    )
+    survivorship_monitoring_package = dict(
+        longitudinal_bundle.get("survivorship_monitoring_package")
+        or patient.get("survivorship_monitoring_package")
+        or latest_signal_snapshot.get("survivorship_monitoring_package")
+        or {}
+    )
+    late_effects_profile = dict(
+        longitudinal_bundle.get("late_effects_profile")
+        or patient.get("late_effects_profile")
+        or latest_signal_snapshot.get("late_effects_profile")
+        or {}
+    )
+    functional_recovery_profile = dict(
+        longitudinal_bundle.get("functional_recovery_profile")
+        or patient.get("functional_recovery_profile")
+        or latest_signal_snapshot.get("functional_recovery_profile")
+        or {}
+    )
+    survivorship_schedule_overlay = dict(
+        longitudinal_bundle.get("survivorship_schedule_overlay")
+        or patient.get("survivorship_schedule_overlay")
+        or latest_signal_snapshot.get("survivorship_schedule_overlay")
+        or {}
+    )
+    survivorship_plan = dict(
+        longitudinal_bundle.get("survivorship_plan")
+        or patient.get("survivorship_plan")
+        or latest_signal_snapshot.get("survivorship_plan")
+        or {}
+    )
     guideline_followup_plan = dict(
         longitudinal_bundle.get("guideline_followup_plan")
         or patient.get("guideline_followup_plan")
@@ -2993,6 +3427,53 @@ def build_patient_profile_view_model(
         longitudinal_bundle.get("post_rp_salvage_bundle")
         or latest_signal_snapshot.get("post_rp_salvage_bundle")
         or {}
+    )
+    mhspc_copilot_bundle = dict(
+        longitudinal_bundle.get("mhspc_copilot_bundle")
+        or latest_signal_snapshot.get("mhspc_copilot_bundle")
+        or {}
+    )
+    if is_mhspc_state(state):
+        preferred_frontline_regimen = dict(mhspc_copilot_bundle.get("preferred_frontline_regimen") or {})
+        frontline_ranking_trace = dict(mhspc_copilot_bundle.get("frontline_ranking_trace") or {})
+        if preferred_frontline_regimen:
+            rationale = list(preferred_frontline_regimen.get("selection_rationale") or [])
+            winner_reason = normalize_text(frontline_ranking_trace.get("winner_reason"))
+            current_trial_profile.update(
+                {
+                    "recommended_trial_backbone": [preferred_frontline_regimen.get("regimen_code", "")],
+                    "recommended_trial_backbone_label": preferred_frontline_regimen.get("regimen_label", ""),
+                    "recommended_trial_backbone_source": ", ".join((preferred_frontline_regimen.get("pivotal_trial_fit") or {}).get("matched_trials") or []),
+                    "recommended_trial_backbone_note": winner_reason or " ".join(rationale[:2]) or "Esquema frontline individualizado según elegibilidad clínica, guideline fit y evidencia pivote.",
+                    "preferred_frontline_regimen": preferred_frontline_regimen,
+                    "recommended_component_drugs": list(preferred_frontline_regimen.get("component_drugs") or []),
+                }
+            )
+            trial_benchmark_snapshot["current_trial_profile"] = current_trial_profile
+    diagnostic_biopsy_bundle = dict(
+        longitudinal_bundle.get("diagnostic_biopsy_bundle")
+        or latest_signal_snapshot.get("diagnostic_biopsy_bundle")
+        or {}
+    )
+    localized_surveillance_bundle = dict(
+        longitudinal_bundle.get("localized_surveillance_bundle")
+        or latest_signal_snapshot.get("localized_surveillance_bundle")
+        or {}
+    )
+    post_rt_salvage_bundle = dict(
+        longitudinal_bundle.get("post_rt_salvage_bundle")
+        or latest_signal_snapshot.get("post_rt_salvage_bundle")
+        or {}
+    )
+    _, active_copilot_bundle = select_primary_vertical_bundle(
+        {
+            "crpc_copilot_bundle": crpc_copilot_bundle,
+            "post_rp_salvage_bundle": post_rp_salvage_bundle,
+            "mhspc_copilot_bundle": mhspc_copilot_bundle,
+            "diagnostic_biopsy_bundle": diagnostic_biopsy_bundle,
+            "localized_surveillance_bundle": localized_surveillance_bundle,
+            "post_rt_salvage_bundle": post_rt_salvage_bundle,
+        }
     )
     laboratory_intelligence_profile = dict(
         longitudinal_bundle.get("laboratory_intelligence_profile")
@@ -3019,42 +3500,13 @@ def build_patient_profile_view_model(
 
         psa_forecast = build_psa_forecast(patient, state=state)
     if not live_benchmark:
-        try:
-            import tracking_db
-            from prostanet.domains.patient_tracking.live_benchmark import build_live_benchmark
-
-            conn = tracking_db.connect_db()
-            cursor = conn.cursor()
-            cursor.execute("SELECT id FROM patient_identity ORDER BY id ASC")
-            cohort_ids = [int(row[0]) for row in cursor.fetchall()]
-            conn.close()
-            cohort_records = [
-                tracking_db.get_patient_full_record(candidate_id)
-                for candidate_id in cohort_ids
-                if candidate_id
-            ]
-            live_benchmark = build_live_benchmark(
-                patient,
-                cohort_records,
-                state=state,
-                management_track=management_track,
-            )
-        except Exception:
-            live_benchmark = {
-                "status": "not_applicable",
-                "show": False,
-                "state": state,
-                "narrative": "Benchmark Vivo no pudo calcularse con el contexto actual.",
-                "flags": ["comparabilidad_limitada"],
-                "reliability": {
-                    "cohort_size": 0,
-                    "percentile_available": False,
-                    "curve_available": False,
-                    "published_reference_available": False,
-                    "confidence_label": "not_applicable",
-                    "cohort_tier": "none",
-                },
-            }
+        live_benchmark, snapshot_reliability = resolve_live_benchmark_from_snapshot(
+            patient,
+            state=benchmark_state,
+            management_track=management_track,
+        )
+        if snapshot_reliability and not live_benchmark.get("reliability"):
+            live_benchmark["reliability"] = dict(snapshot_reliability)
     forecast_reliability = dict(psa_forecast.get("reliability") or {})
     forecast_reliability["display_confidence_label"] = normalize_ui_text(
         forecast_reliability.get("confidence_label"),
@@ -3103,6 +3555,19 @@ def build_patient_profile_view_model(
             "forecast_reliability": forecast_reliability,
             "live_benchmark": live_benchmark,
             "benchmark_reliability": benchmark_reliability,
+            "palliative_transition_bundle": palliative_transition_bundle,
+            "palliative_monitoring_package": palliative_monitoring_package,
+            "survivorship_transition_bundle": survivorship_transition_bundle,
+            "survivorship_monitoring_package": survivorship_monitoring_package,
+            "late_effects_profile": late_effects_profile,
+            "functional_recovery_profile": functional_recovery_profile,
+            "survivorship_schedule_overlay": survivorship_schedule_overlay,
+            "survivorship_plan": survivorship_plan,
+            "symptom_burden_profile": longitudinal_bundle.get("symptom_burden_profile") or patient.get("symptom_burden_profile") or {},
+            "advance_care_planning_status": longitudinal_bundle.get("advance_care_planning_status") or patient.get("advance_care_planning_status") or {},
+            "hospice_eligibility": longitudinal_bundle.get("hospice_eligibility") or patient.get("hospice_eligibility") or {},
+            "acute_palliative_alerts": longitudinal_bundle.get("acute_palliative_alerts") or patient.get("acute_palliative_alerts") or [],
+            "recommended_supportive_referrals": longitudinal_bundle.get("recommended_supportive_referrals") or patient.get("recommended_supportive_referrals") or [],
         }
     )
     transition_proposals = [
@@ -3204,6 +3669,13 @@ def build_patient_profile_view_model(
     psa_observability["forecast"] = psa_forecast
     response_visualization = dict(copilot_sections.get("response_visualization") or {})
     psa_trajectory = dict(response_visualization.get("psa_trajectory") or {})
+    derived_waterfall = []
+    try:
+        from prostanet.domains.reporting.response_visualization import build_waterfall_from_line_segments
+
+        derived_waterfall = build_waterfall_from_line_segments(psa_observability.get("line_segments") or [])
+    except Exception:
+        derived_waterfall = []
     if psa_observability.get("points") and not psa_trajectory.get("points"):
         psa_trajectory["points"] = list(psa_observability.get("points") or [])
     if psa_observability.get("treatment_bands") and not psa_trajectory.get("treatment_bands"):
@@ -3226,6 +3698,8 @@ def build_patient_profile_view_model(
         psa_trajectory.get("points")
         or (psa_trajectory.get("integrated_treatment_timeline") or {}).get("has_integrated_timeline")
     )
+    if derived_waterfall:
+        response_visualization["waterfall"] = derived_waterfall
     response_visualization["psa_trajectory"] = psa_trajectory
     copilot_sections["response_visualization"] = response_visualization
     clinical_journey_events = _build_clinical_journey_events(patient, state)
@@ -3353,25 +3827,51 @@ def build_patient_profile_view_model(
         "decision_recalculation_trace": decision_recalculation_trace,
         "transition_resolution": transition_resolution,
         "care_intent_contract": care_intent_contract,
+        "palliative_transition_bundle": palliative_transition_bundle,
+        "palliative_monitoring_package": palliative_monitoring_package,
+        "survivorship_transition_bundle": survivorship_transition_bundle,
+        "survivorship_monitoring_package": survivorship_monitoring_package,
+        "late_effects_profile": late_effects_profile,
+        "functional_recovery_profile": functional_recovery_profile,
+        "survivorship_schedule_overlay": survivorship_schedule_overlay,
+        "survivorship_plan": survivorship_plan,
+        "symptom_burden_profile": longitudinal_bundle.get("symptom_burden_profile") or patient.get("symptom_burden_profile") or {},
+        "advance_care_planning_status": longitudinal_bundle.get("advance_care_planning_status") or patient.get("advance_care_planning_status") or {},
+        "hospice_eligibility": longitudinal_bundle.get("hospice_eligibility") or patient.get("hospice_eligibility") or {},
+        "acute_palliative_alerts": longitudinal_bundle.get("acute_palliative_alerts") or patient.get("acute_palliative_alerts") or [],
+        "recommended_supportive_referrals": longitudinal_bundle.get("recommended_supportive_referrals") or patient.get("recommended_supportive_referrals") or [],
         "guideline_followup_plan": guideline_followup_plan,
         "crpc_copilot_bundle": crpc_copilot_bundle,
         "crpc_copilot_status": crpc_copilot_bundle.get("status", "not_applicable"),
         "post_rp_salvage_bundle": post_rp_salvage_bundle,
         "post_rp_copilot_status": post_rp_salvage_bundle.get("status", "not_applicable"),
+        "mhspc_copilot_bundle": mhspc_copilot_bundle,
+        "mhspc_copilot_status": mhspc_copilot_bundle.get("status", "not_applicable"),
+        "diagnostic_biopsy_bundle": diagnostic_biopsy_bundle,
+        "diagnostic_copilot_status": diagnostic_biopsy_bundle.get("status", "not_applicable"),
+        "localized_surveillance_bundle": localized_surveillance_bundle,
+        "localized_copilot_status": localized_surveillance_bundle.get("status", "not_applicable"),
+        "post_rt_salvage_bundle": post_rt_salvage_bundle,
+        "post_rt_failure_definition": post_rt_salvage_bundle.get("post_rt_failure_definition", {}),
+        "post_rt_local_salvage_ranking": post_rt_salvage_bundle.get("post_rt_local_salvage_ranking", []),
+        "post_rt_transition_bundle": post_rt_salvage_bundle.get("post_rt_transition_bundle", {}),
+        "post_rt_copilot_status": post_rt_salvage_bundle.get("status", "not_applicable"),
         "salvage_window_status": post_rp_salvage_bundle.get("salvage_window_status", ""),
         "salvage_window_reason": post_rp_salvage_bundle.get("salvage_window_reason", ""),
-        "qa_passed": (
-            (post_rp_salvage_bundle.get("qa_validation") or {}).get("approved")
-            if post_rp_salvage_bundle.get("available")
-            else (crpc_copilot_bundle.get("qa_validation") or {}).get("approved")
-        ),
-        "sequence_summary": (
-            post_rp_salvage_bundle.get("sequence_candidates", [])
-            if post_rp_salvage_bundle.get("available")
-            else crpc_copilot_bundle.get("sequence_summary", [])
-        ),
+        "post_rt_salvage_window_status": post_rt_salvage_bundle.get("post_rt_salvage_window_status", ""),
+        "qa_passed": (active_copilot_bundle.get("qa_validation") or {}).get("approved"),
+        "sequence_summary": derive_display_sequence_summary(active_copilot_bundle),
+        "metastatic_composition_summary": active_copilot_bundle.get("metastatic_composition_summary", {}),
+        "histopathology_summary": active_copilot_bundle.get("histopathology_summary", ""),
+        "decision_delta_since_last_visit": active_copilot_bundle.get("decision_delta_since_last_visit", {}),
+        "blocked_by_overlay": active_copilot_bundle.get("blocked_by_overlay", []),
+        "evidence_basis_current_visit": active_copilot_bundle.get("evidence_basis_current_visit", []),
         "crpc_schedule_overlay": crpc_copilot_bundle.get("crpc_schedule_overlay", {}),
         "post_rp_schedule_overlay": post_rp_salvage_bundle.get("post_rp_schedule_overlay", {}),
+        "mhspc_schedule_overlay": mhspc_copilot_bundle.get("mhspc_schedule_overlay", {}),
+        "diagnostic_schedule_overlay": diagnostic_biopsy_bundle.get("diagnostic_schedule_overlay", {}),
+        "localized_schedule_overlay": localized_surveillance_bundle.get("localized_schedule_overlay", {}),
+        "post_rt_schedule_overlay": post_rt_salvage_bundle.get("post_rt_schedule_overlay", {}),
         "laboratory_intelligence_profile": laboratory_intelligence_profile,
         "latest_clinically_decisive_visit": latest_clinically_decisive_visit,
         "agenda_resolution_trace": agenda_resolution_trace,

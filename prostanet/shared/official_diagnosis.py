@@ -3,11 +3,14 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from prostanet.shared.gleason_profile import normalize_gleason_profile
+
 
 OFFICIAL_DIAGNOSIS_FIELDS = [
     "histology_subtype",
     "gleason_primary",
     "gleason_secondary",
+    "gleason_tertiary",
     "isup_grade",
     "clinical_tstage",
     "nodal_status",
@@ -19,6 +22,7 @@ OFFICIAL_DIAGNOSIS_FIELD_LABELS = {
     "histology_subtype": "subtipo histológico",
     "gleason_primary": "Gleason primario",
     "gleason_secondary": "Gleason secundario",
+    "gleason_tertiary": "Gleason terciario",
     "isup_grade": "ISUP / Grade Group",
     "clinical_tstage": "T clínico",
     "nodal_status": "N clínico",
@@ -80,7 +84,7 @@ CLINICAL_RISK_GROUP_OPTIONS = [
 ]
 
 DIAGNOSTIC_LOCALIZED_STATES = {"diagnostic_workup", "post_negative_biopsy_followup", "localized_initial"}
-POSTLOCAL_STATES = {"post_prostatectomy", "recurrence_bcr"}
+POSTLOCAL_STATES = {"post_prostatectomy", "recurrence_bcr", "post_radiotherapy_or_local_salvage"}
 MHSPC_STATES = {
     "mcspc_oligo_metachronous",
     "mcspc_low_volume_sync_oligo",
@@ -243,9 +247,9 @@ def _normalize_volume_disease(value: Any) -> str:
 
 def _source_summary(patient: dict[str, Any], facts: dict[str, Any], raw_assessment: dict[str, Any], display_assessment: dict[str, Any], baseline: dict[str, Any], latest_biopsy: dict[str, Any]) -> str:
     sources: list[str] = []
-    if latest_biopsy and any(_is_present(latest_biopsy.get(key)) for key in ("histology_subtype", "gleason_primary", "gleason_secondary", "isup_grade")):
+    if latest_biopsy and any(_is_present(latest_biopsy.get(key)) for key in ("histology_subtype", "gleason_primary", "gleason_secondary", "gleason_tertiary", "isup_grade")):
         sources.append("patología / biopsia")
-    if any(_is_present(baseline.get(key)) for key in ("histology_subtype", "clinical_tstage", "nodal_status", "clinical_stage_group", "clinical_risk_group")):
+    if any(_is_present(baseline.get(key)) for key in ("histology_subtype", "gleason_primary", "gleason_secondary", "gleason_tertiary", "isup_grade", "clinical_tstage", "nodal_status", "clinical_stage_group", "clinical_risk_group")):
         sources.append("ingreso estructurado")
     if any(_is_present(item.get(key)) for item in (patient.get("follow_ups") or [])[-2:] for key in OFFICIAL_DIAGNOSIS_FIELDS):
         sources.append("visita de seguimiento")
@@ -256,15 +260,16 @@ def _source_summary(patient: dict[str, Any], facts: dict[str, Any], raw_assessme
     return " · ".join(dict.fromkeys(sources)) or "clasificación operativa"
 
 
+def _histopathology_summary(facts: dict[str, Any]) -> str:
+    profile = normalize_gleason_profile(facts)
+    return profile.get("summary") or ""
+
+
 def _compose_localized_diagnosis(facts: dict[str, Any]) -> str:
     base = _histology_phrase(facts.get("histology_subtype")) or "Cáncer de próstata histológicamente confirmado"
-    gleason_primary = _safe_int(facts.get("gleason_primary"))
-    gleason_secondary = _safe_int(facts.get("gleason_secondary"))
-    isup_grade = _safe_int(facts.get("isup_grade"))
-    if gleason_primary and gleason_secondary:
-        base = f"{base} Gleason {gleason_primary + gleason_secondary} ({gleason_primary}+{gleason_secondary})"
-    elif isup_grade:
-        base = f"{base} ISUP {isup_grade}"
+    histopathology = _histopathology_summary(facts)
+    if histopathology:
+        base = f"{base} {histopathology}"
     extras = []
     risk_group = _normalize_risk_group(facts.get("clinical_risk_group"))
     if risk_group:
@@ -277,6 +282,9 @@ def _compose_localized_diagnosis(facts: dict[str, Any]) -> str:
 
 def _compose_postlocal_diagnosis(state: str, patient: dict[str, Any], facts: dict[str, Any]) -> str:
     base = _histology_phrase(facts.get("histology_subtype")) or "Cáncer de próstata"
+    histopathology = _histopathology_summary(facts)
+    if histopathology:
+        base = f"{base} {histopathology}"
     qualifiers = []
     has_surgery = bool(patient.get("surgery")) or state == "post_prostatectomy"
     has_bcr = bool(patient.get("bcr")) or state == "recurrence_bcr"
@@ -301,15 +309,21 @@ def _compose_mhspc_diagnosis(facts: dict[str, Any]) -> str:
     volume = _normalize_volume_disease(facts.get("volume_disease"))
     if volume:
         diagnosis += f" de {volume} volumen"
+    histopathology = _histopathology_summary(facts)
+    if histopathology:
+        diagnosis += f", {histopathology}"
     return diagnosis
 
 
 def _compose_crpc_diagnosis(state: str, facts: dict[str, Any]) -> str:
     base = _histology_phrase(facts.get("histology_subtype")) or "Cáncer de próstata"
+    histopathology = _histopathology_summary(facts)
     if state == "m0_crpc":
-        return f"{base} resistente a la castración no metastásico (M0)"
+        diagnosis = f"{base} resistente a la castración no metastásico (M0)"
+        return f"{diagnosis}, {histopathology}" if histopathology else diagnosis
     m_stage = _normalize_m_stage(facts.get("m_substage_resolved")) or "M1"
-    return f"{base} resistente a la castración metastásico {m_stage}"
+    diagnosis = f"{base} resistente a la castración metastásico {m_stage}"
+    return f"{diagnosis}, {histopathology}" if histopathology else diagnosis
 
 
 def _compose_verification_diagnosis(facts: dict[str, Any]) -> str:
@@ -318,6 +332,9 @@ def _compose_verification_diagnosis(facts: dict[str, Any]) -> str:
     m_stage = _normalize_m_stage(facts.get("m_substage_resolved"))
     if m_stage:
         diagnosis += f" ({m_stage})"
+    histopathology = _histopathology_summary(facts)
+    if histopathology:
+        diagnosis += f", {histopathology}"
     return diagnosis
 
 
@@ -373,6 +390,15 @@ def build_official_diagnosis_context(
     raw_result = (raw_assessment or {}).get("result_snapshot", {}) if raw_assessment else {}
     parsed_t, parsed_n, parsed_m = _parse_tnm_stage(_first_nonempty(baseline.get("tnm_stage"), assessment_input.get("tnm_stage")))
 
+    gleason_source = {
+        "gleason_primary": _first_nonempty(latest_biopsy.get("gleason_primary"), baseline.get("gleason_primary"), assessment_input.get("gleason_primary")),
+        "gleason_secondary": _first_nonempty(latest_biopsy.get("gleason_secondary"), baseline.get("gleason_secondary"), assessment_input.get("gleason_secondary")),
+        "gleason_tertiary": _first_nonempty(latest_biopsy.get("gleason_tertiary"), baseline.get("gleason_tertiary"), assessment_input.get("gleason_tertiary")),
+        "gleason_score": _first_nonempty(latest_biopsy.get("gleason_score"), baseline.get("gleason_score"), assessment_input.get("gleason_score")),
+        "isup_grade": _first_nonempty(latest_biopsy.get("isup_grade"), baseline.get("isup_grade"), assessment_input.get("isup_grade")),
+    }
+    gleason_profile = normalize_gleason_profile(gleason_source)
+
     facts = {
         "histology_subtype": _normalize_histology_subtype(
             _first_nonempty(
@@ -381,9 +407,13 @@ def build_official_diagnosis_context(
                 assessment_input.get("histology_subtype"),
             )
         ),
-        "gleason_primary": _first_nonempty(latest_biopsy.get("gleason_primary"), assessment_input.get("gleason_primary")),
-        "gleason_secondary": _first_nonempty(latest_biopsy.get("gleason_secondary"), assessment_input.get("gleason_secondary")),
-        "isup_grade": _first_nonempty(latest_biopsy.get("isup_grade"), assessment_input.get("isup_grade")),
+        "gleason_primary": gleason_profile.get("gleason_primary"),
+        "gleason_secondary": gleason_profile.get("gleason_secondary"),
+        "gleason_tertiary": gleason_profile.get("gleason_tertiary"),
+        "gleason_score": gleason_profile.get("gleason_score"),
+        "isup_grade": gleason_profile.get("isup_grade"),
+        "histopathology_summary": gleason_profile.get("summary"),
+        "has_adverse_tertiary_pattern": gleason_profile.get("has_adverse_tertiary_pattern"),
         "clinical_tstage": _first_nonempty(
             _normalize_t_stage(baseline.get("clinical_tstage")),
             _normalize_t_stage(assessment_input.get("clinical_tstage")),
@@ -453,6 +483,7 @@ def build_official_diagnosis_context(
         "official_diagnosis_missing_fields_raw": missing_raw,
         "official_diagnosis_missing_fields": [diagnosis_field_label(field) for field in missing_raw],
         "official_diagnosis_source_summary": _source_summary(patient, facts, raw_assessment or {}, display_assessment or {}, baseline, latest_biopsy),
+        "histopathology_summary": facts.get("histopathology_summary", ""),
         "operational_module_label": operational_label,
         "template_kind": kind,
         "facts": facts,

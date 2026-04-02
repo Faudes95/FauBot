@@ -153,11 +153,17 @@ class QualityAssuranceAgent(AgentBase):
             # Docetaxel with poor performance status
             if "docetaxel" in action_lower or "cabazitaxel" in action_lower:
                 ecog = record.get("baseline", {}).get("ecog_score")
+                performance_status_driver = str(record.get("baseline", {}).get("performance_status_driver") or "").strip().lower()
                 if ecog is not None:
                     try:
-                        if int(float(ecog)) > 2:
+                        ecog_val = int(float(ecog))
+                        if ecog_val > 2:
                             issues.append(
                                 "NCCN: Quimioterapia con taxano no recomendada para ECOG >2"
+                            )
+                        elif ecog_val == 2 and performance_status_driver not in {"cancer_related"}:
+                            issues.append(
+                                "Docetaxel con ECOG 2 requiere documentar que el deterioro funcional es cáncer-relacionado antes de tratarlo como candidato quimioterapéutico."
                             )
                     except (TypeError, ValueError):
                         pass

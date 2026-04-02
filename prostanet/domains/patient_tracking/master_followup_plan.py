@@ -94,7 +94,7 @@ SCENARIO_FOLLOWUP_MATRIX: dict[str, dict[str, Any]] = {
         "cadence_rules": ["Seguimiento sistémico intensivo con laboratorios, imagen y bundles de seguridad.", "Monitorizar respuesta biológica, aptitud a docetaxel y tolerancia por línea terapéutica en enfermedad sincrónica / de novo."],
         "encounter_templates": ["systemic_followup", "restaging", "documentation"],
         "required_tasks": ["therapy_review", "lab_panel", "supportive_care", "imaging"],
-        "escalation_rules": ["Síntomas o carga tumoral creciente adelantan reestadificación.", "Si docetaxel deja de ser apropiado, reabrir selección de doblete visible con darolutamida."],
+        "escalation_rules": ["Síntomas o carga tumoral creciente adelantan reestadificación.", "Si docetaxel deja de ser apropiado, reabrir la selección del mejor doblete visible según elegibilidad clínica."],
     },
     "mcspc_high_volume_metachronous": {
         "phase_label": "Fase 1",
@@ -103,7 +103,7 @@ SCENARIO_FOLLOWUP_MATRIX: dict[str, dict[str, Any]] = {
         "cadence_rules": ["Seguimiento sistémico intensivo con laboratorios, imagen y bundles de seguridad.", "Monitorizar respuesta biológica y tolerancia por línea evitando sobreextrapolar PEACE-1 como backbone metacrónico principal."],
         "encounter_templates": ["systemic_followup", "restaging", "documentation"],
         "required_tasks": ["therapy_review", "lab_panel", "supportive_care", "imaging"],
-        "escalation_rules": ["Síntomas o carga tumoral creciente adelantan reestadificación.", "Si docetaxel deja de ser apropiado, reabrir selección de doblete visible con darolutamida."],
+        "escalation_rules": ["Síntomas o carga tumoral creciente adelantan reestadificación.", "Si docetaxel deja de ser apropiado, reabrir la selección del mejor doblete visible según elegibilidad clínica."],
     },
     "mcspc_high_volume": {
         "phase_label": "Fase 1",
@@ -282,6 +282,8 @@ def build_master_followup_plan(
     prognostic_modifiers = [dict(item) for item in list(signals.get("prognostic_modifiers") or []) if isinstance(item, dict)]
     backbone_alignment = dict(signals.get("backbone_alignment") or {})
     cadence_adjusted_by = [str(item) for item in list(signals.get("cadence_adjusted_by") or []) if str(item or "").strip()]
+    palliative_bundle = dict(signals.get("palliative_transition_bundle") or {})
+    survivorship_bundle = dict(signals.get("survivorship_transition_bundle") or {})
     prognostic_rationale = [
         {
             "title": str(item.get("title") or item.get("modifier_key") or "Impacto pronóstico"),
@@ -328,6 +330,9 @@ def build_master_followup_plan(
         + [str(alert.get("recommended_action") or "") for alert in blocking_alerts]
         + [str(item.get("recommended_action") or item.get("title") or "") for item in list(signals.get("pending_adjudications") or [])]
         + [str(task.get("title") or "") for task in list((next_encounter or {}).get("tasks") or [])[:3]]
+        + [str(item) for item in list(survivorship_bundle.get("recommended_interventions") or [])[:3]]
+        + [f"Referencia: {item}" for item in list(survivorship_bundle.get("recommended_referrals") or [])[:3]]
+        + [str(item) for item in list(palliative_bundle.get("recommended_interventions") or [])[:3]]
     )[:8]
     gaps_to_close = _unique_preserving(
         list(signals.get("critical_missing") or [])
@@ -342,7 +347,11 @@ def build_master_followup_plan(
             for alert in blocking_alerts
             if alert.get("fields_to_capture")
         ]
+        + [str(item) for item in list(survivorship_bundle.get("missing_inputs") or [])]
+        + [f"Dato vencido de survivorship: {item}" for item in list(survivorship_bundle.get("stale_inputs") or [])]
     )[:8]
+    survivorship_track = str(survivorship_bundle.get("survivorship_track_label") or survivorship_bundle.get("survivorship_track") or "")
+    palliative_mode = str(palliative_bundle.get("care_mode_label") or palliative_bundle.get("care_mode") or "")
     summary = {
         "headline": str(protocol.get("title") or "Plan maestro de seguimiento"),
         "cadence_summary": str(protocol.get("cadence_summary") or ""),
@@ -360,6 +369,8 @@ def build_master_followup_plan(
         "last_adjudicated_event": str((signals.get("last_adjudicated_event") or {}).get("summary") or ""),
         "prognostic_modifier_count": len(prognostic_modifiers),
         "cadence_adjusted_count": len(cadence_adjusted_by),
+        "survivorship_track": survivorship_track,
+        "palliative_care_mode": palliative_mode,
     }
     return MasterFollowupPlan(
         plan_version=PLAN_VERSION,

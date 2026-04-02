@@ -39,6 +39,13 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from prostanet.domains.patient_tracking.clinical_list_normalization import (
+    coerce_text,
+    normalize_followup_entries,
+    normalize_imaging_entries,
+    normalize_medication_entries,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -360,13 +367,15 @@ class TerminalCarePathway:
                     )
 
         # Radiographic progression
-        imaging = patient.get("imaging_studies") or []
+        imaging = normalize_imaging_entries(
+            patient.get("imaging_studies") or patient.get("imaging") or []
+        )
         new_bone_lesions = 0
         soft_tissue_progression = False
 
         for img in imaging:
-            findings = (img.get("findings") or img.get("result") or "").lower()
-            conclusion = (img.get("conclusion") or "").lower()
+            findings = coerce_text(img.get("findings") or img.get("result")).lower()
+            conclusion = coerce_text(img.get("conclusion")).lower()
             combined = findings + " " + conclusion
 
             # New bone lesions on bone scan
@@ -428,7 +437,7 @@ class TerminalCarePathway:
                 pass
 
         # Opioid use
-        meds = (
+        meds = normalize_medication_entries(
             patient.get("current_medications")
             or patient.get("medications")
             or []
@@ -437,7 +446,7 @@ class TerminalCarePathway:
                     "fentanilo", "fentanyl", "hidrocodona", "codeina", "tapentadol",
                     "buprenorfina", "metadona"}
         for med in meds:
-            name = (med.get("name") or med.get("drug") or "").lower()
+            name = coerce_text(med.get("name") or med.get("drug")).lower()
             if any(op in name for op in _OPIOIDS):
                 profile.requires_opioids = True
                 profile.pain_present = True
@@ -445,22 +454,22 @@ class TerminalCarePathway:
                     profile.active_symptoms.append("pain")
 
         # Urinary obstruction
-        state = (patient.get("current_state") or "").lower()
+        state = coerce_text(patient.get("current_state")).lower()
         if any(s in state for s in ["obstruccion", "obstruction", "hydroneph"]):
             profile.urinary_obstruction = True
             profile.active_symptoms.append("urinary_obstruction")
 
         # Check imaging for hydronephrosis
-        for img in (patient.get("imaging_studies") or []):
-            findings = (img.get("findings") or "").lower()
+        for img in normalize_imaging_entries(patient.get("imaging_studies") or patient.get("imaging") or []):
+            findings = coerce_text(img.get("findings")).lower()
             if "hidronefrosis" in findings or "hydronephrosis" in findings:
                 profile.urinary_obstruction = True
                 if "urinary_obstruction" not in profile.active_symptoms:
                     profile.active_symptoms.append("urinary_obstruction")
 
         # Spinal cord compression risk
-        for img in (patient.get("imaging_studies") or []):
-            findings = (img.get("findings") or "").lower()
+        for img in normalize_imaging_entries(patient.get("imaging_studies") or patient.get("imaging") or []):
+            findings = coerce_text(img.get("findings")).lower()
             if any(w in findings for w in [
                 "compresión medular", "cord compression", "epidural",
                 "spinal canal", "canal espinal", "mielopatía"
@@ -585,7 +594,7 @@ class TerminalCarePathway:
             not_met.append(HOSPICE_CRITERIA["refractory_to_all_lines"])
 
         # Visceral crisis
-        state = (assessment.current_state or "").lower()
+        state = coerce_text(assessment.current_state).lower()
         if "visceral" in state or "m1c" in state:
             met.append(HOSPICE_CRITERIA["visceral_crisis"])
         else:
@@ -728,7 +737,7 @@ class TerminalCarePathway:
             ]
 
         # State-based anchor
-        state = assessment.current_state.lower()
+        state = coerce_text(assessment.current_state).lower()
         if "m1_crpc" in state or "m1b_crpc" in state:
             lines.append(
                 "  • Contexto: mCRPC post-todas-las-líneas — expectativa de vida habitualmente <12 meses"
@@ -816,7 +825,9 @@ class TerminalCarePathway:
 
     @staticmethod
     def _extract_psa_series(patient: dict[str, Any]) -> list[tuple[str, float]]:
-        visits = patient.get("follow_up_visits") or []
+        visits = normalize_followup_entries(
+            patient.get("follow_up_visits") or patient.get("follow_ups") or []
+        )
         series: list[tuple[str, float]] = []
         for v in visits:
             psa = v.get("psa_current") or v.get("psa")
@@ -836,7 +847,9 @@ class TerminalCarePathway:
                 return float(ecog)
             except (TypeError, ValueError):
                 pass
-        visits = patient.get("follow_up_visits") or []
+        visits = normalize_followup_entries(
+            patient.get("follow_up_visits") or patient.get("follow_ups") or []
+        )
         for v in sorted(visits, key=lambda x: x.get("visit_date", ""), reverse=True):
             val = v.get("ecog") or v.get("performance_status")
             if val is not None:
@@ -875,7 +888,9 @@ class TerminalCarePathway:
     def _get_from_visits(
         patient: dict[str, Any], field: str
     ) -> Any:
-        visits = patient.get("follow_up_visits") or []
+        visits = normalize_followup_entries(
+            patient.get("follow_up_visits") or patient.get("follow_ups") or []
+        )
         for v in sorted(visits, key=lambda x: x.get("visit_date", ""), reverse=True):
             val = v.get(field)
             if val is not None:

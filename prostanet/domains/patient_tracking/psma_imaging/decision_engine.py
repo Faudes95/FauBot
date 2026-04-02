@@ -55,7 +55,7 @@ def build_psma_decision_impact(
 
     if clinical_pattern == "local_pelvic" or uptake_pattern == "focal":
         rationale_parts.append("El patrón focal/local-pélvico favorece una lectura dirigida y potencialmente rescatable.")
-        if state == "recurrence_bcr":
+        if state in {"recurrence_bcr", "post_radiotherapy_or_local_salvage"}:
             decision_domains.extend(["salvage_rt", "local_rescue"])
             actions.append("Mantener visible la ventana curativa y reforzar rescate local / RT de salvamento si el contexto técnico lo permite.")
     elif clinical_pattern == "oligometastatic" or uptake_pattern == "multifocal":

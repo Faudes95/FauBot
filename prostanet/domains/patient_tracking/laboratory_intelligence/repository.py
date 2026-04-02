@@ -5,6 +5,8 @@ from typing import Any
 
 LAB_METADATA = {
     "TESTOSTERONA": {"key": "testosterone", "label": "Testosterona", "unit": "ng/dL", "family": "endocrine"},
+    "ANC": {"key": "anc", "label": "Neutrófilos absolutos", "unit": "/mm3", "family": "hematologic"},
+    "PLAQUETAS": {"key": "platelets", "label": "Plaquetas", "unit": "/mm3", "family": "hematologic"},
     "HEMOGLOBINA": {"key": "hemoglobin", "label": "Hemoglobina", "unit": "g/dL", "family": "hematologic"},
     "ALP": {"key": "alp", "label": "Fosfatasa alcalina", "unit": "UI/L", "family": "bone_burden"},
     "LDH": {"key": "ldh", "label": "LDH", "unit": "UI/L", "family": "bone_burden"},
@@ -21,9 +23,48 @@ LAB_METADATA = {
     "CISTATINA_C": {"key": "cystatin_c", "label": "Cistatina C", "unit": "mg/L", "family": "renal"},
 }
 
+LAB_REFERENCE_RANGES_BY_FIELD_KEY = {
+    "testosterone": {"low": 300, "high": 1000, "unit": "ng/dL"},
+    "hemoglobin": {"low": 13.5, "high": 17.5, "unit": "g/dL"},
+    "anc": {"low": 1500, "high": 7800, "unit": "/mm3"},
+    "platelets": {"low": 150000, "high": 450000, "unit": "/mm3"},
+    "creatinine": {"low": 0.7, "high": 1.3, "unit": "mg/dL"},
+    "bilirubin": {"low": 0.2, "high": 1.2, "unit": "mg/dL"},
+    "ast": {"low": 0, "high": 40, "unit": "U/L"},
+    "alt": {"low": 0, "high": 40, "unit": "U/L"},
+    "alp": {"low": 44, "high": 120, "unit": "U/L"},
+    "ldh": {"low": 135, "high": 225, "unit": "U/L"},
+    "albumin": {"low": 3.5, "high": 5.0, "unit": "g/dL"},
+    "calcium_level": {"low": 8.5, "high": 10.5, "unit": "mg/dL"},
+    "vitamin_d_level": {"low": 30, "high": 100, "unit": "ng/mL"},
+    "glucose": {"low": 70, "high": 99, "unit": "mg/dL"},
+    "ggt": {"low": 0, "high": 60, "unit": "U/L"},
+    "cystatin_c": {"low": 0.6, "high": 1.2, "unit": "mg/L"},
+}
+
 
 def _is_present(value: Any) -> bool:
     return value not in (None, "", [], {}, "No aplica", "No documentado")
+
+
+def lab_reference_range(field_key: str) -> dict[str, Any]:
+    raw = LAB_REFERENCE_RANGES_BY_FIELD_KEY.get(str(field_key or ""))
+    if not raw:
+        return {}
+    low = raw.get("low")
+    high = raw.get("high")
+    unit = str(raw.get("unit") or "")
+    if low is None or high is None:
+        label = str(raw.get("label") or "").strip()
+    else:
+        label = f"Rango estándar institucional: {low:g}-{high:g} {unit}".strip()
+    return {
+        "reference_range_low": low,
+        "reference_range_high": high,
+        "reference_range_unit": unit,
+        "reference_range_label": label,
+        "reference_range_source": "institutional",
+    }
 
 
 def build_laboratory_series(patient: dict[str, Any]) -> dict[str, dict[str, Any]]:
