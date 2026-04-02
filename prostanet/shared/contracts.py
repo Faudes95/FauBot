@@ -643,6 +643,11 @@ class StateTransitionProposal:
     priority: str = "routine"
     proposal_status: str = "open"
     requires_confirmation: bool = True
+    confirmation_status: str = "pending"
+    rejection_reason: str = ""
+    requires_more_data_fields: list[str] = field(default_factory=list)
+    confirmed_at: str = ""
+    confirmed_by: str = ""
     trigger_signals: list[str] = field(default_factory=list)
     next_actions: list[str] = field(default_factory=list)
     evidence_basis: list[str] = field(default_factory=list)
@@ -672,6 +677,12 @@ class RecommendationAudit:
     recommended_option: str
     selected_option: str = ""
     discordance_reason: str = ""
+    recommended_confidence: str = ""
+    clinician_selected_option: str = ""
+    clinician_selected_family: str = ""
+    followed_system_recommendation: str = "unknown"
+    discordance_reason_category: str = ""
+    decision_capture_status: str = "inferred_only"
     assessment_id: int | None = None
     event_id: int | None = None
     outcome_snapshot: dict[str, Any] = field(default_factory=dict)

@@ -8,6 +8,10 @@ from prostanet.shared.systemic_progression import resolve_systemic_progression_c
 
 from prostanet.application.module_registry import ModuleRegistry
 from prostanet.domains.patient_tracking.event_graph import merge_record_into_assessment_payload
+from prostanet.domains.patient_tracking.clinical_decision_governance import (
+    apply_governance_to_next_best_action,
+    build_clinical_decision_governance_bundle,
+)
 from prostanet.domains.patient_tracking.followup_agenda import (
     MANAGEMENT_TRACK_LABELS,
     build_agenda_board,
@@ -1684,11 +1688,23 @@ def build_recommendation_audit(
     if not recommendation_family and not recommended_option:
         return None
     selected_option = _derive_current_treatment(patient)
-    discordance_reason = ""
-    if recommended_option and selected_option and recommended_option.lower() not in selected_option.lower():
-        discordance_reason = "La exposición terapéutica actual no coincide con la recomendación modular vigente."
-    elif recommended_option and not selected_option:
-        discordance_reason = "Aún no existe selección terapéutica documentada."
+    clinician_decision = (patient.get("clinical_decision_captures") or [{}])[0] if patient.get("clinical_decision_captures") else {}
+    clinician_selected_option = str(
+        clinician_decision.get("clinician_selected_option")
+        or clinician_decision.get("selected_option")
+        or selected_option
+        or ""
+    )
+    discordance_reason = str(
+        clinician_decision.get("discordance_reason_free_text")
+        or clinician_decision.get("discordance_reason")
+        or ""
+    )
+    if not discordance_reason:
+        if recommended_option and clinician_selected_option and recommended_option.lower() not in clinician_selected_option.lower():
+            discordance_reason = "La decisión clínica capturada no coincide con la recomendación modular vigente."
+        elif recommended_option and not clinician_selected_option:
+            discordance_reason = "Aún no existe decisión clínica capturada."
     return RecommendationAudit(
         patient_id=patient_id,
         assessment_id=assessment.get("id"),
@@ -1696,6 +1712,12 @@ def build_recommendation_audit(
         recommendation_family=recommendation_family,
         recommended_option=recommended_option or assessment.get("state") or "",
         selected_option=selected_option,
+        recommended_confidence=str(((result.get("decision_quality") or {}).get("confidence_label") or "")),
+        clinician_selected_option=clinician_selected_option,
+        clinician_selected_family=str(clinician_decision.get("clinician_selected_family") or ""),
+        followed_system_recommendation=str(clinician_decision.get("followed_system_recommendation") or ("unknown" if not clinician_decision else "")),
+        discordance_reason_category=str(clinician_decision.get("discordance_reason_category") or ""),
+        decision_capture_status=str("captured" if clinician_decision else "inferred_only"),
         discordance_reason=discordance_reason,
         outcome_snapshot={
             "state": assessment.get("state"),
@@ -1833,6 +1855,23 @@ def build_longitudinal_intelligence_bundle(
         care_intent_contract,
         decision_input_requirements,
     )
+    governance_bundle = build_clinical_decision_governance_bundle(
+        patient,
+        state=followup_runtime.get("state") or signals.get("reconciled_state") or signals.get("state") or "",
+        management_track=followup_runtime.get("management_track") or signals.get("reconciled_management_track") or signals.get("management_track") or "",
+        latest_assessment=latest_assessment,
+        next_best_action=next_best_action,
+        decision_input_requirements=decision_input_requirements,
+        care_intent_contract=care_intent_contract,
+        transition_proposals=visible_proposals,
+    )
+    next_best_action = apply_governance_to_next_best_action(next_best_action, governance_bundle)
+    care_intent_contract = {
+        **care_intent_contract,
+        "recommendation_block_status": governance_bundle.get("recommendation_block_status"),
+        "recommendation_block_reason": governance_bundle.get("recommendation_block_reason"),
+        "allowed_actions_while_blocked": governance_bundle.get("allowed_actions_while_blocked", []),
+    }
     master_followup_plan = build_master_followup_plan(
         patient,
         state=followup_runtime.get("state") or signals.get("reconciled_state") or signals.get("state") or "",
@@ -1919,6 +1958,24 @@ def build_longitudinal_intelligence_bundle(
         },
         "survivorship_schedule_overlay": survivorship_schedule_overlay,
         "survivorship_plan": survivorship_plan,
+        "decision_governance_bundle": governance_bundle.get("decision_governance_bundle", {}),
+        "recommendation_block_status": governance_bundle.get("recommendation_block_status", ""),
+        "recommendation_block_reason": governance_bundle.get("recommendation_block_reason", ""),
+        "allowed_actions_while_blocked": governance_bundle.get("allowed_actions_while_blocked", []),
+        "decision_blocking_bundle": governance_bundle.get("decision_blocking_bundle", {}),
+        "clinician_decision_capture_bundle": governance_bundle.get("clinician_decision_capture_bundle", {}),
+        "state_transition_confirmation_bundle": governance_bundle.get("state_transition_confirmation_bundle", {}),
+        "adherence_tracking_bundle": governance_bundle.get("adherence_tracking_bundle", {}),
+        "tumor_board_outcome_bundle": governance_bundle.get("tumor_board_outcome_bundle", {}),
+        "pro_decision_bundle": governance_bundle.get("pro_decision_bundle", {}),
+        "shared_decision_bundle": governance_bundle.get("shared_decision_bundle", {}),
+        "ctdna_refinement_bundle": governance_bundle.get("ctdna_refinement_bundle", {}),
+        "multimodal_imaging_concordance_bundle": governance_bundle.get("multimodal_imaging_concordance_bundle", {}),
+        "ichom_compliance_bundle": governance_bundle.get("ichom_compliance_bundle", {}),
+        "treatment_adverse_event_bundle": governance_bundle.get("treatment_adverse_event_bundle", {}),
+        "population_survival_context_bundle": governance_bundle.get("population_survival_context_bundle", {}),
+        "cost_access_context_bundle": governance_bundle.get("cost_access_context_bundle", {}),
+        "score_interpretation_catalog_snapshot": governance_bundle.get("score_interpretation_catalog_snapshot", {}),
         "reconciliation": {
             "reconciled_state": signals.get("reconciled_state") or signals.get("state"),
             "reconciled_management_track": signals.get("reconciled_management_track") or signals.get("management_track"),

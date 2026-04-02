@@ -313,6 +313,32 @@ DOCETAXEL_HIGH_VOLUME_STATES = {
 }
 
 
+LOCALIZED_PRO_FIELDS = [
+    "epic26_urinary_domain",
+    "epic26_sexual_domain",
+    "epic26_bowel_domain",
+    "epic26_hormonal_domain",
+    "ipss_total",
+    "iief5_score",
+    "eq5d_vas",
+]
+
+
+ADVANCED_PRO_FIELDS = [
+    "fact_p_total",
+    "eortc_qlq_c30_global_health",
+    "eortc_qlq_c30_physical",
+    "eortc_qlq_c30_role",
+    "eortc_qlq_c30_emotional",
+    "eortc_qlq_c30_fatigue",
+    "eortc_qlq_c30_pain",
+    "bpi_worst_pain",
+    "facit_fatigue_total",
+    "eq5d_vas",
+    "anxiety_score",
+]
+
+
 DOCETAXEL_ELIGIBILITY_RULE = {
     "decision_domains_blocked": ["mhspc_triplet"],
     "why": "El triplete con docetaxel solo puede cerrarse cuando biometría, pruebas hepáticas, alergias relevantes y contexto funcional están vigentes y documentados.",
@@ -1243,6 +1269,57 @@ def build_decision_input_requirements(
         },
     }
 
+    if current_state in ADVANCED_PALLIATIVE_STATES or current_state in {
+        "adt_progression_verification",
+        "m0_crpc",
+        "m1_crpc",
+        "mcspc_oligo_metachronous",
+        "mcspc_low_volume_sync_oligo",
+        "mcspc_high_volume",
+        "mcspc_high_volume_sync",
+        "mcspc_high_volume_metachronous",
+    }:
+        pro_required_fields = ADVANCED_PRO_FIELDS
+        pro_focus = "advanced_shared_decision"
+        pro_minimum_fields = ["eq5d_vas", "bpi_worst_pain"]
+    else:
+        pro_required_fields = LOCALIZED_PRO_FIELDS
+        pro_focus = "localized_shared_decision"
+        pro_minimum_fields = ["eq5d_vas", "ipss_total"]
+    pro_missing_inputs = [field for field in pro_required_fields if not _blocking_input_satisfied(field, field_values)]
+    pro_capture_block = {
+        "title": "Completar PROs decisionales",
+        "summary": "Los PROs deben cuantificar calidad de vida, dolor y dominios funcionales antes de cerrar decisión compartida.",
+        "fields": pro_missing_inputs or pro_required_fields,
+        "capture_target": "followup",
+        "focus": pro_focus,
+    }
+
+    recommendation_block_status = "clear"
+    recommendation_block_reason = "La recomendación tiene los datos mínimos para sostener una conducta visible."
+    allowed_actions_while_blocked = ["recomendacion_final", "shared_decision", "planificacion"]
+    if missing_hard:
+        recommendation_block_status = "hard_stop"
+        recommendation_block_reason = (
+            "Faltan datos críticos que cambian la conducta clínica: "
+            + ", ".join(missing_hard[:6])
+        )
+        allowed_actions_while_blocked = ["captura_critica", "recoleccion_documental", "revaluacion"]
+    elif missing_decision:
+        recommendation_block_status = "provisional"
+        recommendation_block_reason = (
+            "La recomendación sigue abierta hasta cerrar datos decisionales: "
+            + ", ".join(missing_decision[:6])
+        )
+        allowed_actions_while_blocked = ["captura_dirigida", "discusion_compartida_provisional", "monitorizacion_temporal"]
+    elif next_best_action and any(field in pro_missing_inputs for field in pro_minimum_fields):
+        recommendation_block_status = "provisional"
+        recommendation_block_reason = (
+            "Faltan PROs mínimos para modular intensidad terapéutica y decisión compartida: "
+            + ", ".join(field for field in pro_minimum_fields if field in pro_missing_inputs)
+        )
+        allowed_actions_while_blocked = ["captura_dirigida", "discusion_compartida_provisional", "monitorizacion_temporal"]
+
     return {
         "available": bool(hard_blocking_inputs or decision_blocking_inputs or optional_context_inputs or supportive_gaps or palliative_required_fields or survivorship_required_fields),
         "effective_state": current_state,
@@ -1286,10 +1363,16 @@ def build_decision_input_requirements(
         "survivorship_missing_inputs": list(survivorship_capture_contract.get("survivorship_missing_inputs") or []),
         "survivorship_capture_block": dict(survivorship_capture_contract.get("survivorship_capture_block") or {}),
         "late_effect_domain_blocks": list(survivorship_capture_contract.get("late_effect_domain_blocks") or []),
+        "pro_required_fields": pro_required_fields,
+        "pro_missing_inputs": pro_missing_inputs,
+        "pro_capture_block": pro_capture_block,
         "post_rt_confirmation_block": dict(post_rt_capture_contract.get("post_rt_confirmation_block") or {}),
         "post_rt_local_salvage_block": dict(post_rt_capture_contract.get("post_rt_local_salvage_block") or {}),
         "family_missing_inputs": family_missing_inputs,
         "family_stale_inputs": family_stale_inputs,
+        "recommendation_block_status": recommendation_block_status,
+        "recommendation_block_reason": recommendation_block_reason,
+        "allowed_actions_while_blocked": allowed_actions_while_blocked,
         "monitoring_required_fields": monitoring_required_fields,
         "monitoring_capture_block": {
             "title": monitoring_capture_title,

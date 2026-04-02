@@ -1,0 +1,87 @@
+{
+  "generated_at": "2026-04-01T20:03:30-06:00",
+  "server_url": "http://127.0.0.1:8080",
+  "verified_patient_id": 239,
+  "verified_patient_nss": "SURVIVORSHIP-0401-001",
+  "artifacts": {
+    "clinical_hub": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/survivorship_visual_20260401/clinical_hub.png",
+    "wizard_survivorship": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/survivorship_visual_20260401/wizard_survivorship.png",
+    "patient_profile": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/survivorship_visual_20260401/patient_profile_239.png"
+  },
+  "wizard_verification": {
+    "module_visible": true,
+    "module_id": "survivorship_and_toxicity_followup",
+    "sections_verified": [
+      "Secuelas post-prostatectomía",
+      "Toxicidad tardía post-radioterapia",
+      "Cardiometabólico y hueso bajo ADT",
+      "Recuperación post-sistémicos",
+      "Salud ósea y BMA",
+      "Psicosocial y sexual"
+    ],
+    "fields_verified": [
+      "ipss_score",
+      "pad_count",
+      "continence_status",
+      "leakage_bother",
+      "iief5_score",
+      "pelvic_floor_pt_started",
+      "gu_toxicity_grade",
+      "gi_toxicity_grade",
+      "rectal_toxicity_grade",
+      "hematuria",
+      "dysuria",
+      "radiation_cystitis",
+      "proctitis",
+      "hba1c",
+      "systolic_bp",
+      "diastolic_bp",
+      "total_cholesterol",
+      "hdl_cholesterol",
+      "triglycerides",
+      "waist_circumference_cm",
+      "dxa_t_score_lumbar",
+      "dxa_t_score_hip",
+      "vitamin_d_level",
+      "calcium_level",
+      "fall_risk",
+      "cognitive_risk",
+      "neuropathy_grade",
+      "fatigue_score",
+      "hemoglobin",
+      "weight_loss_pct",
+      "functional_decline",
+      "dental_clearance_done",
+      "onj_monitoring",
+      "creatinine",
+      "bone_pain",
+      "skeletal_events",
+      "depression_score",
+      "anxiety_score",
+      "sexual_bother",
+      "body_image_distress",
+      "return_to_work_status"
+    ]
+  },
+  "profile_verification": {
+    "survivorship_lane_visible": true,
+    "track": "late_effect_intervention",
+    "trigger_status": "refer_specialist",
+    "dominant_domain": "urinary_recovery",
+    "referrals_verified": [
+      "Urología funcional",
+      "Fisioterapia de piso pélvico",
+      "Sexología oncológica",
+      "Psicooncología"
+    ]
+  },
+  "runtime_verification": {
+    "survivorship_plan_endpoint": "ok",
+    "patient_schedule_endpoint": "ok",
+    "terminal_care_warning_after_restart": false
+  },
+  "tests": {
+    "core_api_targeted": "2 passed",
+    "modular_engine_targeted": "4 passed"
+  }
+}

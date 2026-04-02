@@ -1,0 +1,44 @@
+{
+  "generated_at": "2026-03-27T22:36:25.578162",
+  "mode": "visual",
+  "repo_root": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6",
+  "base_url": "http://127.0.0.1:9999",
+  "output_dir": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/faubot/20260327-223625",
+  "results": [
+    {
+      "key": "visual_audit",
+      "title": "Visual vertical verification",
+      "command": [],
+      "passed": false,
+      "exit_code": null,
+      "severity_on_failure": "moderate",
+      "recommendation": "Levantar la app con `python3 app.py` en el repo antes de ejecutar el modo visual.",
+      "stdout_path": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/faubot/20260327-223625/artifacts/visual_audit.stdout.log",
+      "stderr_path": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/faubot/20260327-223625/artifacts/visual_audit.stderr.log",
+      "blocked_by_environment": true,
+      "output_report_path": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/faubot/20260327-223625/artifacts/vertical_verification_visual.json"
+    }
+  ],
+  "critical_findings": [],
+  "moderate_findings": [
+    {
+      "title": "Visual vertical verification",
+      "step_key": "visual_audit",
+      "description": "La validación no se pudo ejecutar completamente.",
+      "recommendation": "Levantar la app con `python3 app.py` en el repo antes de ejecutar el modo visual.",
+      "stdout_path": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/faubot/20260327-223625/artifacts/visual_audit.stdout.log",
+      "stderr_path": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/faubot/20260327-223625/artifacts/visual_audit.stderr.log"
+    }
+  ],
+  "pending_items": [
+    "Levantar la app en `http://127.0.0.1:8080` para completar la auditoría visual."
+  ],
+  "summary_sections": [
+    "Hallazgos críticos",
+    "Hallazgos moderados",
+    "Cobertura ejecutada",
+    "Evidencia clínica y técnica",
+    "Plan de corrección propuesto",
+    "Pendientes no resueltos"
+  ]
+}

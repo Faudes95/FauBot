@@ -432,17 +432,37 @@ def _hydrate_scheduled_event_rows(rows):
         item["ideal_due_at"] = str(item.get("ideal_due_at") or item.get("due_date") or "")[:10]
         item["scheduled_due_at"] = str(item.get("scheduled_due_at") or item.get("due_date") or "")[:10]
         item["delay_days"] = int(item.get("delay_days") or 0)
-        item["completed_at"] = str(item.get("completed_date") or "")[:10]
-        if item["completed"]:
-            item["status"] = "completed"
-        else:
-            due_date = str(item.get("scheduled_due_at") or item.get("due_date") or "")[:10]
-            if due_date == today_iso:
-                item["status"] = "due_today"
+        item["completed_at"] = str(item.get("completed_date") or item.get("performed_date") or "")[:10]
+        due_date = str(item.get("scheduled_due_at") or item.get("due_date") or "")[:10]
+        completion_status = str(item.get("completion_status") or "").strip()
+        if not completion_status:
+            if item["completed_at"] and due_date:
+                completion_status = "completed_on_time" if item["completed_at"] <= due_date else "completed_late"
+            elif item["completed_at"]:
+                completion_status = "completed_on_time"
+            elif due_date == today_iso:
+                completion_status = "due_today"
             elif due_date and due_date < today_iso:
-                item["status"] = "overdue"
+                completion_status = "missed"
             else:
-                item["status"] = "scheduled"
+                completion_status = "scheduled"
+        item["completion_status"] = completion_status
+        item["completion_source"] = item.get("completion_source") or ("stage_visit" if item.get("completed_visit_id") else "")
+        if item.get("days_late") in (None, ""):
+            if item["completed_at"] and due_date and item["completed_at"] > due_date:
+                item["days_late"] = (datetime.fromisoformat(item["completed_at"]) - datetime.fromisoformat(due_date)).days
+            elif completion_status == "missed" and due_date:
+                item["days_late"] = (datetime.fromisoformat(today_iso) - datetime.fromisoformat(due_date)).days
+            else:
+                item["days_late"] = 0
+        if completion_status in {"completed_on_time", "completed_late"}:
+            item["status"] = "completed"
+        elif completion_status == "missed":
+            item["status"] = "overdue"
+        elif completion_status == "due_today":
+            item["status"] = "due_today"
+        else:
+            item["status"] = "scheduled"
         events.append(item)
     return events
 
@@ -674,6 +694,8 @@ def _hydrate_transition_rows(rows):
         item["trigger_signals"] = _parse_json_blob(item.pop("trigger_signals_json", None), [])
         item["next_actions"] = _parse_json_blob(item.pop("next_actions_json", None), [])
         item["evidence_basis"] = _parse_json_blob(item.pop("evidence_basis_json", None), [])
+        item["requires_more_data_fields"] = _parse_json_blob(item.pop("requires_more_data_fields_json", None), [])
+        item["confirmation_status"] = item.get("confirmation_status") or item.get("proposal_status") or "pending"
         proposals.append(item)
     return proposals
 
@@ -685,6 +707,35 @@ def _hydrate_recommendation_audit_rows(rows):
         item["outcome_snapshot"] = _parse_json_blob(item.pop("outcome_snapshot_json", None), {})
         audits.append(item)
     return audits
+
+
+def _hydrate_clinical_decision_capture_rows(rows):
+    captures = []
+    for row in rows:
+        item = dict(row)
+        item["tumor_board_required"] = bool(item.get("tumor_board_required"))
+        item["shared_with_patient"] = bool(item.get("shared_with_patient"))
+        captures.append(item)
+    return captures
+
+
+def _hydrate_tumor_board_outcome_rows(rows):
+    outcomes = []
+    for row in rows:
+        item = dict(row)
+        item["required_followup_actions"] = _parse_json_blob(item.pop("required_followup_actions_json", None), [])
+        outcomes.append(item)
+    return outcomes
+
+
+def _hydrate_treatment_adverse_event_rows(rows):
+    events = []
+    for row in rows:
+        item = dict(row)
+        item["hospitalization"] = bool(item.get("hospitalization"))
+        item["dose_modification_triggered"] = bool(item.get("dose_modification_triggered"))
+        events.append(item)
+    return events
 
 
 def _hydrate_source_document_rows(rows):
@@ -2625,9 +2676,31 @@ def init_tracking_db():
             eq5d_vas INTEGER,                -- 0-100
             -- Prostate-specific QoL
             fact_p_total REAL,               -- FACT-P score
+            fact_p_physical REAL,
+            fact_p_social REAL,
+            fact_p_emotional REAL,
+            fact_p_functional REAL,
+            fact_p_prostate REAL,
+            facit_fatigue_total INTEGER,
+            epic26_urinary_domain REAL,
+            epic26_sexual_domain REAL,
+            epic26_bowel_domain REAL,
+            epic26_hormonal_domain REAL,
+            eortc_qlq_c30_global_health REAL,
+            eortc_qlq_c30_physical REAL,
+            eortc_qlq_c30_role REAL,
+            eortc_qlq_c30_emotional REAL,
+            eortc_qlq_c30_fatigue REAL,
+            eortc_qlq_c30_pain REAL,
             -- Anxiety (AS patients)
             max_acs_score REAL,              -- Memorial Anxiety Scale for Prostate Cancer
+            anxiety_score REAL,
+            g8_total INTEGER,
             -- Notes
+            continence_status TEXT,
+            time_to_continence_months INTEGER,
+            sexual_recovery_status TEXT,
+            time_to_erection_months INTEGER,
             clinician_notes TEXT,
             FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
         )
@@ -2872,6 +2945,9 @@ def init_tracking_db():
             next_actions_json TEXT,
             evidence_basis_json TEXT,
             resulting_assessment_id INTEGER,
+            confirmation_status TEXT DEFAULT 'pending',
+            rejection_reason TEXT,
+            requires_more_data_fields_json TEXT,
             confirmed_at TIMESTAMP,
             confirmed_by TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -2894,12 +2970,95 @@ def init_tracking_db():
             recommendation_family TEXT,
             recommended_option TEXT,
             selected_option TEXT,
+            recommended_confidence TEXT,
+            clinician_selected_option TEXT,
+            clinician_selected_family TEXT,
+            followed_system_recommendation TEXT,
+            discordance_reason_category TEXT,
+            decision_capture_status TEXT,
             discordance_reason TEXT,
             outcome_snapshot_json TEXT,
             recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(patient_id) REFERENCES patient_identity(id),
             FOREIGN KEY(assessment_id) REFERENCES clinical_assessments(id),
             FOREIGN KEY(event_id) REFERENCES patient_events(id)
+        )
+        '''
+    )
+
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS clinical_decision_captures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            assessment_id INTEGER,
+            event_id INTEGER,
+            state_at_decision TEXT,
+            recommended_option TEXT,
+            recommended_family TEXT,
+            recommended_confidence TEXT,
+            clinician_selected_option TEXT,
+            clinician_selected_family TEXT,
+            followed_system_recommendation TEXT,
+            discordance_reason_category TEXT,
+            discordance_reason_free_text TEXT,
+            patient_preference_driver TEXT,
+            cost_access_driver TEXT,
+            toxicity_driver TEXT,
+            tumor_board_required INTEGER DEFAULT 0,
+            shared_with_patient INTEGER DEFAULT 0,
+            decided_by TEXT,
+            decision_finalized_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id),
+            FOREIGN KEY(assessment_id) REFERENCES clinical_assessments(id),
+            FOREIGN KEY(event_id) REFERENCES patient_events(id)
+        )
+        '''
+    )
+
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS tumor_board_outcomes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            assessment_id INTEGER,
+            discussion_date DATE,
+            trigger_reason TEXT,
+            system_recommendation_at_board TEXT,
+            board_recommendation TEXT,
+            board_recommendation_family TEXT,
+            board_consensus_level TEXT,
+            board_reasoning_structured TEXT,
+            required_followup_actions_json TEXT,
+            board_overrode_system TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id),
+            FOREIGN KEY(assessment_id) REFERENCES clinical_assessments(id)
+        )
+        '''
+    )
+
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS treatment_adverse_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            treatment_id INTEGER,
+            regimen_code TEXT,
+            cycle_number INTEGER,
+            ctcae_term TEXT,
+            ctcae_grade INTEGER,
+            attribution TEXT,
+            seriousness TEXT,
+            hospitalization INTEGER DEFAULT 0,
+            dose_modification_triggered INTEGER DEFAULT 0,
+            event_date DATE,
+            expected_vs_observed_context TEXT,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id),
+            FOREIGN KEY(treatment_id) REFERENCES treatment_history(id)
         )
         '''
     )
@@ -3024,6 +3183,12 @@ def init_tracking_db():
             guideline TEXT,
             completed INTEGER DEFAULT 0,
             completed_date DATE,
+            completion_status TEXT,
+            completion_source TEXT,
+            performed_date DATE,
+            days_late INTEGER DEFAULT 0,
+            adherence_impact TEXT,
+            next_recovery_action TEXT,
             completed_visit_id INTEGER,
             overdue_alert_sent INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -3037,6 +3202,12 @@ def init_tracking_db():
         "ALTER TABLE scheduled_events ADD COLUMN ideal_due_at DATE",
         "ALTER TABLE scheduled_events ADD COLUMN scheduled_due_at DATE",
         "ALTER TABLE scheduled_events ADD COLUMN delay_days INTEGER DEFAULT 0",
+        "ALTER TABLE scheduled_events ADD COLUMN completion_status TEXT",
+        "ALTER TABLE scheduled_events ADD COLUMN completion_source TEXT",
+        "ALTER TABLE scheduled_events ADD COLUMN performed_date DATE",
+        "ALTER TABLE scheduled_events ADD COLUMN days_late INTEGER DEFAULT 0",
+        "ALTER TABLE scheduled_events ADD COLUMN adherence_impact TEXT",
+        "ALTER TABLE scheduled_events ADD COLUMN next_recovery_action TEXT",
     ):
         try:
             c.execute(ddl)
@@ -3268,6 +3439,40 @@ def init_tracking_db():
         "ALTER TABLE patient_pros ADD COLUMN time_to_continence_months INTEGER",
         "ALTER TABLE patient_pros ADD COLUMN sexual_recovery_status TEXT",
         "ALTER TABLE patient_pros ADD COLUMN time_to_erection_months INTEGER",
+        "ALTER TABLE patient_pros ADD COLUMN epic26_urinary_domain REAL",
+        "ALTER TABLE patient_pros ADD COLUMN epic26_sexual_domain REAL",
+        "ALTER TABLE patient_pros ADD COLUMN epic26_bowel_domain REAL",
+        "ALTER TABLE patient_pros ADD COLUMN epic26_hormonal_domain REAL",
+        "ALTER TABLE patient_pros ADD COLUMN eortc_qlq_c30_global_health REAL",
+        "ALTER TABLE patient_pros ADD COLUMN eortc_qlq_c30_physical REAL",
+        "ALTER TABLE patient_pros ADD COLUMN eortc_qlq_c30_role REAL",
+        "ALTER TABLE patient_pros ADD COLUMN eortc_qlq_c30_emotional REAL",
+        "ALTER TABLE patient_pros ADD COLUMN eortc_qlq_c30_fatigue REAL",
+        "ALTER TABLE patient_pros ADD COLUMN eortc_qlq_c30_pain REAL",
+        "ALTER TABLE patient_pros ADD COLUMN anxiety_score REAL",
+    ):
+        try:
+            c.execute(ddl)
+        except sqlite3.OperationalError:
+            pass
+
+    for ddl in (
+        "ALTER TABLE state_transition_proposals ADD COLUMN confirmation_status TEXT DEFAULT 'pending'",
+        "ALTER TABLE state_transition_proposals ADD COLUMN rejection_reason TEXT",
+        "ALTER TABLE state_transition_proposals ADD COLUMN requires_more_data_fields_json TEXT",
+    ):
+        try:
+            c.execute(ddl)
+        except sqlite3.OperationalError:
+            pass
+
+    for ddl in (
+        "ALTER TABLE recommendation_audit ADD COLUMN recommended_confidence TEXT",
+        "ALTER TABLE recommendation_audit ADD COLUMN clinician_selected_option TEXT",
+        "ALTER TABLE recommendation_audit ADD COLUMN clinician_selected_family TEXT",
+        "ALTER TABLE recommendation_audit ADD COLUMN followed_system_recommendation TEXT",
+        "ALTER TABLE recommendation_audit ADD COLUMN discordance_reason_category TEXT",
+        "ALTER TABLE recommendation_audit ADD COLUMN decision_capture_status TEXT",
     ):
         try:
             c.execute(ddl)
@@ -5692,7 +5897,27 @@ def _update_structural_baseline_from_visit(cursor, patient_id, data):
 
 
 def _build_pro_payload_from_visit(data):
-    keys = ("ipss_total", "iief5_score", "eq5d_vas", "fact_p_total", "pad_usage", "bpi_worst_pain", "bpi_average_pain")
+    keys = (
+        "ipss_total",
+        "iief5_score",
+        "eq5d_vas",
+        "fact_p_total",
+        "facit_fatigue_total",
+        "pad_usage",
+        "bpi_worst_pain",
+        "bpi_average_pain",
+        "epic26_urinary_domain",
+        "epic26_sexual_domain",
+        "epic26_bowel_domain",
+        "epic26_hormonal_domain",
+        "eortc_qlq_c30_global_health",
+        "eortc_qlq_c30_physical",
+        "eortc_qlq_c30_role",
+        "eortc_qlq_c30_emotional",
+        "eortc_qlq_c30_fatigue",
+        "eortc_qlq_c30_pain",
+        "anxiety_score",
+    )
     if not any(_is_present(data.get(key)) for key in keys):
         return None
     return {
@@ -5706,6 +5931,18 @@ def _build_pro_payload_from_visit(data):
         "bpi_average_pain": _safe_int(data.get("bpi_average_pain"), None),
         "eq5d_vas": _safe_int(data.get("eq5d_vas"), None),
         "fact_p_total": _safe_float(data.get("fact_p_total"), None),
+        "facit_fatigue_total": _safe_int(data.get("facit_fatigue_total"), None),
+        "epic26_urinary_domain": _safe_float(data.get("epic26_urinary_domain"), None),
+        "epic26_sexual_domain": _safe_float(data.get("epic26_sexual_domain"), None),
+        "epic26_bowel_domain": _safe_float(data.get("epic26_bowel_domain"), None),
+        "epic26_hormonal_domain": _safe_float(data.get("epic26_hormonal_domain"), None),
+        "eortc_qlq_c30_global_health": _safe_float(data.get("eortc_qlq_c30_global_health"), None),
+        "eortc_qlq_c30_physical": _safe_float(data.get("eortc_qlq_c30_physical"), None),
+        "eortc_qlq_c30_role": _safe_float(data.get("eortc_qlq_c30_role"), None),
+        "eortc_qlq_c30_emotional": _safe_float(data.get("eortc_qlq_c30_emotional"), None),
+        "eortc_qlq_c30_fatigue": _safe_float(data.get("eortc_qlq_c30_fatigue"), None),
+        "eortc_qlq_c30_pain": _safe_float(data.get("eortc_qlq_c30_pain"), None),
+        "anxiety_score": _safe_float(data.get("anxiety_score"), None),
         "clinician_notes": data.get("clinician_notes"),
     }
 
@@ -6787,21 +7024,31 @@ def _persist_transition_proposals(cursor, patient_id, event_id, proposals):
                 patient_id, proposal_key, event_id, from_state, from_management_track,
                 target_state, target_management_track, proposal_status, priority,
                 requires_confirmation, rationale, trigger_signals_json, next_actions_json,
-                evidence_basis_json, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                evidence_basis_json, confirmation_status, requires_more_data_fields_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(patient_id, proposal_key) DO UPDATE SET
                 event_id=excluded.event_id,
                 from_state=excluded.from_state,
                 from_management_track=excluded.from_management_track,
                 target_state=excluded.target_state,
                 target_management_track=excluded.target_management_track,
-                proposal_status=excluded.proposal_status,
+                proposal_status=CASE
+                    WHEN state_transition_proposals.confirmation_status IN ('confirmed', 'rejected', 'deferred')
+                        THEN state_transition_proposals.proposal_status
+                    ELSE excluded.proposal_status
+                END,
                 priority=excluded.priority,
                 requires_confirmation=excluded.requires_confirmation,
                 rationale=excluded.rationale,
                 trigger_signals_json=excluded.trigger_signals_json,
                 next_actions_json=excluded.next_actions_json,
                 evidence_basis_json=excluded.evidence_basis_json,
+                confirmation_status=CASE
+                    WHEN state_transition_proposals.confirmation_status IN ('confirmed', 'rejected', 'deferred')
+                        THEN state_transition_proposals.confirmation_status
+                    ELSE excluded.confirmation_status
+                END,
+                requires_more_data_fields_json=excluded.requires_more_data_fields_json,
                 updated_at=CURRENT_TIMESTAMP
             ''',
             (
@@ -6819,6 +7066,8 @@ def _persist_transition_proposals(cursor, patient_id, event_id, proposals):
                 _json_blob(proposal.get("trigger_signals", [])),
                 _json_blob(proposal.get("next_actions", [])),
                 _json_blob(proposal.get("evidence_basis", [])),
+                proposal.get("confirmation_status", "pending"),
+                _json_blob(proposal.get("requires_more_data_fields", [])),
             ),
         )
 
@@ -6830,8 +7079,11 @@ def _persist_recommendation_audit(cursor, audit):
         '''
         INSERT INTO recommendation_audit (
             patient_id, assessment_id, event_id, recommendation_family, recommended_option,
-            selected_option, discordance_reason, outcome_snapshot_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            selected_option, recommended_confidence, clinician_selected_option,
+            clinician_selected_family, followed_system_recommendation,
+            discordance_reason_category, decision_capture_status,
+            discordance_reason, outcome_snapshot_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''',
         (
             audit.get("patient_id"),
@@ -6840,6 +7092,12 @@ def _persist_recommendation_audit(cursor, audit):
             audit.get("recommendation_family"),
             audit.get("recommended_option"),
             audit.get("selected_option"),
+            audit.get("recommended_confidence"),
+            audit.get("clinician_selected_option"),
+            audit.get("clinician_selected_family"),
+            audit.get("followed_system_recommendation"),
+            audit.get("discordance_reason_category"),
+            audit.get("decision_capture_status"),
             audit.get("discordance_reason"),
             _json_blob(audit.get("outcome_snapshot", {})),
         ),
@@ -7363,10 +7621,14 @@ def _build_signal_snapshot_view(bundle):
         "awaiting_review": list(signals.get("awaiting_review") or []),
         "active_safety": list(signals.get("active_safety") or []),
         "next_best_action": dict(bundle.get("next_best_action") or {}),
+        "decision_governance_bundle": dict(bundle.get("decision_governance_bundle") or {}),
+        "pro_decision_bundle": dict(bundle.get("pro_decision_bundle") or {}),
+        "shared_decision_bundle": dict(bundle.get("shared_decision_bundle") or {}),
         "palliative_transition_bundle": dict(bundle.get("palliative_transition_bundle") or {}),
         "palliative_monitoring_package": dict(bundle.get("palliative_monitoring_package") or {}),
         "survivorship_transition_bundle": dict(bundle.get("survivorship_transition_bundle") or {}),
         "survivorship_monitoring_package": dict(bundle.get("survivorship_monitoring_package") or {}),
+        "score_interpretation_catalog_snapshot": dict(bundle.get("score_interpretation_catalog_snapshot") or {}),
         "mcode_projection": dict(signals.get("mcode_projection") or {}),
         "evidence_basis": list(signals.get("evidence_basis") or []),
     }
@@ -7380,6 +7642,21 @@ def _merge_longitudinal_runtime_record_context(patient_record, longitudinal_bund
     for key in (
         "transition_resolution",
         "care_intent_contract",
+        "decision_governance_bundle",
+        "decision_blocking_bundle",
+        "clinician_decision_capture_bundle",
+        "state_transition_confirmation_bundle",
+        "adherence_tracking_bundle",
+        "tumor_board_outcome_bundle",
+        "pro_decision_bundle",
+        "shared_decision_bundle",
+        "ctdna_refinement_bundle",
+        "multimodal_imaging_concordance_bundle",
+        "ichom_compliance_bundle",
+        "treatment_adverse_event_bundle",
+        "population_survival_context_bundle",
+        "cost_access_context_bundle",
+        "score_interpretation_catalog_snapshot",
         "palliative_transition_bundle",
         "palliative_monitoring_package",
         "survivorship_transition_bundle",
@@ -8877,6 +9154,7 @@ def confirm_state_transition_proposal(patient_id, proposal_id, confirmed_by="sys
             '''
             UPDATE state_transition_proposals
             SET proposal_status = 'confirmed',
+                confirmation_status = 'confirmed',
                 resulting_assessment_id = ?,
                 confirmed_at = CURRENT_TIMESTAMP,
                 confirmed_by = ?,
@@ -8904,6 +9182,185 @@ def confirm_state_transition_proposal(patient_id, proposal_id, confirmed_by="sys
         return True, {"assessment_id": assessment_id, "agenda": agenda, **bundle}
     except Exception as e:
         logger.error(f"Error confirming transition proposal: {e}")
+        return False, str(e)
+
+
+def resolve_state_transition_proposal(
+    patient_id,
+    proposal_id,
+    *,
+    confirmation_status="confirmed",
+    confirmed_by="system",
+    rejection_reason="",
+    requires_more_data_fields=None,
+):
+    status = str(confirmation_status or "pending").strip().lower()
+    if status == "confirmed":
+        return confirm_state_transition_proposal(patient_id, proposal_id, confirmed_by=confirmed_by)
+    try:
+        patient_id = int(patient_id)
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        c.execute(
+            """
+            SELECT * FROM state_transition_proposals
+            WHERE id = ? AND patient_id = ?
+            """,
+            (proposal_id, patient_id),
+        )
+        proposal = c.fetchone()
+        if not proposal:
+            conn.close()
+            return False, "Propuesta no encontrada"
+        proposal = dict(proposal)
+        proposal_status = "rejected" if status == "rejected" else "deferred"
+        c.execute(
+            """
+            UPDATE state_transition_proposals
+            SET proposal_status = ?,
+                confirmation_status = ?,
+                rejection_reason = ?,
+                requires_more_data_fields_json = ?,
+                confirmed_at = CURRENT_TIMESTAMP,
+                confirmed_by = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND patient_id = ?
+            """,
+            (
+                proposal_status,
+                status,
+                rejection_reason,
+                _json_blob(list(requires_more_data_fields or [])),
+                confirmed_by,
+                proposal_id,
+                patient_id,
+            ),
+        )
+        conn.commit()
+        conn.close()
+        event_id = record_patient_event(
+            patient_id,
+            event_type="state_transition_reviewed",
+            state_context=proposal.get("target_state"),
+            management_track=proposal.get("target_management_track") or "",
+            source_type="transition_proposal",
+            source_record_id=proposal_id,
+            payload={
+                "proposal_key": proposal.get("proposal_key"),
+                "confirmation_status": status,
+                "rejection_reason": rejection_reason,
+                "requires_more_data_fields": list(requires_more_data_fields or []),
+            },
+            mcode_focus={"condition": proposal.get("target_state")},
+        )
+        bundle = refresh_longitudinal_intelligence(patient_id, event_id=event_id, force_recompute=True)
+        return True, bundle
+    except Exception as e:
+        logger.error(f"Error resolving transition proposal: {e}")
+        return False, str(e)
+
+
+def save_clinical_decision_capture(patient_id, data):
+    try:
+        patient_id = int(patient_id)
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute(
+            """
+            INSERT INTO clinical_decision_captures (
+                patient_id, assessment_id, event_id, state_at_decision, recommended_option,
+                recommended_family, recommended_confidence, clinician_selected_option,
+                clinician_selected_family, followed_system_recommendation,
+                discordance_reason_category, discordance_reason_free_text,
+                patient_preference_driver, cost_access_driver, toxicity_driver,
+                tumor_board_required, shared_with_patient, decided_by, decision_finalized_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                patient_id,
+                data.get("assessment_id"),
+                data.get("event_id"),
+                data.get("state_at_decision"),
+                data.get("recommended_option"),
+                data.get("recommended_family"),
+                data.get("recommended_confidence"),
+                data.get("clinician_selected_option"),
+                data.get("clinician_selected_family"),
+                data.get("followed_system_recommendation"),
+                data.get("discordance_reason_category"),
+                data.get("discordance_reason_free_text"),
+                data.get("patient_preference_driver"),
+                data.get("cost_access_driver"),
+                data.get("toxicity_driver"),
+                1 if safe_bool(data.get("tumor_board_required"), default=False) else 0,
+                1 if safe_bool(data.get("shared_with_patient"), default=False) else 0,
+                data.get("decided_by") or "system",
+                data.get("decision_finalized_at") or datetime.now().isoformat(timespec="seconds"),
+            ),
+        )
+        conn.commit()
+        conn.close()
+        event_id = record_patient_event(
+            patient_id,
+            event_type="clinical_decision_captured",
+            event_date=str(data.get("decision_finalized_at") or datetime.now().strftime("%Y-%m-%d"))[:10],
+            state_context=data.get("state_at_decision") or (get_patient_full_record(patient_id) or {}).get("prior_history", {}).get("current_state", ""),
+            source_type="clinical_decision_capture",
+            payload=dict(data),
+            mcode_focus={"decision_capture": True},
+        )
+        bundle = refresh_longitudinal_intelligence(patient_id, event_id=event_id, force_recompute=True)
+        return True, bundle
+    except Exception as e:
+        logger.error(f"Error saving clinical decision capture: {e}")
+        return False, str(e)
+
+
+def save_tumor_board_outcome(patient_id, data):
+    try:
+        patient_id = int(patient_id)
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute(
+            """
+            INSERT INTO tumor_board_outcomes (
+                patient_id, assessment_id, discussion_date, trigger_reason,
+                system_recommendation_at_board, board_recommendation,
+                board_recommendation_family, board_consensus_level,
+                board_reasoning_structured, required_followup_actions_json,
+                board_overrode_system
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                patient_id,
+                data.get("assessment_id"),
+                data.get("discussion_date") or datetime.now().strftime("%Y-%m-%d"),
+                data.get("trigger_reason"),
+                data.get("system_recommendation_at_board"),
+                data.get("board_recommendation"),
+                data.get("board_recommendation_family"),
+                data.get("board_consensus_level"),
+                data.get("board_reasoning_structured"),
+                _json_blob(list(data.get("required_followup_actions") or [])),
+                data.get("board_overrode_system"),
+            ),
+        )
+        conn.commit()
+        conn.close()
+        event_id = record_patient_event(
+            patient_id,
+            event_type="tumor_board_outcome_recorded",
+            event_date=data.get("discussion_date") or datetime.now().strftime("%Y-%m-%d"),
+            state_context=(get_patient_full_record(patient_id) or {}).get("prior_history", {}).get("current_state", ""),
+            source_type="tumor_board",
+            payload=dict(data),
+            mcode_focus={"tumor_board": True},
+        )
+        bundle = refresh_longitudinal_intelligence(patient_id, event_id=event_id, force_recompute=True)
+        return True, bundle
+    except Exception as e:
+        logger.error(f"Error saving tumor board outcome: {e}")
         return False, str(e)
 
 
@@ -10664,8 +11121,14 @@ def save_pro_assessment(patient_id, data):
                 iief5_score, erection_sufficient, pde5i_use,
                 bpi_worst_pain, bpi_average_pain, bpi_interference,
                 eq5d_index, eq5d_vas, fact_p_total, max_acs_score,
-                clinician_notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                facit_fatigue_total, fact_p_physical, fact_p_social, fact_p_emotional,
+                fact_p_functional, fact_p_prostate, continence_status, time_to_continence_months,
+                sexual_recovery_status, time_to_erection_months, g8_total,
+                epic26_urinary_domain, epic26_sexual_domain, epic26_bowel_domain, epic26_hormonal_domain,
+                eortc_qlq_c30_global_health, eortc_qlq_c30_physical, eortc_qlq_c30_role,
+                eortc_qlq_c30_emotional, eortc_qlq_c30_fatigue, eortc_qlq_c30_pain,
+                anxiety_score, clinician_notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             patient_id, data.get('date', datetime.now().strftime('%Y-%m-%d')),
             data.get('ipss_total'), data.get('ipss_qol'), _safe_int(data.get('pad_usage', 0), 0),
@@ -10675,6 +11138,16 @@ def save_pro_assessment(patient_id, data):
             data.get('bpi_interference'),
             data.get('eq5d_index'), data.get('eq5d_vas'),
             data.get('fact_p_total'), data.get('max_acs_score'),
+            data.get('facit_fatigue_total'), data.get('fact_p_physical'), data.get('fact_p_social'),
+            data.get('fact_p_emotional'), data.get('fact_p_functional'), data.get('fact_p_prostate'),
+            data.get('continence_status'), data.get('time_to_continence_months'),
+            data.get('sexual_recovery_status'), data.get('time_to_erection_months'), data.get('g8_total'),
+            data.get('epic26_urinary_domain'), data.get('epic26_sexual_domain'),
+            data.get('epic26_bowel_domain'), data.get('epic26_hormonal_domain'),
+            data.get('eortc_qlq_c30_global_health'), data.get('eortc_qlq_c30_physical'),
+            data.get('eortc_qlq_c30_role'), data.get('eortc_qlq_c30_emotional'),
+            data.get('eortc_qlq_c30_fatigue'), data.get('eortc_qlq_c30_pain'),
+            data.get('anxiety_score'),
             data.get('clinician_notes')
         ))
         conn.commit()
@@ -11186,6 +11659,24 @@ def get_patient_full_record(nss_or_id, *, include_derivatives=True, include_ledg
         recommendation_audit = _hydrate_recommendation_audit_rows(c.fetchall())
 
         c.execute(
+            "SELECT * FROM clinical_decision_captures WHERE patient_id = ? ORDER BY decision_finalized_at DESC, id DESC",
+            (patient_id,),
+        )
+        clinical_decision_captures = _hydrate_clinical_decision_capture_rows(c.fetchall())
+
+        c.execute(
+            "SELECT * FROM tumor_board_outcomes WHERE patient_id = ? ORDER BY discussion_date DESC, id DESC",
+            (patient_id,),
+        )
+        tumor_board_outcomes = _hydrate_tumor_board_outcome_rows(c.fetchall())
+
+        c.execute(
+            "SELECT * FROM treatment_adverse_events WHERE patient_id = ? ORDER BY COALESCE(event_date, '') DESC, id DESC",
+            (patient_id,),
+        )
+        treatment_adverse_events = _hydrate_treatment_adverse_event_rows(c.fetchall())
+
+        c.execute(
             "SELECT * FROM outcome_events WHERE patient_id = ? AND COALESCE(active, 1) = 1 ORDER BY COALESCE(event_date, '') DESC, id DESC",
             (patient_id,),
         )
@@ -11415,6 +11906,9 @@ def get_patient_full_record(nss_or_id, *, include_derivatives=True, include_ledg
             'latest_signal_snapshot': latest_signal_snapshot[0] if latest_signal_snapshot else {},
             'transition_proposals': transition_proposals,
             'recommendation_audit': recommendation_audit,
+            'clinical_decision_captures': clinical_decision_captures,
+            'tumor_board_outcomes': tumor_board_outcomes,
+            'treatment_adverse_events': treatment_adverse_events,
             'outcome_events': outcome_events,
             'latest_adjudication_snapshot': adjudication_snapshots[0] if adjudication_snapshots else {},
             'latest_trial_benchmark_snapshot': trial_benchmark_snapshots[0] if trial_benchmark_snapshots else {},

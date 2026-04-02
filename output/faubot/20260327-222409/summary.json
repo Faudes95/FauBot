@@ -1,0 +1,37 @@
+{
+  "generated_at": "2026-03-27T22:27:24.355580",
+  "mode": "deep",
+  "repo_root": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6",
+  "base_url": "http://127.0.0.1:8080",
+  "output_dir": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/faubot/20260327-222409",
+  "results": [
+    {
+      "key": "vertical_verification",
+      "title": "Vertical verification seeded/live coverage",
+      "command": [
+        "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+        "-m",
+        "pytest",
+        "tests/test_vertical_verification.py::test_run_vertical_verification_returns_seeded_and_live_coverage",
+        "-q"
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "severity_on_failure": "critical",
+      "recommendation": "Revisar `prostanet/domains/clinical_validation/vertical_verification.py`, `trajectory_catalog.py` y el servicio del módulo afectado para restaurar concordancia longitudinal.",
+      "stdout_path": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/faubot/20260327-222409/artifacts/vertical_verification.stdout.log",
+      "stderr_path": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/faubot/20260327-222409/artifacts/vertical_verification.stderr.log"
+    }
+  ],
+  "critical_findings": [],
+  "moderate_findings": [],
+  "pending_items": [],
+  "summary_sections": [
+    "Hallazgos críticos",
+    "Hallazgos moderados",
+    "Cobertura ejecutada",
+    "Evidencia clínica y técnica",
+    "Plan de corrección propuesto",
+    "Pendientes no resueltos"
+  ]
+}

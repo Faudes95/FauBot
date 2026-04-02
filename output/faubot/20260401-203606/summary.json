@@ -1,0 +1,71 @@
+{
+  "generated_at": "2026-04-01T20:36:39.259161",
+  "mode": "smoke",
+  "repo_root": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6",
+  "base_url": "http://127.0.0.1:8080",
+  "output_dir": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/faubot/20260401-203606",
+  "results": [
+    {
+      "key": "draft_registration_flow",
+      "title": "Draft -> intake -> register flow",
+      "command": [
+        "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+        "-m",
+        "pytest",
+        "tests/test_modular_engine.py::test_clinical_assessment_draft_and_patient_registration_flow",
+        "-q"
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "severity_on_failure": "critical",
+      "recommendation": "Revisar `prostanet/presentation/api.py`, `tracking_db.py` y `templates/patient_intake.html` para detectar pérdida de contexto modular o persistencia incompleta del baseline.",
+      "stdout_path": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/faubot/20260401-203606/artifacts/draft_registration_flow.stdout.log",
+      "stderr_path": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/faubot/20260401-203606/artifacts/draft_registration_flow.stderr.log"
+    },
+    {
+      "key": "stage_specific_missing_inputs",
+      "title": "Stage-specific missing inputs",
+      "command": [
+        "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+        "-m",
+        "pytest",
+        "tests/test_core_api.py::test_clinical_assessment_context_requests_only_missing_score_inputs",
+        "-q"
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "severity_on_failure": "critical",
+      "recommendation": "Revisar el cálculo de inputs faltantes por estadio y la reutilización de datos estructurados ya capturados.",
+      "stdout_path": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/faubot/20260401-203606/artifacts/stage_specific_missing_inputs.stdout.log",
+      "stderr_path": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/faubot/20260401-203606/artifacts/stage_specific_missing_inputs.stderr.log"
+    },
+    {
+      "key": "phase_one_schedule",
+      "title": "Master follow-up plan for phase one scenarios",
+      "command": [
+        "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+        "-m",
+        "pytest",
+        "tests/test_core_api.py::test_schedule_exposes_master_followup_plan_for_phase_one_scenarios",
+        "-q"
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "severity_on_failure": "critical",
+      "recommendation": "Revisar `tracking_db.py`, `prostanet/domains/patient_tracking/followup_agenda.py` y `prostanet/domains/patient_tracking/guideline_schedule_engine.py` para alinear state, management_track y plan maestro.",
+      "stdout_path": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/faubot/20260401-203606/artifacts/phase_one_schedule.stdout.log",
+      "stderr_path": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/faubot/20260401-203606/artifacts/phase_one_schedule.stderr.log"
+    }
+  ],
+  "critical_findings": [],
+  "moderate_findings": [],
+  "pending_items": [],
+  "summary_sections": [
+    "Hallazgos críticos",
+    "Hallazgos moderados",
+    "Cobertura ejecutada",
+    "Evidencia clínica y técnica",
+    "Plan de corrección propuesto",
+    "Pendientes no resueltos"
+  ]
+}

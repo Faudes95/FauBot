@@ -1,0 +1,53 @@
+{
+  "generated_at": "2026-03-29T13:51:05.877988",
+  "mode": "visual",
+  "repo_root": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6",
+  "base_url": "http://127.0.0.1:8080",
+  "output_dir": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/faubot/20260329-134805",
+  "results": [
+    {
+      "key": "visual_audit",
+      "title": "Visual vertical verification",
+      "command": [
+        "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+        "scripts/run_vertical_verification.py",
+        "--base-url",
+        "http://127.0.0.1:8080",
+        "--visual-mode",
+        "playwright_real",
+        "--live-limit-per-vertical",
+        "1",
+        "--output",
+        "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/faubot/20260329-134805/artifacts/vertical_verification_visual.json"
+      ],
+      "passed": false,
+      "exit_code": 1,
+      "severity_on_failure": "critical",
+      "recommendation": "Si la app estaba viva, revisar `templates/`, `static/` y el runner visual para detectar regresión UI o contratos rotos de captura.",
+      "stdout_path": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/faubot/20260329-134805/artifacts/visual_audit.stdout.log",
+      "stderr_path": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/faubot/20260329-134805/artifacts/visual_audit.stderr.log",
+      "blocked_by_environment": false,
+      "output_report_path": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/faubot/20260329-134805/artifacts/vertical_verification_visual.json"
+    }
+  ],
+  "critical_findings": [
+    {
+      "title": "Visual vertical verification",
+      "step_key": "visual_audit",
+      "description": "La validación falló.",
+      "recommendation": "Si la app estaba viva, revisar `templates/`, `static/` y el runner visual para detectar regresión UI o contratos rotos de captura.",
+      "stdout_path": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/faubot/20260329-134805/artifacts/visual_audit.stdout.log",
+      "stderr_path": "/Users/oscaralvarado/Desktop/ProstaNet_Model_Fase6/output/faubot/20260329-134805/artifacts/visual_audit.stderr.log"
+    }
+  ],
+  "moderate_findings": [],
+  "pending_items": [],
+  "summary_sections": [
+    "Hallazgos críticos",
+    "Hallazgos moderados",
+    "Cobertura ejecutada",
+    "Evidencia clínica y técnica",
+    "Plan de corrección propuesto",
+    "Pendientes no resueltos"
+  ]
+}
