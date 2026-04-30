@@ -11,6 +11,7 @@ from clinical_scores import (
     mskcc_bcr_post_rp,
     partin_tables,
 )
+from prostanet.shared.dre import has_dre_documentation
 
 
 LOCALIZED_MODULES = {"localized_initial"}
@@ -169,11 +170,9 @@ def _external_classifier_entry(payload: dict[str, Any], stage: str) -> dict[str,
 
 
 def _erspc_entry(module_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    missing = [
-        field
-        for field in ("age", "psa", "dre_suspicious")
-        if not _present(payload.get(field))
-    ]
+    missing = [field for field in ("age", "psa") if not _present(payload.get(field))]
+    if not has_dre_documentation(payload):
+        missing.append("dre_suspicious")
     if module_id == "post_negative_biopsy_followup" and not _present(payload.get("prior_biopsy_count")):
         missing.append("prior_biopsy_count")
     status = "listo_para_calculadora" if not missing else "faltan_datos"

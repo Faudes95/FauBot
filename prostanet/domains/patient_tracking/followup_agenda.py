@@ -40,6 +40,7 @@ from prostanet.shared.contracts import (
     TherapyCheckpoint,
     VisitBundle,
 )
+from prostanet.shared.dre import is_dre_suspicious
 from prostanet.shared.metastatic_profile import (
     BONE_SITE_LABELS,
     METASTATIC_PROFILE_FIELD_NAMES,
@@ -1638,7 +1639,13 @@ def _diagnostic_agenda(patient: dict[str, Any], state: str, track: str) -> list[
     reference = _parse_date(_first_nonempty(latest_followup.get("visit_date"), latest_trigger.get("trigger_date"), identity.get("diagnosis_date"))) or date.today()
     current_psad = _safe_float(_first_nonempty(latest_followup.get("psad"), truth_values.get("psad"), (patient.get("baseline") or {}).get("psad"))) or 0.0
     current_pirads = _safe_int(_first_nonempty(latest_followup.get("pirads_score"), truth_values.get("pirads_score"), latest_mri.get("pirads_score"), (patient.get("baseline") or {}).get("pirads_score"))) or 0
-    current_dre_suspicious = str(_first_nonempty(latest_followup.get("dre_suspicious"), truth_values.get("dre_suspicious"), (patient.get("baseline") or {}).get("dre_suspicious"))).strip().lower() in {"1", "true", "yes", "si", "sí"}
+    current_dre_suspicious = is_dre_suspicious(
+        {
+            "dre_finding": _first_nonempty(latest_followup.get("dre_finding"), truth_values.get("dre_finding")),
+            "dre_suspicious": _first_nonempty(latest_followup.get("dre_suspicious"), truth_values.get("dre_suspicious"), (patient.get("baseline") or {}).get("dre_suspicious")),
+            "clinical_tstage": _first_nonempty(latest_followup.get("clinical_tstage"), truth_values.get("clinical_tstage"), (patient.get("baseline") or {}).get("clinical_tstage")),
+        }
+    )
     biopsy_trigger_still_active = current_pirads >= 4 or current_psad >= 0.15 or current_dre_suspicious
     items = [
         _agenda_item(

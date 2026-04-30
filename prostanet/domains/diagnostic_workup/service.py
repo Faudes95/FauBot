@@ -6,6 +6,7 @@ from prostanet.domains.diagnostic_workup.schemas import DIAGNOSTIC_WORKUP_SCHEMA
 from prostanet.domains.evidence_registry.service import EvidenceRegistryService
 from prostanet.domains.guideline_comparison.service import GuidelineComparisonService
 from prostanet.shared.contracts import evaluation_result
+from prostanet.shared.dre import has_dre_documentation, normalize_dre
 from prostanet.shared.recommendation_enrichment import enrich_evaluation_result
 
 
@@ -27,11 +28,8 @@ class DiagnosticWorkupService:
         psa = float(payload.get("psa", 0) or 0)
         psad = float(payload.get("psad", 0) or 0)
         pirads = int(float(payload.get("pirads_score", 0) or 0))
-        dre_suspicious = str(payload.get("dre_suspicious", "0"))
-        erspc_ready = all(
-            payload.get(field) not in (None, "")
-            for field in ("age", "psa", "dre_suspicious")
-        )
+        dre = normalize_dre(payload)
+        erspc_ready = all(payload.get(field) not in (None, "") for field in ("age", "psa")) and has_dre_documentation(payload)
 
         treatments = []
         if nccn["biopsy_indicated"]:
@@ -77,7 +75,7 @@ class DiagnosticWorkupService:
 
         case_summary = (
             f"El paciente se encuentra en estudio diagnóstico sin confirmación histológica previa, con antígeno prostático específico de {psa:g} ng/mL, "
-            f"densidad del antígeno prostático específico de {psad:g}, tacto rectal {'sospechoso' if dre_suspicious in {'1', 'true'} else 'no sospechoso'} "
+            f"densidad del antígeno prostático específico de {psad:g}, tacto rectal {'sospechoso' if dre.is_suspicious else 'no sospechoso'} "
             f"y resonancia magnética multiparamétrica con PI-RADS {pirads if pirads else 'no disponible'}. "
             f"La Red Nacional Integral del Cáncer (NCCN) 5.2026 lo sitúa en {nccn['label'].lower()} y la Asociación Europea de Urología (EAU) 2026 lo compara como {eau['label'].lower()}."
         )

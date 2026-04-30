@@ -13,6 +13,7 @@ from prostanet.domains.patient_tracking.psma_imaging import (
     normalize_psma_imaging_payload,
 )
 from prostanet.domains.patient_tracking.therapy_catalog import normalize_regimen_code, regimen_label
+from prostanet.shared.dre import apply_dre_normalization, is_dre_suspicious
 from prostanet.shared.gleason_profile import apply_gleason_profile, normalize_gleason_profile
 from prostanet.shared.metastatic_profile import build_metastatic_profile, derive_legacy_metastasis
 
@@ -4690,7 +4691,7 @@ def _build_diagnostic_plan_payload(data, assessment=None):
         trigger_conditions.append("Lesión PI-RADS 4-5")
     if _safe_float(data.get("psad"), 0) >= 0.15:
         trigger_conditions.append("Densidad del antígeno prostático específico elevada")
-    if _is_truthy(data.get("dre_suspicious")):
+    if is_dre_suspicious(data):
         trigger_conditions.append("Tacto rectal sospechoso")
     if _safe_float(data.get("psa_velocity_ng_ml_year"), 0) >= 0.75:
         trigger_conditions.append("Cinética de antígeno prostático específico en ascenso")
@@ -4734,7 +4735,7 @@ def _build_biopsy_trigger_payload(data, assessment=None):
         activation_conditions.append("Lesión PI-RADS 4-5")
     if _safe_float(data.get("psad"), 0) >= 0.15:
         activation_conditions.append("PSAD >= 0.15")
-    if _is_truthy(data.get("dre_suspicious")):
+    if is_dre_suspicious(data):
         activation_conditions.append("Tacto rectal sospechoso")
     if state == "post_negative_biopsy_followup" and _is_truthy(data.get("persistent_lesion_signal")):
         activation_conditions.append("Lesión persistente tras biopsia benigna")
@@ -5208,7 +5209,7 @@ def register_new_patient(data, assessment=None):
     Retorna (success: bool, message: str)
     """
     try:
-        data = apply_gleason_profile(dict(data or {}))
+        data = apply_dre_normalization(apply_gleason_profile(dict(data or {})), include_clinical_stage=False)
         assessment_state = str(data.get("assessment_state") or "").strip()
         advanced_states = {
             "adt_progression_verification",

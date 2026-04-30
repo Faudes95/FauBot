@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from prostanet.shared.contracts import FieldSpec, module_schema
+from prostanet.shared.dre import DRE_FINDING_OPTIONS
 
 INDEX_LESION_LOCATION_OPTIONS = [
     "No especificada",
@@ -27,7 +28,7 @@ DIAGNOSTIC_WORKUP_SCHEMA = module_schema(
         FieldSpec("psad", "Densidad del antígeno prostático específico (PSAD)", "number", default=0.12, group="Sospecha actual", group_order=2, clinical_role="required", unit="ng/mL/cc", derived_from=["psa", "prostate_volume_ml"], evidence_tags=["psad"]),
         FieldSpec("psa_velocity_ng_ml_year", "Velocidad de PSA", "number", default=0.8, group="Sospecha actual", group_order=2, clinical_role="decision_refiner", unit="ng/mL/año", evidence_tags=["psa_kinetics"]),
         FieldSpec("psa_history_interval_months", "Intervalo de la serie de PSA", "number", default=12, group="Sospecha actual", group_order=2, clinical_role="monitoring", unit="meses", evidence_tags=["psa_kinetics"]),
-        FieldSpec("dre_finding", "Hallazgo al tacto rectal (estadio T)", "select", options=["Normal", "T1 - No palpable (detectado por PSA)", "T2a - Afecta ≤50% de un lóbulo", "T2b - Afecta >50% de un lóbulo", "T2c - Afecta ambos lóbulos", "T3 - Extensión fuera de la cápsula", "T4 - Invade órganos adyacentes"], default="Normal", group="Exploración clínica", group_order=3, clinical_role="required", evidence_tags=["nccn_primary"]),
+        FieldSpec("dre_finding", "Hallazgo al tacto rectal (estadio T)", "select", options=DRE_FINDING_OPTIONS, default="Normal", group="Exploración clínica", group_order=3, clinical_role="required", evidence_tags=["nccn_primary"]),
         FieldSpec("pirads_score", "Resultado de resonancia magnética multiparamétrica", "select", options=["0", "2", "3", "4", "5"], default="3", group="Imagen prostática", group_order=4, clinical_role="required", evidence_tags=["mpmri"]),
         FieldSpec("mpmri_date", "Fecha de resonancia magnética multiparamétrica", "date", group="Imagen prostática", group_order=4, clinical_role="decision_refiner", evidence_tags=["mpmri"]),
         FieldSpec("mpmri_quality", "Calidad de resonancia magnética multiparamétrica", "select", options=["No disponible", "Subóptima", "Adecuada"], default="Adecuada", group="Imagen prostática", group_order=4, clinical_role="decision_refiner", evidence_tags=["mpmri"]),

@@ -1,28 +1,6 @@
 from __future__ import annotations
 
-
-def _parse_dre(payload: dict) -> tuple[bool, str | None]:
-    """Parse DRE finding — supports both new ``dre_finding`` and legacy ``dre_suspicious``.
-
-    Returns (is_suspicious, implied_tstage).
-    """
-    dre_finding = payload.get("dre_finding")
-    if dre_finding and str(dre_finding).strip() not in ("", "0", "Normal"):
-        # New field: extract T-stage from option text like "T2a - Afecta ≤50%..."
-        finding_str = str(dre_finding).strip()
-        implied = None
-        for prefix in ("T4", "T3b", "T3a", "T3", "T2c", "T2b", "T2a", "T1c", "T1"):
-            if finding_str.upper().startswith(prefix):
-                implied = prefix
-                break
-        is_suspicious = implied is not None and implied != "T1"
-        return is_suspicious, implied
-
-    # Legacy: dre_suspicious is a binary 0/1
-    legacy = payload.get("dre_suspicious")
-    if _is_true(legacy):
-        return True, "T2a"  # Conservative default for "suspicious"
-    return False, None
+from prostanet.shared.dre import normalize_dre
 
 
 def classify_diagnostic_workup(payload: dict) -> dict:
@@ -33,7 +11,9 @@ def classify_diagnostic_workup(payload: dict) -> dict:
         if psa and prostate_volume:
             psad = psa / prostate_volume
     pirads = int(float(payload.get("pirads_score", 0) or 0))
-    dre_suspicious, dre_implied_tstage = _parse_dre(payload)
+    dre = normalize_dre(payload)
+    dre_suspicious = dre.is_suspicious
+    dre_implied_tstage = dre.implied_tstage
     family_history = _is_true(payload.get("family_history_positive"))
     family_history_detail = str(payload.get("family_history_detail", "")).strip()
     germline_risk = _is_true(payload.get("germline_risk_mutation"))

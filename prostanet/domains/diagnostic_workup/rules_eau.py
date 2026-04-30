@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from prostanet.shared.dre import is_dre_suspicious
+
 
 def classify_diagnostic_workup_eau(payload: dict) -> dict:
     psa = float(payload.get("psa", 0) or 0)
@@ -9,7 +11,7 @@ def classify_diagnostic_workup_eau(payload: dict) -> dict:
         if psa and prostate_volume:
             psad = psa / prostate_volume
     pirads = int(float(payload.get("pirads_score", 0) or 0))
-    dre_suspicious = _is_true(payload.get("dre_suspicious"))
+    dre_suspicious = is_dre_suspicious(payload)
     psa_velocity = float(payload.get("psa_velocity_ng_ml_year", 0) or 0)
 
     if pirads >= 4 or dre_suspicious or psad >= 0.15 or psa >= 10 or psa_velocity >= 0.75:
@@ -30,7 +32,3 @@ def classify_diagnostic_workup_eau(payload: dict) -> dict:
         "risk_group": risk_group,
         "recommendation": recommendation,
     }
-
-
-def _is_true(value) -> bool:
-    return str(value).lower() in {"1", "true", "yes", "si", "on"}

@@ -29,6 +29,7 @@ from prostanet.domains.post_negative_biopsy_followup.service import (
     PostNegativeBiopsyFollowupService,
 )
 from prostanet.engine.confidence_scoring import ConfidenceScorer
+from prostanet.shared.dre import apply_dre_normalization, is_dre_suspicious
 from prostanet.shared.feature_flags import resolve_feature_flags
 
 
@@ -93,7 +94,9 @@ class DiagnosticBiopsyCopilotService:
                 "psa",
                 "psad",
                 "pirads_score",
+                "dre_finding",
                 "dre_suspicious",
+                "clinical_tstage",
                 "family_history_positive",
                 "germline_risk_mutation",
                 "phi_score",
@@ -102,6 +105,7 @@ class DiagnosticBiopsyCopilotService:
                 "persistent_lesion_signal",
             },
         )
+        payload = apply_dre_normalization(payload)
         module_result = self._evaluate_rule_based(latest_state, payload)
         requirements = decision_input_requirements or build_decision_input_requirements(
             runtime_patient,
@@ -347,7 +351,7 @@ class DiagnosticBiopsyCopilotService:
             notes.append(f"PSAD actual {psad:g}.")
         if normalize_text(payload.get("pirads_score")):
             notes.append(f"PI-RADS {payload.get('pirads_score')}.")
-        if normalize_text(payload.get("dre_suspicious")) in {"1", "true", "True"}:
+        if is_dre_suspicious(payload):
             notes.append("DRE sospechoso.")
         notes.append(f"Track diagnóstico: {diagnostic_track}.")
         return notes[:5]

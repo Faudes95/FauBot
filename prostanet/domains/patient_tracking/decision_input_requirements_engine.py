@@ -25,6 +25,7 @@ from prostanet.domains.patient_tracking.therapeutic_family_engine import (
     family_label,
     regimen_family_code,
 )
+from prostanet.shared.dre import has_dre_documentation
 from prostanet.shared.gleason_profile import apply_gleason_profile, normalize_gleason_profile
 from prostanet.shared.metastatic_profile import build_metastatic_profile, derive_mhspc_burden_context
 
@@ -70,6 +71,8 @@ def _blocking_input_satisfied(field_name: str, field_values: dict[str, Any]) -> 
         value = field_values.get("bcr_psa") or field_values.get("psa_current") or field_values.get("psa_postop")
     elif field_name == "psa_postop" and not _is_present(value):
         value = field_values.get("bcr_psa") or field_values.get("psa_current") or field_values.get("psa")
+    elif field_name == "dre_suspicious":
+        return has_dre_documentation(field_values)
     elif field_name == "psadt_months" and not _is_present(value):
         value = field_values.get("psadt_at_bcr")
     elif field_name == "pathologic_stage" and not _is_present(value):

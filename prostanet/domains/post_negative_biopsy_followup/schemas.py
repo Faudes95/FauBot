@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from prostanet.shared.contracts import FieldSpec, module_schema
+from prostanet.shared.dre import DRE_FINDING_OPTIONS
 
 
 POST_NEGATIVE_BIOPSY_SCHEMA = module_schema(
@@ -15,7 +16,7 @@ POST_NEGATIVE_BIOPSY_SCHEMA = module_schema(
         FieldSpec("pirads_score", "Resultado de resonancia magnética multiparamétrica", "select", options=["0", "2", "3", "4", "5"], default="0", group="Imagen actual", group_order=2, clinical_role="decision_refiner", evidence_tags=["mpmri"]),
         FieldSpec("post_biopsy_mri", "Resonancia magnética posterior a biopsia", "select", options=["0", "1"], default="0", group="Imagen actual", group_order=2, clinical_role="decision_refiner", evidence_tags=["mpmri"]),
         FieldSpec("persistent_lesion_signal", "Persistencia de lesión sospechosa", "select", options=["0", "1"], default="0", group="Imagen actual", group_order=2, clinical_role="decision_refiner", evidence_tags=["mpmri"]),
-        FieldSpec("dre_suspicious", "Tacto rectal sospechoso", "select", options=["0", "1"], default="0", group="Exploración clínica", group_order=3, clinical_role="required", evidence_tags=["nccn_primary"]),
+        FieldSpec("dre_finding", "Hallazgo al tacto rectal (estadio T)", "select", options=DRE_FINDING_OPTIONS, default="Normal", group="Exploración clínica", group_order=3, clinical_role="required", evidence_tags=["nccn_primary"]),
         FieldSpec("years_since_negative_biopsy", "Años desde la biopsia benigna", "number", default=1, group="Biopsia previa", group_order=4, clinical_role="required", unit="años", evidence_tags=["negative_biopsy_followup"]),
         FieldSpec("prior_biopsy_date", "Fecha de la biopsia previa", "date", group="Biopsia previa", group_order=4, clinical_role="decision_refiner", evidence_tags=["negative_biopsy_followup"]),
         FieldSpec("prior_biopsy_type", "Tipo de biopsia previa", "select", options=["Sistemática", "Dirigida", "Fusión", "Desconocida"], default="Sistemática", group="Biopsia previa", group_order=4, clinical_role="decision_refiner", evidence_tags=["negative_biopsy_followup"]),
