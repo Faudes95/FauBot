@@ -20,10 +20,10 @@ MHSPC_STATES = {
 }
 
 VISIBLE_TRIALS_BY_STATE = {
-    "mcspc_low_volume_sync_oligo": {"ARANOTE", "ARCHES", "TITAN", "ENZAMET", "STAMPEDE"},
-    "mcspc_oligo_metachronous": {"ARANOTE", "ARCHES", "TITAN", "ENZAMET"},
-    "mcspc_high_volume_sync": {"ARANOTE", "ARASENS", "PEACE-1", "CHAARTED", "LATITUDE"},
-    "mcspc_high_volume_metachronous": {"ARANOTE", "ARASENS", "CHAARTED"},
+    "mcspc_low_volume_sync_oligo": {"AMPLITUDE", "ARANOTE", "ARCHES", "TITAN", "ENZAMET", "STAMPEDE"},
+    "mcspc_oligo_metachronous": {"AMPLITUDE", "ARANOTE", "ARCHES", "TITAN", "ENZAMET"},
+    "mcspc_high_volume_sync": {"AMPLITUDE", "ARANOTE", "ARASENS", "PEACE-1", "CHAARTED", "LATITUDE"},
+    "mcspc_high_volume_metachronous": {"AMPLITUDE", "ARANOTE", "ARASENS", "CHAARTED"},
 }
 DOCETAXEL_TRIPLETS = {"ADT_DOCETAXEL_DAROLUTAMIDE", "ADT_DOCETAXEL_ABIRATERONE"}
 
@@ -348,6 +348,14 @@ def build_visible_mhspc_trial_matches(
             reason = "STAMPEDE respalda el uso de RT al primario en enfermedad metastásica de bajo volumen sincrónica."
         elif trial == "ARANOTE":
             reason = "ARANOTE respalda doblete con darolutamida en mHSPC, incluyendo subgrupos de alto y bajo volumen."
+        elif trial == "AMPLITUDE":
+            hrr_positive = str(payload.get("hrr_status") or payload.get("hrr_overall") or "").strip().lower() in {"positivo", "positive", "hrr+", "mutated"}
+            match = hrr_positive
+            reason = (
+                "AMPLITUDE se correlaciona con mCSPC/mHSPC HRR+ candidato a PARP + abiraterona."
+                if match
+                else "AMPLITUDE requiere alteracion HRR trazable antes de considerar PARP en mCSPC/mHSPC."
+            )
         elif trial in {"ARCHES", "TITAN", "ENZAMET"}:
             reason = "Ensayo concordante con intensificación hormonal en mHSPC."
         elif trial == "CHAARTED":

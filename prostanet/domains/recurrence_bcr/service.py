@@ -141,6 +141,7 @@ class RecurrenceBCRService:
                     )
                 )
                 trials.append({"trial": "EMBARK", "match": True})
+                trials.append({"trial": "PRESTO / AFT-19", "match": bool(nccn["high_risk_bcr2"]), "reason": "Ensayo contextual para intensificacion finita de ADT en BCR M0 de alto riesgo."})
             not_recommended.extend([
                 "No exponga opciones sistémicas de segunda recurrencia bioquímica cuando no se cumplen los criterios del escenario.",
                 "No trate apalutamida más terapia de privación androgénica como opción rutinaria de segunda recurrencia bioquímica sin una ruta fuente equivalente a la base primaria de la guía.",

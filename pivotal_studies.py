@@ -27,6 +27,15 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 from datetime import datetime
+from prostanet.domains.evidence_registry.pivotal_catalog import (
+    build_flagship_patient_suite,
+    build_pivotal_alias_index,
+    derive_contraindication_flags,
+    enhance_legacy_pivotal_studies,
+    get_pivotal_profile,
+    missing_required_inputs,
+    normalize_study_name,
+)
 from prostanet.domains.patient_tracking.mhspc_evidence import (
     build_triplet_decision,
     is_mhspc_state,
@@ -61,6 +70,7 @@ POST_RP_SALVAGE_TRIAL_NAMES = {
     "RAVES",
     "RTOG 9601",
     "SPPORT",
+    "PRESTO / AFT-19",
 }
 
 # Mapeo ISUP <-> Gleason
@@ -995,10 +1005,11 @@ PIVOTAL_STUDIES: list[dict[str, Any]] = [
     },
 ]
 
-# Indice por nombre para busquedas rapidas
-_STUDY_INDEX: dict[str, dict[str, Any]] = {
-    s["name"].upper(): s for s in PIVOTAL_STUDIES
-}
+# El catalogo modular amplifica la lista legacy sin romper contratos existentes.
+PIVOTAL_STUDIES = enhance_legacy_pivotal_studies(PIVOTAL_STUDIES)
+
+# Indice por nombre y aliases para busquedas rapidas.
+_STUDY_INDEX: dict[str, dict[str, Any]] = build_pivotal_alias_index(PIVOTAL_STUDIES)
 
 
 # ===========================================================================
@@ -1019,7 +1030,7 @@ def get_study_details(study_name: str) -> Optional[dict[str, Any]]:
     dict | None
         Diccionario completo del estudio, o None si no se encuentra.
     """
-    result = _STUDY_INDEX.get(study_name.upper().strip())
+    result = _STUDY_INDEX.get(normalize_study_name(study_name))
     if result is None:
         logger.warning("Estudio '%s' no encontrado en la base de datos pivotal.", study_name)
     return result
@@ -1203,6 +1214,18 @@ def match_patient_to_studies(patient_data: dict[str, Any]) -> list[dict[str, Any
     hrr_status = patient_data.get("hrr_status", "Desconocido")
     msi_status = patient_data.get("msi_status", "Estable")
     psma_result = patient_data.get("psma_pet_result", "No realizado")
+    brca_status = str(
+        patient_data.get("brca_status")
+        or patient_data.get("brca2_status")
+        or patient_data.get("brca1_status")
+        or "Desconocido"
+    )
+    pten_loss = _coerce_bool(patient_data.get("pten_loss"))
+    if pten_loss is None:
+        pten_loss = str(patient_data.get("pten_status", "")).strip().lower() in {"loss", "lost", "perdida", "pérdida", "positivo", "positive"}
+    soft_tissue_metastases = _coerce_bool(patient_data.get("soft_tissue_metastases"))
+    if soft_tissue_metastases is None:
+        soft_tissue_metastases = str(patient_data.get("metastasis_site", "")).strip().lower() in {"visceral", "liver", "higado", "hígado", "lung", "pulmon", "pulmón", "soft_tissue"}
     prior_prostatectomy = patient_data.get("prior_prostatectomy", False)
     salvage_local_feasible = _coerce_bool(patient_data.get("salvage_local_feasible"))
     bone_mets = patient_data.get("bone_metastases")
@@ -1340,6 +1363,12 @@ def match_patient_to_studies(patient_data: dict[str, Any]) -> list[dict[str, Any
             else:
                 failed.append("Docetaxel previo: No (no cumple, estudio requiere docetaxel previo)")
 
+        if criteria.get("no_prior_docetaxel"):
+            if has_prior_docetaxel:
+                failed.append("Docetaxel previo: Si (no cumple, estudio requiere taxane-naive)")
+            else:
+                met.append("Docetaxel previo: No (cumple taxane-naive)")
+
         # --- 13. HRR (para PROfound) ---
         if criteria.get("hrr_positive"):
             if hrr_status == "Positivo":
@@ -1348,6 +1377,26 @@ def match_patient_to_studies(patient_data: dict[str, Any]) -> list[dict[str, Any
                 met.append("HRR: Desconocido (requiere prueba genomica para confirmar elegibilidad)")
             else:
                 failed.append("HRR: Negativo (no cumple, estudio requiere alteracion HRR)")
+
+        if criteria.get("brca_positive"):
+            if any(token in brca_status.lower() for token in ["positivo", "positive", "brca1", "brca2", "+"]):
+                met.append(f"BRCA: {brca_status} (cumple)")
+            elif brca_status.lower() in {"desconocido", "unknown", ""}:
+                met.append("BRCA: Desconocido (requiere prueba para confirmar elegibilidad)")
+            else:
+                failed.append(f"BRCA: {brca_status} (no cumple, estudio requiere BRCA alterado)")
+
+        if criteria.get("pten_loss"):
+            if pten_loss:
+                met.append("PTEN: perdida documentada (cumple)")
+            else:
+                failed.append("PTEN: no hay perdida documentada (no cumple)")
+
+        if criteria.get("soft_tissue_metastases"):
+            if soft_tissue_metastases:
+                met.append("Metastasis de partes blandas/extrapelvicas: presentes (cumple)")
+            else:
+                failed.append("Metastasis de partes blandas/extrapelvicas: no documentadas (no cumple)")
 
         # --- 14. MSI-H (para KEYNOTE-158) ---
         if criteria.get("msi_high"):
@@ -1366,6 +1415,9 @@ def match_patient_to_studies(patient_data: dict[str, Any]) -> list[dict[str, Any
                 met.append("PSMA-PET: No realizado (requiere estudio para confirmar elegibilidad)")
             else:
                 failed.append("PSMA-PET: Negativo (no cumple, estudio requiere PSMA+)")
+
+        if criteria.get("psma_pet_positive") and _coerce_bool(patient_data.get("psma_negative_dominant_lesions")) is True:
+            failed.append("PSMA-PET: lesiones dominantes PSMA-negativas (no cumple seleccion para radioligando)")
 
         # --- 16. Metastasis oseas (ALSYMPCA) ---
         ok, detail = _check_boolean_criterion(
@@ -1419,6 +1471,32 @@ def match_patient_to_studies(patient_data: dict[str, Any]) -> list[dict[str, Any
             if study_name == "EMPIRE-1" and salvage_local_feasible is False:
                 failed.append("La factibilidad local ya no parece dominante; EMPIRE-1 es más útil cuando la planificación de salvage sigue abierta")
 
+        profile = get_pivotal_profile(study_name)
+        missing_inputs: list[str] = []
+        safety_flags: list[dict[str, str]] = []
+        clinical_gap_reason = ""
+        flagship_reference: dict[str, Any] = {}
+        adverse_event_watchlist: list[str] = []
+        if profile:
+            missing_inputs = missing_required_inputs(profile, patient_data)
+            safety_flags = derive_contraindication_flags(profile, patient_data)
+            adverse_event_watchlist = list(profile.get("adverse_event_watchlist") or [])
+            clinical_gap_reason = str(profile.get("clinical_gap_reason") or "")
+            flagship = dict(profile.get("flagship_patient") or {})
+            flagship_reference = {
+                "archetype_id": flagship.get("id", ""),
+                "summary": flagship.get("summary", ""),
+                "expected": flagship.get("expected", {}),
+            }
+            if missing_inputs:
+                failed.append("Entradas clinicas decisivas faltantes: " + ", ".join(missing_inputs))
+            hard_stops = [flag for flag in safety_flags if flag.get("severity") == "hard_stop"]
+            if hard_stops:
+                failed.append(
+                    "Seguridad clinica: "
+                    + "; ".join(flag.get("label", "bloqueo") for flag in hard_stops)
+                )
+
         # -- Calcular score de elegibilidad --
         total_criteria = len(met) + len(failed)
         match_score = len(met) / total_criteria if total_criteria > 0 else 0.0
@@ -1430,6 +1508,11 @@ def match_patient_to_studies(patient_data: dict[str, Any]) -> list[dict[str, Any
             "criteria_met": met,
             "criteria_failed": failed,
             "eligible": is_eligible,
+            "missing_required_inputs": missing_inputs,
+            "contraindication_flags": safety_flags,
+            "adverse_event_watchlist": adverse_event_watchlist,
+            "clinical_gap_reason": clinical_gap_reason if (missing_inputs or safety_flags or not is_eligible) else "",
+            "flagship_patient_match": flagship_reference,
         })
 
     # Ordenar por score descendente, elegibles primero
@@ -1652,6 +1735,36 @@ def _wrap_text(lines: list[str], text: str, indent: str = "    ", width: int = 7
 # ===========================================================================
 # UTILIDADES ADICIONALES
 # ===========================================================================
+
+def run_flagship_patient_suite(study_names: list[str] | None = None) -> list[dict[str, Any]]:
+    """Ejecuta los pacientes insignia sinteticos contra el motor pivotal."""
+    requested = {normalize_study_name(name) for name in study_names} if study_names else None
+    suite_results: list[dict[str, Any]] = []
+    for case in build_flagship_patient_suite():
+        if requested and case["study_key"] not in requested and normalize_study_name(case["study_name"]) not in requested:
+            continue
+        matches = match_patient_to_studies(case["payload"])
+        target = next(
+            (
+                item for item in matches
+                if normalize_study_name((item.get("study") or {}).get("name")) == case["study_key"]
+            ),
+            None,
+        )
+        suite_results.append({
+            "study_name": case["study_name"],
+            "study_key": case["study_key"],
+            "eligible": bool(target and target.get("eligible")),
+            "match_score": target.get("match_score") if target else 0,
+            "criteria_failed": target.get("criteria_failed", []) if target else ["Estudio no encontrado en motor pivotal"],
+            "missing_required_inputs": target.get("missing_required_inputs", []) if target else case["required_inputs"],
+            "contraindication_flags": target.get("contraindication_flags", []) if target else [],
+            "adverse_event_watchlist": target.get("adverse_event_watchlist", []) if target else case["adverse_event_watchlist"],
+            "clinical_gap_reason": target.get("clinical_gap_reason", "") if target else "No ingerido",
+            "expected": case["expected"],
+        })
+    return suite_results
+
 
 def get_available_scenarios() -> list[str]:
     """Retorna la lista de escenarios clinicos disponibles."""
