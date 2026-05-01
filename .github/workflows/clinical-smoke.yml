@@ -24,7 +24,7 @@ jobs:
     timeout-minutes: 20
     env:
       PYTHONDONTWRITEBYTECODE: "1"
-      PROSTANET_DB_PATH: ${{ runner.temp }}/prostanet_ci.db
+      PROSTANET_DB_PATH: /tmp/prostanet_ci.db
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
