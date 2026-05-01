@@ -57,7 +57,7 @@ STATE_CLASSIFIER_SCHEMA = module_schema(
         ),
         FieldSpec(
             "bcr2",
-            "Segunda recurrencia bioquímica tras tratamiento local",
+            "Recurrencia Bioquímica tras tratamiento local",
             "select",
             options=["0", "1"],
             default="0",
