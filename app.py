@@ -101,6 +101,11 @@ FOLLOWUP_NUMERIC_FIELDS = (
     "hemoglobin",
     "ecog",
     "pain",
+    # Capturas dinámicas de carga tumoral en seguimiento — habilitan detección
+    # de oligoprogresión y validación de volumen CHAARTED en mHSPC controlado.
+    "metastasis_count",
+    "lesion_count",
+    "visceral_mets_count",
 )
 
 app.config.update(DEFAULT_APP_CONFIG)

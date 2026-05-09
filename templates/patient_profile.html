@@ -1,4 +1,5 @@
 {% extends "layouts/base_clinical.html" %}
+{% from "components/psa_history_table.html" import psa_history_table %}
 
 {% block head_extra %}
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@2.2.1/dist/chartjs-plugin-annotation.min.js"></script>
@@ -3696,6 +3697,62 @@
             </div>
         </details>
         {% endif %}
+
+        <!-- ═══════════════════════════════════════════════════════════════════ -->
+        <!-- 2.b TORRE APE — Historial por estadio + bitácora + dual-view       -->
+        <!-- Componente reutilizable; hidratado por psa_history_crud.js        -->
+        <!-- Polling de snapshot dinámico activado vía data-psa-torre-poll.    -->
+        <!-- ═══════════════════════════════════════════════════════════════════ -->
+        <div data-psa-torre-poll data-patient-id="{{ patient.identity.id }}">
+            <!-- Toggle dual-view: cambia la torre entre línea terapéutica y estadio clínico.
+                 El backend ya ofrece /api/patients/<id>/psa_torre?view=stage|line|both;
+                 el JS interpreta el toggle y reescribe la consulta. -->
+            <div class="flex items-center justify-between mb-3 mt-4">
+                <h2 class="text-base font-semibold text-cyan-200 flex items-center gap-2">
+                    <span aria-hidden="true">📊</span> Torre de control APE
+                </h2>
+                <div class="psa-torre-toggle" role="group" aria-label="Modo de vista de la torre">
+                    <button type="button" data-torre-view="line" aria-pressed="true">Por línea</button>
+                    <button type="button" data-torre-view="stage" aria-pressed="false">Por estadio</button>
+                    <button type="button" data-torre-view="both" aria-pressed="false">Ambos</button>
+                </div>
+            </div>
+
+            {{ psa_history_table(patient.identity.id, editable=True, container_id="psaHistoryTablePerfil") }}
+
+            <!-- Tarjetas de cinética: se hidratan vía evento `psa-torre-render` -->
+            <div id="psaKineticsCards" class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 mt-4">
+                <div class="kinetics-card" data-metric="current_psa">
+                    <span class="kinetics-label">PSA actual</span>
+                    <span class="kinetics-value" data-role="value">—</span>
+                    <span class="kinetics-hint" data-role="hint">ng/mL</span>
+                </div>
+                <div class="kinetics-card" data-metric="psa_nadir">
+                    <span class="kinetics-label">Nadir PSA</span>
+                    <span class="kinetics-value" data-role="value">—</span>
+                    <span class="kinetics-hint" data-role="hint">ng/mL</span>
+                </div>
+                <div class="kinetics-card" data-metric="psa_velocity">
+                    <span class="kinetics-label">Velocity</span>
+                    <span class="kinetics-value" data-role="value">—</span>
+                    <span class="kinetics-hint" data-role="hint">ng/mL/año</span>
+                </div>
+                <div class="kinetics-card" data-metric="psadt_months">
+                    <span class="kinetics-label">PSADT</span>
+                    <span class="kinetics-value" data-role="value">—</span>
+                    <span class="kinetics-hint" data-role="hint">meses</span>
+                </div>
+                <div class="kinetics-card" data-metric="flags">
+                    <span class="kinetics-label">Flags clínicos</span>
+                    <span class="kinetics-value" data-role="value">—</span>
+                    <span class="kinetics-hint" data-role="hint">PCWG3 / Phoenix / ASTRO / Bounce</span>
+                </div>
+            </div>
+            <p class="text-[11px] text-slate-500 mt-2">
+                Snapshot recomputado tras cada CRUD; polling cada 30 s mientras la pestaña está activa.
+                <span data-role="last-updated">Última actualización: —</span>
+            </p>
+        </div>
 
         <!-- ═══════════════════════════════════════════════════════════════════ -->
         <!-- 3. TIMELINE DE ESCENARIOS CLÍNICOS (Patient Journey)              -->
@@ -7488,5 +7545,89 @@
         }
 
         window.clinicalPresentation?.normalizeDocument();
+
+        // ── Torre APE: hidratar kinetics cards desde el snapshot ────────────
+        // Escucha el evento `psa-torre-render` que dispara psa_torre_polling.js
+        // cada vez que el backend produce un snapshot nuevo (computed_at cambia).
+        (function () {
+            const cards = document.getElementById('psaKineticsCards');
+            const lastUpdated = document.querySelector('[data-psa-torre-poll] [data-role="last-updated"]');
+            if (!cards) return;
+            function set(metric, value, hint) {
+                const card = cards.querySelector(`.kinetics-card[data-metric="${metric}"]`);
+                if (!card) return;
+                const v = card.querySelector('[data-role="value"]');
+                const h = card.querySelector('[data-role="hint"]');
+                if (v) v.textContent = value;
+                if (h && hint !== undefined) h.textContent = hint;
+                if (metric === 'flags') {
+                    if (String(value).indexOf('PCWG3') !== -1 || String(value).indexOf('Phoenix') !== -1) {
+                        card.classList.add('psa-flag-active');
+                    } else {
+                        card.classList.remove('psa-flag-active');
+                    }
+                }
+            }
+            window.addEventListener('psa-torre-render', (ev) => {
+                const snap = ev.detail && ev.detail.snapshot;
+                if (!snap) return;
+                set('current_psa', snap.psa_velocity !== null && snap.kinetics_payload_json
+                    ? (() => { try { return JSON.parse(snap.kinetics_payload_json).point_count > 0
+                        ? '—' : '—'; } catch { return '—'; } })() : '—');
+                // Fallback: usar last point del backend más adelante (PSA actual ya viene en torre).
+                set('psa_nadir', snap.psa_nadir !== null && snap.psa_nadir !== undefined ? Number(snap.psa_nadir).toFixed(2) : '—',
+                    snap.psa_nadir_date ? `desde ${snap.psa_nadir_date}` : 'ng/mL');
+                set('psa_velocity', snap.psa_velocity !== null && snap.psa_velocity !== undefined ? Number(snap.psa_velocity).toFixed(2) : '—', 'ng/mL/año');
+                set('psadt_months', snap.psadt_months !== null && snap.psadt_months !== undefined ? Number(snap.psadt_months).toFixed(1) : '—', 'meses');
+                const flags = [];
+                if (snap.pcwg3_progression_flag) flags.push('PCWG3');
+                if (snap.phoenix_bcr_flag) flags.push('Phoenix');
+                if (snap.astro_bcr_flag) flags.push('ASTRO');
+                if (snap.bounce_post_rt_flag) flags.push('Bounce');
+                set('flags', flags.length ? flags.join(' · ') : 'sin alertas');
+                if (lastUpdated) lastUpdated.textContent = `Última actualización: ${snap.computed_at || '—'}`;
+                // PSA actual: tomar último punto vía endpoint torre.
+                fetch(`/api/patients/{{ patient.identity.id }}/psa_torre?view=line`)
+                    .then((r) => r.json())
+                    .then((d) => {
+                        const m = d && d.torre && d.torre.by_line && d.torre.by_line.metrics;
+                        if (m && m.current_psa !== null && m.current_psa !== undefined) {
+                            set('current_psa', Number(m.current_psa).toFixed(2), 'ng/mL');
+                        }
+                    }).catch(() => {});
+            });
+        })();
+
+
+        // ── Torre APE: toggle dual-view (line | stage | both) ─────────────
+        // Persiste la elección en localStorage para mantenerla entre reloads.
+        // Cuando cambia, refetch /api/patients/<id>/psa_torre con la vista.
+        (function () {
+            const buttons = document.querySelectorAll('[data-torre-view]');
+            if (!buttons.length) return;
+            const KEY = 'psa-torre-view';
+            const saved = localStorage.getItem(KEY) || 'line';
+            const patientId = Number('{{ patient.identity.id }}');
+
+            function setActive(view) {
+                buttons.forEach((b) => b.setAttribute('aria-pressed', b.dataset.torreView === view ? 'true' : 'false'));
+                localStorage.setItem(KEY, view);
+                // Refetch torre y disparar evento para que listeners (Chart.js) actualicen.
+                fetch(`/api/patients/${patientId}/psa_torre?view=${encodeURIComponent(view)}`)
+                    .then((r) => r.json())
+                    .then((d) => {
+                        window.dispatchEvent(new CustomEvent('psa-torre-view-changed', {
+                            detail: { view, torre: d.torre || {} }
+                        }));
+                    })
+                    .catch((e) => console.warn('[torre-toggle] error:', e));
+            }
+            buttons.forEach((b) => b.addEventListener('click', () => setActive(b.dataset.torreView)));
+            setActive(saved);
+        })();
     </script>
+    <!-- Torre APE: CRUD inline + polling síncrono + auto-classify chips -->
+    <script src="{{ url_for('static', filename='js/psa_history_crud.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='js/psa_torre_polling.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='js/auto_classify.js') }}" defer></script>
 {% endblock %}

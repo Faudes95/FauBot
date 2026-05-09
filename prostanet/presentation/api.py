@@ -3136,3 +3136,178 @@ def ai_terminal_care(patient_id: int):
         return jsonify({"success": True, "terminal_care": assessment})
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Torre de control APE — endpoints CRUD + auditoría + snapshot dinámico
+# ─────────────────────────────────────────────────────────────────────────────
+# Permiten al asistente clínico capturar y editar el historial de APE etiquetado
+# por estadio. Cada operación dispara un recálculo síncrono de cinética
+# (velocity, PSADT, nadir) y los detectores PCWG3, Phoenix, ASTRO y bounce.
+#
+# El campo `actor` se toma del header `X-Actor`; si la app integra auth en el
+# futuro reemplazar por `current_user`.
+# ════════════════════════════════════════════════════════════════════════════
+
+def _resolve_actor() -> str:
+    return request.headers.get("X-Actor") or "system"
+
+
+@modular_api.route("/api/patients/<int:patient_id>/psa_history", methods=["POST"])
+def create_psa_history_point(patient_id: int):
+    """Inserta un punto PSA etiquetado por estadio."""
+    from prostanet.domains.patient_tracking.psa_history_service import add_psa_point
+
+    payload = request.get_json(silent=True) or {}
+    try:
+        result = add_psa_point(
+            patient_id=patient_id,
+            value=payload.get("value"),
+            sample_date=payload.get("sample_date"),
+            clinical_state=payload.get("clinical_state"),
+            disease_phase=payload.get("disease_phase"),
+            line_label=payload.get("line_label"),
+            source=payload.get("source", "laboratory"),
+            actor=_resolve_actor(),
+            reason=payload.get("reason"),
+        )
+        return jsonify({"success": True, **result}), 201
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route(
+    "/api/patients/<int:patient_id>/psa_history/<int:point_id>",
+    methods=["PUT"],
+)
+def update_psa_history_point(patient_id: int, point_id: int):
+    """Actualiza fields de un punto PSA. `reason` es obligatoria (audit)."""
+    from prostanet.domains.patient_tracking.psa_history_service import update_psa_point
+
+    payload = request.get_json(silent=True) or {}
+    reason = payload.pop("reason", None)
+    try:
+        result = update_psa_point(
+            point_id=point_id,
+            actor=_resolve_actor(),
+            reason=reason,
+            **{k: v for k, v in payload.items()
+               if k in {"value", "sample_date", "clinical_state",
+                        "disease_phase", "line_label", "source"}},
+        )
+        return jsonify({"success": True, **result}), 200
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route(
+    "/api/patients/<int:patient_id>/psa_history/<int:point_id>",
+    methods=["DELETE"],
+)
+def delete_psa_history_point(patient_id: int, point_id: int):
+    """Soft-delete del punto. Razón obligatoria por trazabilidad clínica."""
+    from prostanet.domains.patient_tracking.psa_history_service import delete_psa_point
+
+    reason = request.args.get("reason") or (request.get_json(silent=True) or {}).get("reason")
+    try:
+        result = delete_psa_point(point_id=point_id, actor=_resolve_actor(), reason=reason)
+        return jsonify({"success": True, **result}), 200
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/patients/<int:patient_id>/psa_history", methods=["GET"])
+def list_psa_history_points(patient_id: int):
+    from prostanet.domains.patient_tracking.psa_history_service import list_psa_points
+
+    include_deleted = request.args.get("include_deleted", "false").lower() in {"true", "1", "yes"}
+    try:
+        points = list_psa_points(patient_id, include_deleted=include_deleted)
+        return jsonify({"success": True, "points": points, "count": len(points)})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/patients/<int:patient_id>/psa_kinetics_snapshot", methods=["GET"])
+def get_psa_kinetics_snapshot(patient_id: int):
+    """Devuelve el snapshot materializado (velocity, PSADT, nadir + flags).
+
+    Si no existe (paciente sin PSA), recalcula on-demand para no devolver 404.
+    """
+    from prostanet.domains.patient_tracking.psa_history_service import (
+        get_kinetics_snapshot, recompute_psa_kinetics,
+    )
+    try:
+        snap = get_kinetics_snapshot(patient_id)
+        if snap is None:
+            recompute_psa_kinetics(patient_id)
+            snap = get_kinetics_snapshot(patient_id)
+        return jsonify({"success": True, "snapshot": snap})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/patients/<int:patient_id>/psa_audit_log", methods=["GET"])
+def get_psa_audit_log(patient_id: int):
+    """Bitácora de cambios sobre puntos PSA (audit trail clínico)."""
+    from prostanet.domains.patient_tracking.psa_history_service import list_audit_log
+
+    try:
+        limit = int(request.args.get("limit", 100))
+    except ValueError:
+        limit = 100
+    try:
+        entries = list_audit_log(patient_id, limit=max(1, min(limit, 500)))
+        return jsonify({"success": True, "entries": entries, "count": len(entries)})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@modular_api.route("/api/patients/<int:patient_id>/psa_torre", methods=["GET"])
+def get_psa_torre_view(patient_id: int):
+    """Torre de control APE — vista dual (por estadio + por línea terapéutica).
+
+    Query: `?view=stage|line|both` (default: both).
+    Combina los datos canónicos de `biomarker_longitudinal` con la cinética
+    materializada en `psa_kinetics_snapshot`. Mantiene compatibilidad con
+    `/api/patients/<id>/response-visualization` que ya existe; este endpoint es
+    el contrato directo para el frontend de la torre.
+    """
+    from prostanet.domains.patient_tracking.psa_line_monitor import (
+        build_psa_by_treatment_line, build_psa_by_stage,
+    )
+    from prostanet.domains.patient_tracking.psa_history_service import (
+        get_kinetics_snapshot, recompute_psa_kinetics,
+    )
+    from tracking_db import get_full_record
+
+    view = (request.args.get("view") or "both").lower()
+    if view not in {"stage", "line", "both"}:
+        return jsonify({"success": False, "error": "view debe ser stage|line|both"}), 400
+
+    try:
+        record = get_full_record(patient_id)
+        if not record:
+            return jsonify({"success": False, "error": "Paciente no encontrado."}), 404
+
+        payload: dict = {"view": view}
+        if view in ("line", "both"):
+            payload["by_line"] = build_psa_by_treatment_line(record)
+        if view in ("stage", "both"):
+            payload["by_stage"] = build_psa_by_stage(record)
+
+        snap = get_kinetics_snapshot(patient_id)
+        if snap is None:
+            recompute_psa_kinetics(patient_id)
+            snap = get_kinetics_snapshot(patient_id)
+        payload["kinetics_snapshot"] = snap
+
+        return jsonify({"success": True, "torre": payload})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500

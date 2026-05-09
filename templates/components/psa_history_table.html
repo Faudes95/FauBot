@@ -1,0 +1,173 @@
+{#
+  components/psa_history_table.html
+  ----------------------------------
+  Macro Jinja reutilizable para el panel "Historial APE por estadio".
+  Se incluye desde:
+    - clinical_wizard.html (captura desde el asistente clínico)
+    - patient_profile.html (vista expandida sobre el perfil)
+
+  Parámetros:
+    patient_id   — id numérico del paciente, usado por el JS para los endpoints CRUD.
+    editable     — bool, habilita inputs y botones de acción (default True).
+    container_id — id HTML único; permite tener varias instancias en la misma página.
+
+  Datos: la tabla se hidrata por JS (psa_history_crud.js) consumiendo
+    GET /api/patients/<id>/psa_history. NO se pre-renderiza server-side para
+    evitar inconsistencias con el snapshot dinámico.
+
+  Estados visuales (chips): clases .stage-chip-{state} en ui_theme.css.
+#}
+{% macro psa_history_table(patient_id, editable=True, container_id="psaHistoryTable") -%}
+<section
+  id="{{ container_id }}"
+  class="psa-history-section pn-surface rounded-3xl border border-slate-800 bg-slate-950/40 p-5 mt-6"
+  data-patient-id="{{ patient_id }}"
+  data-editable="{{ 'true' if editable else 'false' }}"
+  aria-labelledby="{{ container_id }}-heading"
+>
+  <header class="flex items-start justify-between flex-wrap gap-3 mb-4">
+    <div>
+      <h3 id="{{ container_id }}-heading" class="text-lg font-semibold text-cyan-200 flex items-center gap-2">
+        <span aria-hidden="true">🧪</span>
+        Historial APE por estadio
+        <span class="audit-badge" data-role="audit-count" title="Cambios registrados en bitácora">0</span>
+      </h3>
+      <p class="text-xs text-slate-400 mt-1">
+        Captura múltiples APEs etiquetados con su estadio clínico. Los puntos
+        alimentan la torre de control y los detectores PCWG3 / Phoenix / ASTRO.
+      </p>
+    </div>
+    {% if editable %}
+    <div class="flex items-center gap-2 flex-wrap">
+      <button type="button" class="pn-btn pn-btn-primary" data-action="add-row">
+        + Agregar PSA
+      </button>
+      <button type="button" class="pn-btn pn-btn-ghost" data-action="show-audit">
+        📋 Bitácora
+      </button>
+      <button type="button" class="pn-btn pn-btn-ghost" data-action="export-csv">
+        ⬇ CSV
+      </button>
+    </div>
+    {% endif %}
+  </header>
+
+  <div class="overflow-x-auto">
+    <table class="psa-history-table w-full text-sm" role="grid" aria-label="Historial APE por estadio">
+      <thead>
+        <tr class="text-left text-xs uppercase tracking-wide text-slate-400 border-b border-slate-700">
+          <th scope="col" class="py-2 px-2">Fecha</th>
+          <th scope="col" class="py-2 px-2">PSA (ng/mL)</th>
+          <th scope="col" class="py-2 px-2">Estadio</th>
+          <th scope="col" class="py-2 px-2">Línea terapéutica</th>
+          <th scope="col" class="py-2 px-2">Origen</th>
+          <th scope="col" class="py-2 px-2">Notas</th>
+          {% if editable %}<th scope="col" class="py-2 px-2 text-right">Acc.</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody data-role="rows">
+        <tr data-empty>
+          <td colspan="{{ 7 if editable else 6 }}" class="text-center text-slate-500 italic py-8">
+            Sin puntos PSA capturados todavía.
+            {% if editable %}Pulsa <strong>+ Agregar PSA</strong>.{% endif %}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  {% if editable %}
+  {# Form inline para agregar/editar fila. Se muestra como modal. #}
+  <dialog data-role="psa-edit-dialog" class="pn-dialog rounded-2xl p-5 bg-slate-900 text-slate-100 border border-cyan-700/40 w-[min(560px,92vw)]">
+    <form data-role="psa-edit-form" class="space-y-3">
+      <h4 class="text-base font-semibold text-cyan-200" data-role="dialog-title">Agregar punto PSA</h4>
+      <input type="hidden" name="point_id" />
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <label class="block">
+          <span class="text-xs text-slate-400">Fecha de muestra *</span>
+          <input type="date" name="sample_date" required class="pn-input w-full" />
+        </label>
+        <label class="block">
+          <span class="text-xs text-slate-400">PSA (ng/mL) *</span>
+          <input type="number" step="0.01" min="0" name="value" required class="pn-input w-full" />
+        </label>
+        <label class="block">
+          <span class="text-xs text-slate-400">Estadio clínico *</span>
+          <select name="clinical_state" required class="pn-input w-full">
+            <option value="">— elegir —</option>
+            <optgroup label="Diagnóstico">
+              <option value="diagnostic_workup">Diagnóstico inicial</option>
+              <option value="post_negative_biopsy_followup">Vigilancia post-biopsia</option>
+            </optgroup>
+            <optgroup label="Local">
+              <option value="post_prostatectomy">Post-prostatectomía</option>
+              <option value="recurrence_bcr">BCR / recurrencia bioquímica</option>
+              <option value="post_radiotherapy_or_local_salvage">Post-RT / Rescate local</option>
+            </optgroup>
+            <optgroup label="mHSPC">
+              <option value="mcspc_oligo_metachronous">mHSPC oligo metacrónico</option>
+              <option value="mcspc_low_volume_sync_oligo">mHSPC bajo vol. sincrónico</option>
+              <option value="mcspc_high_volume_sync">mHSPC alto vol. sincrónico</option>
+              <option value="mcspc_high_volume_metachronous">mHSPC alto vol. metacrónico</option>
+            </optgroup>
+            <optgroup label="CRPC">
+              <option value="adt_progression_verification">Verificación progresión ADT</option>
+              <option value="m0_crpc">m0 CRPC</option>
+              <option value="m1_crpc">m1 CRPC</option>
+              <option value="oligoprogression_post_systemic">Oligoprogresión</option>
+            </optgroup>
+          </select>
+        </label>
+        <label class="block">
+          <span class="text-xs text-slate-400">Línea terapéutica</span>
+          <input type="text" name="line_label" placeholder="ej. ADT + Docetaxel" class="pn-input w-full" />
+        </label>
+        <label class="block sm:col-span-2">
+          <span class="text-xs text-slate-400">Origen</span>
+          <select name="source" class="pn-input w-full">
+            <option value="laboratory">Laboratorio</option>
+            <option value="self_report">Autoreporte</option>
+            <option value="historical_import">Histórico importado</option>
+            <option value="intake">Intake</option>
+            <option value="followup">Seguimiento</option>
+          </select>
+        </label>
+        <label class="block sm:col-span-2">
+          <span class="text-xs text-slate-400">Razón del cambio (auditoría) *</span>
+          <input type="text" name="reason" required placeholder="ej. corrección de lab, dato nuevo, duplicado" class="pn-input w-full" />
+        </label>
+      </div>
+      <div class="flex items-center justify-end gap-2 pt-2">
+        <button type="button" class="pn-btn pn-btn-ghost" data-action="cancel-edit">Cancelar</button>
+        <button type="submit" class="pn-btn pn-btn-primary">Guardar</button>
+      </div>
+    </form>
+  </dialog>
+
+  {# Modal bitácora — listado tabular de cambios. #}
+  <dialog data-role="psa-audit-dialog" class="pn-dialog rounded-2xl p-5 bg-slate-900 text-slate-100 border border-amber-700/40 w-[min(720px,95vw)]">
+    <header class="flex items-center justify-between mb-3">
+      <h4 class="text-base font-semibold text-amber-200">📋 Bitácora APE</h4>
+      <button type="button" class="pn-btn pn-btn-ghost" data-action="close-audit">Cerrar</button>
+    </header>
+    <div class="overflow-y-auto max-h-[60vh]">
+      <table class="psa-audit-table w-full text-xs">
+        <thead>
+          <tr class="text-left uppercase tracking-wide text-slate-400 border-b border-slate-700">
+            <th class="py-2 px-2">Timestamp</th>
+            <th class="py-2 px-2">Operación</th>
+            <th class="py-2 px-2">Punto</th>
+            <th class="py-2 px-2">Actor</th>
+            <th class="py-2 px-2">Razón</th>
+            <th class="py-2 px-2">Antes → Después</th>
+          </tr>
+        </thead>
+        <tbody data-role="audit-rows">
+          <tr><td colspan="6" class="text-center text-slate-500 italic py-4">— sin entradas —</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </dialog>
+  {% endif %}
+</section>
+{%- endmacro %}

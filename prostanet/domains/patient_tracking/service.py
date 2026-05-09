@@ -72,6 +72,11 @@ STATE_SCOPE_MAP = {
     "mcspc_high_volume": "advanced",
     "m0_crpc": "advanced",
     "m1_crpc": "advanced",
+    # FAUBOT BUG-001 fix: oligoprogresión bajo terapia sistémica con castración
+    # confirmada cae al carril avanzado (NO diagnóstico). Sin esta línea el
+    # médico vería campos de wizard diagnóstico para un paciente CRPC con
+    # oligoprogresión, inválido clínicamente.
+    "oligoprogression_post_systemic": "advanced",
 }
 
 SCOPE_CONFIG = {
@@ -500,6 +505,9 @@ def _survival_fragment() -> RegistrationFragment:
         "mcspc_high_volume",
         "m0_crpc",
         "m1_crpc",
+        # FAUBOT BUG-004 fix: oligoprogresión también requiere captura de
+        # supervivencia y anclas longitudinales (es un subestado avanzado).
+        "oligoprogression_post_systemic",
     ]
     return _fragment(
         id="fragment_survival_status",

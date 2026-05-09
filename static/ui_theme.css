@@ -1188,3 +1188,157 @@ body {
     color: var(--pn-text-muted);
     line-height: 1.6;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Torre de control APE — captura por estadio + bitácora + dual-view chart
+   Colores semáforo por estadio clínico (mantener sincronizados con
+   STAGE_DISPLAY en psa_history_crud.js y psa_line_monitor.py).
+   ───────────────────────────────────────────────────────────────────── */
+.psa-history-section { color: #e2e8f0; }
+.psa-history-section h3 { font-family: inherit; }
+
+.psa-history-table th,
+.psa-audit-table th { font-weight: 600; }
+.psa-history-table td,
+.psa-audit-table td {
+    border-bottom: 1px solid rgba(51, 65, 85, 0.55);
+    vertical-align: middle;
+}
+.psa-history-table tr:hover td { background: rgba(15, 23, 42, 0.55); }
+
+.psa-history-table .pn-btn-icon {
+    background: transparent;
+    border: 1px solid rgba(71, 85, 105, 0.5);
+    border-radius: 8px;
+    padding: 4px 8px;
+    margin-left: 2px;
+    cursor: pointer;
+    transition: background 120ms ease;
+}
+.psa-history-table .pn-btn-icon:hover { background: rgba(56, 189, 248, 0.18); }
+
+.stage-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    border: 1px solid currentColor;
+    background: rgba(30, 41, 59, 0.4);
+}
+.stage-chip-localized        { color: #4ade80; }   /* verde */
+.stage-chip-bcr              { color: #facc15; }   /* amarillo */
+.stage-chip-mhspc            { color: #fb923c; }   /* naranja */
+.stage-chip-crpc             { color: #f87171; }   /* rojo */
+.stage-chip-oligoprogression { color: #c084fc; }   /* violeta */
+
+.origin-chip {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 6px;
+    background: rgba(51, 65, 85, 0.55);
+    font-size: 0.7rem;
+    color: #cbd5e1;
+}
+
+.audit-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.6rem;
+    height: 1.4rem;
+    padding: 0 0.4rem;
+    border-radius: 999px;
+    background: rgba(245, 158, 11, 0.18);
+    color: #fbbf24;
+    font-size: 0.72rem;
+    font-weight: 700;
+    margin-left: 0.4rem;
+    border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.audit-op {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.7rem;
+    padding: 1px 6px;
+    border-radius: 4px;
+}
+.audit-op-insert { background: rgba(34, 197, 94, 0.16); color: #4ade80; }
+.audit-op-update { background: rgba(56, 189, 248, 0.16); color: #38bdf8; }
+.audit-op-delete { background: rgba(239, 68, 68, 0.16); color: #f87171; }
+
+/* Diálogos modales del componente PSA. */
+.pn-dialog::backdrop { background: rgba(2, 6, 23, 0.78); backdrop-filter: blur(2px); }
+.pn-dialog[open]    { animation: pnDialogIn 160ms ease-out; }
+@keyframes pnDialogIn {
+    from { transform: translateY(8px); opacity: 0; }
+    to   { transform: translateY(0); opacity: 1; }
+}
+
+/* Tarjetas de cinética en la torre dual-view. */
+.kinetics-card {
+    border: 1px solid rgba(51, 65, 85, 0.6);
+    border-radius: 16px;
+    padding: 0.8rem 1rem;
+    background: rgba(15, 23, 42, 0.55);
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+.kinetics-card .kinetics-label { font-size: 0.7rem; text-transform: uppercase; color: #94a3b8; }
+.kinetics-card .kinetics-value { font-size: 1.4rem; font-weight: 700; color: #e0f2fe; }
+.kinetics-card .kinetics-hint  { font-size: 0.7rem; color: #64748b; }
+
+.psa-flag-active {
+    animation: pulseFlag 1.6s ease-in-out infinite;
+    border-color: rgba(248, 113, 113, 0.7);
+}
+@keyframes pulseFlag {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.5); }
+    50%      { box-shadow: 0 0 0 6px rgba(248, 113, 113, 0); }
+}
+
+/* Selector de vista dual de la torre. */
+.psa-torre-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
+    border: 1px solid rgba(56, 189, 248, 0.4);
+    border-radius: 999px;
+    overflow: hidden;
+    background: rgba(15, 23, 42, 0.6);
+}
+.psa-torre-toggle button {
+    padding: 4px 14px;
+    font-size: 0.78rem;
+    color: #94a3b8;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    transition: background 140ms ease, color 140ms ease;
+}
+.psa-torre-toggle button[aria-pressed="true"] {
+    background: rgba(56, 189, 248, 0.22);
+    color: #e0f2fe;
+}
+
+/* Toast neutral para feedback de operaciones CRUD. */
+.psa-toast {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    padding: 10px 16px;
+    border-radius: 12px;
+    background: rgba(15, 118, 110, 0.95);
+    color: #ecfdf5;
+    box-shadow: 0 10px 25px rgba(2, 6, 23, 0.55);
+    transform: translateY(20px);
+    opacity: 0;
+    transition: transform 220ms ease, opacity 220ms ease;
+    z-index: 9999;
+    font-size: 0.85rem;
+}
+.psa-toast-visible { transform: translateY(0); opacity: 1; }
