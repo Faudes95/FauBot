@@ -6,6 +6,7 @@ from prostanet.domains.post_negative_biopsy_followup.rules_eau import classify_p
 from prostanet.domains.post_negative_biopsy_followup.rules_nccn import classify_post_negative_biopsy
 from prostanet.domains.post_negative_biopsy_followup.schemas import POST_NEGATIVE_BIOPSY_SCHEMA
 from prostanet.shared.contracts import evaluation_result
+from prostanet.shared.dre import has_dre_documentation
 from prostanet.shared.recommendation_enrichment import enrich_evaluation_result
 
 
@@ -27,10 +28,7 @@ class PostNegativeBiopsyFollowupService:
         psa = float(payload.get("psa", 0) or 0)
         psad = float(payload.get("psad", 0) or 0)
         years_since_biopsy = float(payload.get("years_since_negative_biopsy", 0) or 0)
-        erspc_ready = all(
-            payload.get(field) not in (None, "")
-            for field in ("psa", "dre_suspicious", "prior_biopsy_count")
-        )
+        erspc_ready = all(payload.get(field) not in (None, "") for field in ("psa", "prior_biopsy_count")) and has_dre_documentation(payload)
 
         treatments = []
         if nccn["reopen_diagnostic_workup"]:

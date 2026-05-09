@@ -1,0 +1,50 @@
+name: Clinical smoke tests
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+      - "codex/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest-clinical-smoke:
+    name: pytest clinical smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PROSTANET_DB_PATH: /tmp/prostanet_ci.db
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+
+      - name: Run clinical smoke tests
+        run: |
+          python -m pytest -q \
+            tests/test_decision_refiner_contract.py \
+            tests/test_mhspc_frontline_selector.py \
+            tests/test_crpc_copilot.py::test_m1_crpc_pre_taxane_requirements_request_structured_taxane_and_abiraterone_inputs \
+            tests/test_modular_engine.py::test_modular_metadata_and_hub_routes_are_available \
+            tests/test_modular_engine.py::test_advanced_modules_surface_sequence_specific_options

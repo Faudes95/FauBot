@@ -190,7 +190,7 @@ THERAPY_REGIMENS = [
         "therapy_class": "parp",
         "contains_adt": False,
         "agents": ["Niraparib", "Abiraterona"],
-        "evidence_tags": ["MAGNITUDE"],
+        "evidence_tags": ["MAGNITUDE", "AMPLITUDE"],
     },
     {
         "regimen_code": "RUCAPARIB",
@@ -212,7 +212,7 @@ THERAPY_REGIMENS = [
         "therapy_class": "radioligand",
         "contains_adt": False,
         "agents": ["Lu177-PSMA-617"],
-        "evidence_tags": ["VISION", "PSMAfore"],
+        "evidence_tags": ["VISION", "PSMAfore", "TheraP"],
     },
     {
         "regimen_code": "RADIUM223",
@@ -223,7 +223,7 @@ THERAPY_REGIMENS = [
         "therapy_class": "radioligand",
         "contains_adt": False,
         "agents": ["Radio-223"],
-        "evidence_tags": ["ALSYMPCA"],
+        "evidence_tags": ["ALSYMPCA", "PEACE-3"],
     },
     {
         "regimen_code": "PEMBROLIZUMAB",
@@ -235,6 +235,62 @@ THERAPY_REGIMENS = [
         "contains_adt": False,
         "agents": ["Pembrolizumab"],
         "evidence_tags": ["MSI-H", "TMB-high"],
+    },
+
+    {
+        "regimen_code": "OLAPARIB_ABIRATERONE",
+        "label_clinico": "Olaparib + abiraterona",
+        "state_scope": ADVANCED_STATE_SCOPE,
+        "management_tracks": ["on_parp", "on_arpi", "systemic_surveillance", "palliative_overlay"],
+        "line_contexts": ["mCRPC_first_line", "later_line"],
+        "therapy_class": "parp",
+        "contains_adt": False,
+        "agents": ["Olaparib", "Abiraterona"],
+        "evidence_tags": ["PROpel"],
+    },
+    {
+        "regimen_code": "ENZALUTAMIDE_RADIUM223",
+        "label_clinico": "Enzalutamida + radio-223",
+        "state_scope": ADVANCED_STATE_SCOPE,
+        "management_tracks": ["on_arpi", "on_lu177", "systemic_surveillance", "palliative_overlay"],
+        "line_contexts": ["mCRPC_bone_predominant", "later_line"],
+        "therapy_class": "radioligand",
+        "contains_adt": False,
+        "agents": ["Enzalutamida", "Radio-223"],
+        "evidence_tags": ["PEACE-3"],
+    },
+    {
+        "regimen_code": "SIPULEUCEL_T",
+        "label_clinico": "Sipuleucel-T",
+        "state_scope": ADVANCED_STATE_SCOPE,
+        "management_tracks": ["systemic_surveillance", "palliative_overlay"],
+        "line_contexts": ["mCRPC_first_line", "later_line"],
+        "therapy_class": "immunotherapy",
+        "contains_adt": False,
+        "agents": ["Sipuleucel-T"],
+        "evidence_tags": ["IMPACT"],
+    },
+    {
+        "regimen_code": "IPATASERTIB_ABIRATERONE",
+        "label_clinico": "Ipatasertib + abiraterona",
+        "state_scope": ADVANCED_STATE_SCOPE,
+        "management_tracks": ["on_arpi", "systemic_surveillance", "palliative_overlay"],
+        "line_contexts": ["mCRPC_first_line", "later_line"],
+        "therapy_class": "androgen_axis",
+        "contains_adt": False,
+        "agents": ["Ipatasertib", "Abiraterona"],
+        "evidence_tags": ["IPATential150"],
+    },
+    {
+        "regimen_code": "CABOZANTINIB_ATEZOLIZUMAB",
+        "label_clinico": "Cabozantinib + atezolizumab",
+        "state_scope": ADVANCED_STATE_SCOPE,
+        "management_tracks": ["systemic_surveillance", "palliative_overlay"],
+        "line_contexts": ["mCRPC_post_ARPI_pre_taxane", "later_line"],
+        "therapy_class": "immunotherapy",
+        "contains_adt": False,
+        "agents": ["Cabozantinib", "Atezolizumab"],
+        "evidence_tags": ["CONTACT-02"],
     },
 ]
 
@@ -339,6 +395,27 @@ TRIAL_BACKBONE_MAP = {
     },
 }
 
+
+TRIAL_BACKBONE_MAP.update({
+    "PRESTO / AFT-19": {"regimen_code": "ADT_APALUTAMIDE_ABIRATERONE", "label": "ADT +/- apalutamida +/- abiraterona/prednisona", "note": "PRESTO/AFT-19 contextualiza intensificacion finita en BCR M0 de alto riesgo."},
+    "PRESTO": {"regimen_code": "ADT_APALUTAMIDE_ABIRATERONE", "label": "ADT +/- apalutamida +/- abiraterona/prednisona", "note": "Alias PRESTO/AFT-19."},
+    "AFT-19": {"regimen_code": "ADT_APALUTAMIDE_ABIRATERONE", "label": "ADT +/- apalutamida +/- abiraterona/prednisona", "note": "Alias PRESTO/AFT-19."},
+    "AMPLITUDE": {"regimen_code": "NIRAPARIB_ABIRATERONE", "note": "AMPLITUDE traslada PARP + abiraterona al mCSPC/mHSPC con HRR alterado."},
+    "PROPEL": {"regimen_code": "OLAPARIB_ABIRATERONE", "note": "PROpel respalda olaparib + abiraterona en primera linea mCRPC con seguridad hematologica y hepatocardiovascular."},
+    "PROpel": {"regimen_code": "OLAPARIB_ABIRATERONE", "note": "PROpel respalda olaparib + abiraterona en primera linea mCRPC."},
+    "PEACE-3": {"regimen_code": "ENZALUTAMIDE_RADIUM223", "note": "PEACE-3 exige soporte oseo con radio-223 + enzalutamida."},
+    "THERAP": {"regimen_code": "LU177_PSMA617", "note": "TheraP es evidencia comparativa con cabazitaxel y seleccion PSMA/FDG estricta."},
+    "TheraP": {"regimen_code": "LU177_PSMA617", "note": "TheraP es evidencia comparativa con cabazitaxel y seleccion PSMA/FDG estricta."},
+    "TAX-327": {"regimen_code": "DOCETAXEL", "note": "TAX-327 establece docetaxel como taxano base en mCRPC."},
+    "TAX 327": {"regimen_code": "DOCETAXEL", "note": "Alias TAX-327."},
+    "COU-AA-301": {"regimen_code": "ADT_ABIRATERONE", "note": "Abiraterona post-docetaxel en mCRPC."},
+    "COU-AA-302": {"regimen_code": "ADT_ABIRATERONE", "note": "Abiraterona pre-quimioterapia en mCRPC."},
+    "PREVAIL": {"regimen_code": "ADT_ENZALUTAMIDE", "note": "Enzalutamida pre-quimioterapia en mCRPC."},
+    "IMPACT": {"regimen_code": "SIPULEUCEL_T", "note": "Sipuleucel-T para mCRPC asintomatico/minimamente sintomatico."},
+    "IPATential150": {"regimen_code": "IPATASERTIB_ABIRATERONE", "note": "Ipatasertib + abiraterona en mCRPC con perdida PTEN."},
+    "CONTACT-02": {"regimen_code": "CABOZANTINIB_ATEZOLIZUMAB", "note": "Cabozantinib + atezolizumab en mCRPC post-ARPI con enfermedad de partes blandas."},
+})
+
 REGIMEN_ALIASES = {
     "adt mono": "ADT_MONO",
     "solo adt": "ADT_MONO",
@@ -391,6 +468,13 @@ REGIMEN_ALIASES = {
     "radium223": "RADIUM223",
     "radio 223": "RADIUM223",
     "pembrolizumab": "PEMBROLIZUMAB",
+    "olaparib + abiraterona": "OLAPARIB_ABIRATERONE",
+    "olaparib + abiraterone": "OLAPARIB_ABIRATERONE",
+    "enzalutamida + radio-223": "ENZALUTAMIDE_RADIUM223",
+    "enzalutamide + radium-223": "ENZALUTAMIDE_RADIUM223",
+    "sipuleucel-t": "SIPULEUCEL_T",
+    "ipatasertib + abiraterona": "IPATASERTIB_ABIRATERONE",
+    "cabozantinib + atezolizumab": "CABOZANTINIB_ATEZOLIZUMAB",
     "acetato de abiraterona": "ADT_ABIRATERONE",
 }
 

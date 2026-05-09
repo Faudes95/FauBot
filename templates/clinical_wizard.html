@@ -255,6 +255,30 @@
                     {% endif %}
                 {% endfor %}
             </form>
+
+            <!-- Anuncio: la captura de historial APE por estadio se realiza en el
+                 perfil del paciente (componente reutilizable + torre dual-view +
+                 bitácora). Aquí el wizard solo modela la decisión clínica del
+                 módulo activo; la torre del APE es persistente y vive en el
+                 expediente longitudinal. -->
+            <section class="mt-5 rounded-3xl border border-cyan-700/40 bg-cyan-500/5 p-5" id="psaTorreAnnounce" data-patient-nss="">
+                <div class="flex items-start justify-between gap-3">
+                    <div>
+                        <h3 class="text-sm font-semibold text-cyan-200 flex items-center gap-2">
+                            <span aria-hidden="true">📊</span> Torre de control APE — Historial por estadio
+                        </h3>
+                        <p class="mt-1 text-xs text-slate-300">
+                            El módulo de captura de PSAs históricos etiquetados por estadio (con bitácora FDA-trazable
+                            y dual-view por línea/estadio) vive en el perfil longitudinal del paciente. Cualquier PSA
+                            registrado desde una visita longitudinal alimenta automáticamente la torre y los detectores
+                            PCWG3 / Phoenix / ASTRO.
+                        </p>
+                    </div>
+                    <a id="psaTorreAnnounceLink" href="/patients" class="pn-btn pn-btn-primary whitespace-nowrap">
+                        Ir al perfil →
+                    </a>
+                </div>
+            </section>
         {% endcall %}
 
         <aside class="space-y-6">
@@ -544,6 +568,190 @@
                     </li>
                 `;
             }).join('');
+        }
+
+        function normalizeRefinerItem(item) {
+            if (!item || typeof item !== 'object') {
+                return { label: humanizeClinicalText(item || ''), name: String(item || ''), status: '', active_reason: '', why_needed: '' };
+            }
+            return {
+                name: item.name || '',
+                label: item.label || item.name || '',
+                status: item.status || '',
+                group: item.group || '',
+                role: item.role || '',
+                active_reason: item.active_reason || '',
+                why_needed: item.why_needed || '',
+                renderable: item.renderable,
+                blocks: Boolean(item.blocks_definitive_recommendation),
+            };
+        }
+
+        function refinerStatusLabel(status) {
+            return {
+                missing: 'Falta capturar',
+                stale: 'Dato vencido',
+                active: 'Modifica preferencia',
+                complete: 'Completo',
+            }[String(status || '').toLowerCase()] || 'Refinador';
+        }
+
+        function refinerToneClasses(status, blocks) {
+            if (blocks) return 'border-amber-500/30 bg-amber-500/10 text-amber-100';
+            if (status === 'active') return 'border-cyan-500/30 bg-cyan-500/10 text-cyan-100';
+            if (status === 'complete') return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-100';
+            return 'border-slate-700 bg-slate-950/60 text-slate-200';
+        }
+
+        function renderRefinerCards(refiners, emptyMessage) {
+            if (!refiners || !refiners.length) {
+                return `<p class="text-sm text-slate-400">${escapeHtml(emptyMessage)}</p>`;
+            }
+            return refiners.map((raw) => {
+                const item = normalizeRefinerItem(raw);
+                const tone = refinerToneClasses(item.status, item.blocks);
+                const subtitle = [item.group, item.role ? humanizeClinicalText(item.role) : ''].filter(Boolean).join(' · ');
+                const reason = item.active_reason || item.why_needed || '';
+                const renderable = item.renderable === false
+                    ? '<div class="mt-2 text-[11px] text-rose-200">Sin campo UI directo: corregir contrato/schema antes de cerrar.</div>'
+                    : '';
+                return `
+                    <div class="rounded-2xl border p-3 ${tone}" data-refiner-card="${escapeHtml(item.name)}">
+                        <div class="flex flex-wrap items-start justify-between gap-2">
+                            <div>
+                                <div class="text-sm font-semibold text-white">${humanizeClinicalText(item.label)}</div>
+                                ${subtitle ? `<div class="mt-1 text-[11px] uppercase tracking-[0.16em] text-slate-400">${humanizeClinicalText(subtitle)}</div>` : ''}
+                            </div>
+                            <span class="rounded-full border border-white/10 px-2 py-1 text-[10px] uppercase tracking-[0.14em]">${refinerStatusLabel(item.status)}</span>
+                        </div>
+                        ${reason ? `<p class="mt-2 text-xs text-slate-300">${humanizeClinicalText(reason)}</p>` : ''}
+                        ${renderable}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderWhyNotAlternatives(items) {
+            if (!items || !items.length) {
+                return '<li>Sin alternativas degradadas o bloqueadas por el contrato.</li>';
+            }
+            return items.slice(0, 6).map((item) => {
+                const label = item.regimen_label || item.regimen_code || 'Alternativa';
+                return `<li><span class="font-medium text-white">${humanizeClinicalText(label)}</span>: ${humanizeClinicalText(item.reason || '')}</li>`;
+            }).join('');
+        }
+
+        function renderSafetyFlags(flags) {
+            if (!flags || !flags.length) {
+                return '<li>Sin contraindicaciones activas detectadas por contrato.</li>';
+            }
+            return flags.slice(0, 8).map((flag) => {
+                const label = [flag.regimen_code, flag.field].filter(Boolean).join(' · ');
+                const severity = flag.severity === 'blocker' ? 'bloquea' : 'cautela';
+                return `<li><span class="font-medium text-white">${humanizeClinicalText(label)}</span> (${severity}): ${humanizeClinicalText(flag.rationale || '')}</li>`;
+            }).join('');
+        }
+
+        function renderWatchlist(watchlist) {
+            if (!watchlist || !watchlist.length) {
+                return '<li>Sin lista de vigilancia terapéutica específica.</li>';
+            }
+            return watchlist.slice(0, 6).map((item) => {
+                const events = (item.events || []).slice(0, 6).map(humanizeClinicalText).join(', ');
+                return `<li><span class="font-medium text-white">${humanizeClinicalText(item.regimen_label || item.regimen_code || '')}</span>: ${events}</li>`;
+            }).join('');
+        }
+
+        function renderDecisionRefinerContract(contract) {
+            if (!contract || !contract.contract_version) {
+                return '';
+            }
+            const ui = contract.ui_contract || {};
+            const preferred = contract.preferred_treatment || {};
+            const provisional = Boolean(ui.provisional_recommendation);
+            const visible = renderRefinerCards(ui.visible_refiners || [], 'Sin refinadores prioritarios faltantes o activos.');
+            const secondary = renderRefinerCards(ui.secondary_refiners || [], 'Sin refinadores secundarios.');
+            const whyPreferred = renderTextList(contract.why_preferred || [], 'Sin razón preferente estructurada.');
+            const whyNot = renderWhyNotAlternatives(contract.why_not_alternatives || []);
+            const safety = renderSafetyFlags(contract.contraindication_flags || []);
+            const watchlist = renderWatchlist(contract.adverse_event_watchlist || []);
+            const unmapped = (ui.unmapped_backend_fields || []).length
+                ? `<p class="mt-3 rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">Refinadores backend sin campo UI directo: ${(ui.unmapped_backend_fields || []).map(humanizeClinicalText).join(', ')}</p>`
+                : '';
+            const preferredLabel = preferred.regimen_label || preferred.display_label || preferred.regimen_code || 'Preferente no definido';
+            return `
+                <div id="decision-refiner-contract-card" class="rounded-2xl border ${provisional ? 'border-amber-500/30 bg-amber-500/10' : 'border-cyan-500/30 bg-cyan-500/10'} p-4">
+                    <div class="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.2em] ${provisional ? 'text-amber-200' : 'text-cyan-200'}">Contrato UI-Backend de refinadores sistémicos</p>
+                            <h3 class="mt-2 text-lg font-semibold text-white">${humanizeClinicalText(preferredLabel)}</h3>
+                            <p class="mt-1 text-sm text-slate-300">${humanizeClinicalText(contract.scenario_family || '')} · ${humanizeClinicalText(contract.contract_version || '')}</p>
+                        </div>
+                        <span class="rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.18em] ${provisional ? 'border-amber-400/40 bg-amber-400/10 text-amber-100' : 'border-emerald-400/40 bg-emerald-400/10 text-emerald-100'}">
+                            ${provisional ? 'Recomendación provisional' : 'Contrato cerrado'}
+                        </span>
+                    </div>
+                    ${contract.clinical_gap_reason ? `<p class="mt-3 rounded-xl border border-amber-500/20 bg-slate-950/40 px-3 py-2 text-sm text-amber-100">${humanizeClinicalText(contract.clinical_gap_reason)}</p>` : ''}
+                    <div class="mt-4 grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+                        ${visible}
+                    </div>
+                    <details class="mt-4 rounded-2xl border border-slate-700 bg-slate-950/40 p-4">
+                        <summary class="cursor-pointer text-sm font-semibold text-cyan-100">Refinadores secundarios y trazabilidad</summary>
+                        <div class="mt-4 grid gap-3 lg:grid-cols-2 xl:grid-cols-3">${secondary}</div>
+                        ${unmapped}
+                    </details>
+                    <div class="mt-4 grid gap-4 md:grid-cols-2">
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Por qué sí</p>
+                            <ul class="mt-2 space-y-2 text-sm text-slate-300">${whyPreferred}</ul>
+                        </div>
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Por qué no alternativas</p>
+                            <ul class="mt-2 space-y-2 text-sm text-slate-300">${whyNot}</ul>
+                        </div>
+                    </div>
+                    <div class="mt-4 grid gap-4 md:grid-cols-2">
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Contraindicaciones / cautelas activas</p>
+                            <ul class="mt-2 space-y-2 text-sm text-slate-300">${safety}</ul>
+                        </div>
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Vigilancia de eventos adversos</p>
+                            <ul class="mt-2 space-y-2 text-sm text-slate-300">${watchlist}</ul>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function clearDecisionRefinerHighlights() {
+            document.querySelectorAll('[data-refiner-needed="1"]').forEach((wrapper) => {
+                wrapper.removeAttribute('data-refiner-needed');
+                wrapper.style.boxShadow = '';
+                wrapper.style.borderRadius = '';
+                const hint = wrapper.querySelector('[data-refiner-hint="1"]');
+                if (hint) hint.remove();
+            });
+        }
+
+        function applyDecisionRefinerContract(contract) {
+            clearDecisionRefinerHighlights();
+            const refiners = ((contract || {}).ui_contract || {}).visible_refiners || [];
+            refiners.forEach((item) => {
+                const names = [item.name].concat(item.aliases || []).filter(Boolean);
+                const wrapper = Array.from(document.querySelectorAll('[data-field-wrapper]')).find((node) => names.includes(node.dataset.fieldName));
+                if (!wrapper) return;
+                wrapper.dataset.refinerNeeded = '1';
+                wrapper.style.boxShadow = item.blocks_definitive_recommendation
+                    ? '0 0 0 2px rgba(251, 191, 36, 0.45)'
+                    : '0 0 0 2px rgba(34, 211, 238, 0.35)';
+                wrapper.style.borderRadius = '1rem';
+                const hint = document.createElement('div');
+                hint.dataset.refinerHint = '1';
+                hint.className = 'mt-2 rounded-xl border border-cyan-500/20 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-100';
+                hint.textContent = `${refinerStatusLabel(item.status)}: ${item.why_needed || item.active_reason || 'Este campo cambia la preferencia terapéutica.'}`;
+                wrapper.appendChild(hint);
+            });
         }
 
         function renderTripletDecision(card) {
@@ -1393,6 +1601,7 @@
             backToHubButton.classList.add('hidden');
             resetRegistrationPhase();
             updateConditionalFields();
+            clearDecisionRefinerHighlights();
         }
 
         resetWizardButton.addEventListener('click', resetWizard);
@@ -1478,6 +1687,7 @@
             const algorithmCards = renderAlgorithmCards(result.validated_algorithms || [], 'Sin algoritmos estructurados para este escenario.');
             const decisionQuality = result.decision_quality || {};
             const whyNotMoreConfident = renderTextList(result.why_not_more_confident || decisionQuality.why_not_more_confident || [], 'Sin limitaciones estructuradas adicionales.');
+            const refinerContract = renderDecisionRefinerContract(result.decision_refiner_contract || {});
             const badgeClass = badgeColors[result.applicability_badge_key] || 'border-slate-700 bg-slate-800 text-slate-200';
 
             body.innerHTML = `
@@ -1512,6 +1722,7 @@
                     <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Tratamientos elegibles</p>
                     <ul class="mt-2 space-y-2 text-sm text-slate-300">${eligible}</ul>
                 </div>
+                ${refinerContract}
                 <div class="grid gap-4 md:grid-cols-2">
                     <div>
                         <p class="text-xs uppercase tracking-[0.2em] text-slate-500">No recomendado</p>
@@ -1619,6 +1830,7 @@
             resetWizardButton.classList.remove('hidden');
             evidenceAnchor.classList.remove('hidden');
             backToHubButton.classList.remove('hidden');
+            applyDecisionRefinerContract(result.decision_refiner_contract || {});
             window.clinicalPresentation?.normalizeDocument();
         });
 

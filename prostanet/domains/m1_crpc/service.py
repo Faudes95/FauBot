@@ -514,6 +514,9 @@ class M1CrpcService:
             family_code=preferred_regimen.get("family_code") or "observation_family",
             field_values=payload,
         )
+        soft_tissue_metastases = str(payload.get("soft_tissue_metastases", "")).strip().lower() in {"1", "true", "si", "sí", "yes"} or str(payload.get("metastasis_site", "")).strip().lower() in {"visceral", "liver", "higado", "hígado", "lung", "pulmon", "pulmón", "soft_tissue"}
+        impact_like = str(payload.get("pain_symptoms", "Asintomatico")).strip().lower() in {"asintomatico", "asintomático", "ninguno", "none", "leve", "mild"} and not soft_tissue_metastases
+        peace3_like = nccn["symptomatic_bone_only"] and bool(payload.get("bone_modifying_agent")) and not nccn["prior_enza_class"]
 
         result = evaluation_result(
             state=self.module_id,
@@ -527,18 +530,25 @@ class M1CrpcService:
             evidence_trace=[self.registry.get_module_evidence(self.module_id)],
             trial_matches=[
                 {"trial": "PROfound", "match": biomarker_traceable},
-                {"trial": "PROPEL", "match": nccn["hrr_positive"] and biomarker_traceable and not nccn["prior_abiraterone"]},
+                {"trial": "PROpel", "match": nccn["hrr_positive"] and biomarker_traceable and not nccn["prior_abiraterone"]},
                 {"trial": "VISION", "match": vision_eligible},
                 {"trial": "PSMAfore", "match": pre_taxane_pluvicto_candidate},
+                {"trial": "TheraP", "match": nccn["psma_positive"] and nccn["prior_docetaxel"] and not psma_negative_dominant_lesions and not explicit_partial_psma},
                 {"trial": "CARD", "match": card_applicable},
                 {"trial": "TALAPRO-2", "match": nccn["line_context"] == "first_line_mcrpc" and nccn["hrr_positive"] and biomarker_traceable and not nccn["prior_enza_class"]},
                 {"trial": "MAGNITUDE", "match": nccn["line_context"] == "first_line_mcrpc" and nccn["brca_pathway"] and biomarker_traceable and not nccn["prior_abiraterone"]},
                 {"trial": "TRITON-3", "match": nccn["brca_pathway"] and biomarker_traceable},
-                {"trial": "AFFIRM", "match": not nccn["prior_enza_class"]},
+                {"trial": "AFFIRM", "match": nccn["prior_docetaxel"] and not nccn["prior_enza_class"]},
+                {"trial": "PREVAIL", "match": nccn["line_context"] == "first_line_mcrpc" and not nccn["prior_enza_class"]},
+                {"trial": "COU-AA-301", "match": nccn["prior_docetaxel"] and not nccn["prior_abiraterone"] and not abiraterone_hard_block},
+                {"trial": "COU-AA-302", "match": nccn["line_context"] == "first_line_mcrpc" and not nccn["prior_abiraterone"] and not abiraterone_hard_block},
                 {"trial": "COU-AA-301/302", "match": not nccn["prior_abiraterone"] and not abiraterone_hard_block},
                 {"trial": "TAX 327", "match": taxane_available_now and not nccn["prior_docetaxel"]},
                 {"trial": "TROPIC", "match": card_applicable},
                 {"trial": "ALSYMPCA", "match": nccn["symptomatic_bone_only"]},
+                {"trial": "PEACE-3", "match": peace3_like},
+                {"trial": "IMPACT", "match": impact_like and nccn["line_context"] == "first_line_mcrpc"},
+                {"trial": "CONTACT-02", "match": nccn["prior_arpi"] and soft_tissue_metastases},
                 {"trial": "KEYNOTE-158", "match": nccn["msi_high"] or nccn["tmb_high"]},
                 {"trial": "PROPHECY", "match": nccn["ar_v7_positive"]},
                 {"trial": "IPATential150", "match": nccn["pten_loss"]},

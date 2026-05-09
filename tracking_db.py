@@ -13,6 +13,7 @@ from prostanet.domains.patient_tracking.psma_imaging import (
     normalize_psma_imaging_payload,
 )
 from prostanet.domains.patient_tracking.therapy_catalog import normalize_regimen_code, regimen_label
+from prostanet.shared.dre import apply_dre_normalization, is_dre_suspicious
 from prostanet.shared.gleason_profile import apply_gleason_profile, normalize_gleason_profile
 from prostanet.shared.metastatic_profile import build_metastatic_profile, derive_legacy_metastasis
 
@@ -557,7 +558,15 @@ def _hydrate_lesion_rows(tracking_rows, measurement_rows):
 
 
 def _derive_psa_series(biomarker_rows, follow_ups, baseline, identity):
-    psa_rows = [row for row in biomarker_rows if str(row.get("biomarker_type", "")).upper() == "PSA"]
+    # FAUBOT BUG-002 fix: respetar soft-delete del CRUD de la torre APE.
+    # Sin este filtro, los puntos eliminados desde el wizard seguían apareciendo
+    # en la torre y contaminando velocity / PSADT / nadir, contradiciendo a
+    # `psa_history_service.list_psa_points` que sí filtra por `deleted_at`.
+    psa_rows = [
+        row for row in biomarker_rows
+        if str(row.get("biomarker_type", "")).upper() == "PSA"
+        and not row.get("deleted_at")
+    ]
     if psa_rows:
         return [
             {
@@ -4139,6 +4148,102 @@ def init_tracking_db():
         '''
     )
 
+    # ── Torre de control APE — captura por estadio + audit + snapshot kinetics ──
+    for ddl in (
+        # Etiquetar cada PSA con el estadio clínico al momento + metadatos de origen
+        "ALTER TABLE biomarker_longitudinal ADD COLUMN clinical_state_at_measurement TEXT",
+        "ALTER TABLE biomarker_longitudinal ADD COLUMN disease_phase TEXT",
+        "ALTER TABLE biomarker_longitudinal ADD COLUMN line_label TEXT",
+        "ALTER TABLE biomarker_longitudinal ADD COLUMN source TEXT",
+        "ALTER TABLE biomarker_longitudinal ADD COLUMN created_by TEXT",
+        "ALTER TABLE biomarker_longitudinal ADD COLUMN updated_at TIMESTAMP",
+        "ALTER TABLE biomarker_longitudinal ADD COLUMN deleted_at TIMESTAMP",
+        "ALTER TABLE biomarker_longitudinal ADD COLUMN reason TEXT",
+        # Campos clínicos dinámicos en follow-up para detección de oligoprogresión
+        "ALTER TABLE follow_up_visits ADD COLUMN metastasis_count INTEGER",
+        "ALTER TABLE follow_up_visits ADD COLUMN lesion_count INTEGER",
+        "ALTER TABLE follow_up_visits ADD COLUMN visceral_mets_count INTEGER",
+        # Variante histológica para reglas de conducta (neuroendocrino, intraductal, etc.)
+        "ALTER TABLE clinical_baseline ADD COLUMN histology_variant TEXT",
+    ):
+        try:
+            c.execute(ddl)
+        except sqlite3.OperationalError:
+            pass
+
+    # Bitácora de cambios sobre puntos PSA (cumple FDA 21 CFR Part 11 / GxP audit trail)
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS psa_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            point_id INTEGER,
+            patient_id INTEGER NOT NULL,
+            operation TEXT NOT NULL,
+            value_before TEXT,
+            value_after TEXT,
+            actor TEXT,
+            reason TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+        '''
+    )
+
+    # Snapshot materializado de cinética PSA (recálculo síncrono, una fila por paciente)
+    c.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS psa_kinetics_snapshot (
+            patient_id INTEGER PRIMARY KEY,
+            computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            psa_velocity REAL,
+            psadt_months REAL,
+            psa_nadir REAL,
+            psa_nadir_date DATE,
+            pcwg3_progression_flag INTEGER,
+            pcwg3_evidence_json TEXT,
+            phoenix_bcr_flag INTEGER,
+            astro_bcr_flag INTEGER,
+            bounce_post_rt_flag INTEGER,
+            kinetics_payload_json TEXT,
+            FOREIGN KEY(patient_id) REFERENCES patient_identity(id)
+        )
+        '''
+    )
+
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_biom_long_pt_date "
+        "ON biomarker_longitudinal (patient_id, sample_date)"
+    )
+
+    # FDA 21 CFR Part 11 §11.10(e) — tamper-evident audit trails.
+    # SQL externo (UPDATE/DELETE) sobre psa_audit_log se aborta con RAISE.
+    # Esto convierte la tabla en append-only desde la capa SQL, dificultando
+    # alteraciones accidentales o maliciosas. No reemplaza hash-chain (gap
+    # documentado en FDA audit) pero es un control efectivo de bajo costo.
+    c.execute(
+        '''
+        CREATE TRIGGER IF NOT EXISTS psa_audit_log_no_update
+        BEFORE UPDATE ON psa_audit_log
+        BEGIN
+            SELECT RAISE(ABORT, 'psa_audit_log es append-only (FDA Part 11 §11.10(e))');
+        END
+        '''
+    )
+    c.execute(
+        '''
+        CREATE TRIGGER IF NOT EXISTS psa_audit_log_no_delete
+        BEFORE DELETE ON psa_audit_log
+        BEGIN
+            SELECT RAISE(ABORT, 'psa_audit_log es append-only (FDA Part 11 §11.10(e))');
+        END
+        '''
+    )
+
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_psa_audit_pt "
+        "ON psa_audit_log (patient_id, timestamp DESC)"
+    )
+
     conn.commit()
     conn.close()
     try:
@@ -4690,7 +4795,7 @@ def _build_diagnostic_plan_payload(data, assessment=None):
         trigger_conditions.append("Lesión PI-RADS 4-5")
     if _safe_float(data.get("psad"), 0) >= 0.15:
         trigger_conditions.append("Densidad del antígeno prostático específico elevada")
-    if _is_truthy(data.get("dre_suspicious")):
+    if is_dre_suspicious(data):
         trigger_conditions.append("Tacto rectal sospechoso")
     if _safe_float(data.get("psa_velocity_ng_ml_year"), 0) >= 0.75:
         trigger_conditions.append("Cinética de antígeno prostático específico en ascenso")
@@ -4734,7 +4839,7 @@ def _build_biopsy_trigger_payload(data, assessment=None):
         activation_conditions.append("Lesión PI-RADS 4-5")
     if _safe_float(data.get("psad"), 0) >= 0.15:
         activation_conditions.append("PSAD >= 0.15")
-    if _is_truthy(data.get("dre_suspicious")):
+    if is_dre_suspicious(data):
         activation_conditions.append("Tacto rectal sospechoso")
     if state == "post_negative_biopsy_followup" and _is_truthy(data.get("persistent_lesion_signal")):
         activation_conditions.append("Lesión persistente tras biopsia benigna")
@@ -5208,7 +5313,7 @@ def register_new_patient(data, assessment=None):
     Retorna (success: bool, message: str)
     """
     try:
-        data = apply_gleason_profile(dict(data or {}))
+        data = apply_dre_normalization(apply_gleason_profile(dict(data or {})), include_clinical_stage=False)
         assessment_state = str(data.get("assessment_state") or "").strip()
         advanced_states = {
             "adt_progression_verification",
@@ -10365,6 +10470,24 @@ def save_stage_visit_bundle(patient_id, data):
 
         conn.commit()
         conn.close()
+
+        # Hook torre de control APE: cualquier visita longitudinal puede haber
+        # insertado nuevos PSAs vía _persist_psa_series_points. Recalculamos la
+        # cinética + flags clínicos de forma síncrona para que la torre y la UI
+        # de polling reflejen el estado correcto en el siguiente fetch.
+        # Lazy import: psa_history_service depende de tracking_db y crearía
+        # un ciclo si se importa a nivel módulo.
+        try:
+            from prostanet.domains.patient_tracking.psa_history_service import (
+                recompute_psa_kinetics,
+            )
+            recompute_psa_kinetics(patient_id)
+        except Exception as exc:  # nunca tirar la visita por un fallo de snapshot
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "recompute_psa_kinetics fallo silencioso para patient_id=%s: %s",
+                patient_id, exc,
+            )
 
         if _has_any_value(
             data,

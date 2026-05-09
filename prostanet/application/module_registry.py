@@ -24,6 +24,10 @@ from prostanet.domains.state_classifier.schemas import STATE_CLASSIFIER_SCHEMA
 from prostanet.domains.survivorship_and_toxicity_followup.service import (
     SurvivorshipAndToxicityFollowupService,
 )
+from prostanet.domains.patient_tracking.decision_refiner_contract import (
+    attach_decision_refiner_contract,
+    build_static_decision_refiner_contract,
+)
 from prostanet.shared.decision_quality import build_decision_quality
 from prostanet.shared.gleason_profile import apply_gleason_profile
 from prostanet.shared.module_support import apply_support_bundle, support_bundle_for_module
@@ -56,7 +60,11 @@ class ModuleRegistry:
         return [module for module in self.evidence_registry.list_modules() if module.get("module") != "mcspc_high_volume"]
 
     def get_module_schema(self, module_id: str) -> dict:
-        return deepcopy(self.services[module_id].schema())
+        schema = deepcopy(self.services[module_id].schema())
+        static_contract = build_static_decision_refiner_contract(module_id, schema)
+        if static_contract:
+            schema["decision_refiner_contract"] = static_contract
+        return schema
 
     def get_state_classifier_schema(self) -> dict:
         return deepcopy(STATE_CLASSIFIER_SCHEMA)
@@ -82,6 +90,12 @@ class ModuleRegistry:
         )
         enriched["validated_algorithms"] = build_validated_algorithms(module_id, normalized_payload, enriched)
         enriched["decision_quality"] = build_decision_quality(module_id, normalized_payload, enriched)
+        enriched = attach_decision_refiner_contract(
+            enriched,
+            state=module_id,
+            payload=normalized_payload,
+            schema=self.get_module_schema(module_id),
+        )
         enriched["state_classification"] = enriched["decision_quality"].get("state_classification", enriched.get("state"))
         enriched["recommendation_family"] = enriched["decision_quality"].get("recommendation_family", "")
         enriched["why_not_more_confident"] = enriched["decision_quality"].get("why_not_more_confident", [])

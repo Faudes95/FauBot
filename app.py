@@ -101,6 +101,11 @@ FOLLOWUP_NUMERIC_FIELDS = (
     "hemoglobin",
     "ecog",
     "pain",
+    # Capturas dinámicas de carga tumoral en seguimiento — habilitan detección
+    # de oligoprogresión y validación de volumen CHAARTED en mHSPC controlado.
+    "metastasis_count",
+    "lesion_count",
+    "visceral_mets_count",
 )
 
 app.config.update(DEFAULT_APP_CONFIG)
@@ -1536,7 +1541,9 @@ def api_pivotal_match(nss):
         identity = record.get('identity', {})
         genomics = record.get('genomics', {})
         surgery = record.get('surgery', {})
+        imaging = record.get('imaging', [])
         latest_assessment = record.get("latest_assessment") or {}
+        input_snapshot = latest_assessment.get("input_snapshot") or {}
         reconciliation = build_reconciled_state(record, latest_assessment)
         current_state = reconciliation.get("reconciled_state") or ""
         post_rp_truth = derive_post_prostatectomy_truth(record) if current_state in {"post_prostatectomy", "recurrence_bcr"} else {}
@@ -1558,8 +1565,8 @@ def api_pivotal_match(nss):
         if current_state == "recurrence_bcr":
             psa_current = (
                 post_rp_truth.get("psa_current")
-                or (latest_assessment.get("input_snapshot") or {}).get("psa_current")
-                or (latest_assessment.get("input_snapshot") or {}).get("psa_postop")
+                or input_snapshot.get("psa_current")
+                or input_snapshot.get("psa_postop")
                 or (record.get("bcr") or {}).get("bcr_psa")
                 or psa_current
             )
@@ -1574,8 +1581,21 @@ def api_pivotal_match(nss):
         docetaxel_payload = {}
         docetaxel_payload.update(baseline or {})
         docetaxel_payload.update(prior_hist or {})
-        docetaxel_payload.update((latest_assessment.get("input_snapshot") or {}))
+        docetaxel_payload.update(input_snapshot)
         docetaxel_bundle = docetaxel_fitness(docetaxel_payload)
+
+        psma_studies = [
+            item for item in imaging
+            if "psma" in str(item.get('study_type', '')).lower() or item.get('psma_result')
+        ]
+        latest_psma = psma_studies[-1] if psma_studies else {}
+        psma_raw = str(input_snapshot.get('psma_pet_result') or latest_psma.get('psma_result') or '').strip().lower()
+        if psma_raw in {'positivo', 'positive', 'pos', '1', 'true', 'si', 'sí'} or 'posit' in psma_raw:
+            psma_pet_result = 'Positivo'
+        elif psma_raw in {'negativo', 'negative', 'neg', '0', 'false', 'no'} or 'negat' in psma_raw:
+            psma_pet_result = 'Negativo'
+        else:
+            psma_pet_result = 'No realizado'
 
         patient_for_match = {
             'state': current_state,
@@ -1584,7 +1604,7 @@ def api_pivotal_match(nss):
             'psa_basal': baseline.get('baseline_psa', 0) or 0,
             'psa_current': psa_current or 0,
             'psa_postop_current': post_rp_truth.get("psa_current"),
-            'psa_postop': (latest_assessment.get("input_snapshot") or {}).get("psa_postop"),
+            'psa_postop': input_snapshot.get("psa_postop"),
             'bcr_psa': (record.get("bcr") or {}).get("bcr_psa"),
             'gleason_score': baseline.get('gleason_score', 6) or 6,
             'gleason_primary': baseline.get('gleason_primary'),
@@ -1595,13 +1615,14 @@ def api_pivotal_match(nss):
             'metastasis_site': metastasis_site,
             'metastasis_count': baseline.get('metastasis_count', 0) or 0,
             'volume_chaarted': baseline.get('volume_disease', 'Low') or 'Low',
-            'hrr_status': genomics.get('hrr_overall') or baseline.get('hrr_status', 'Desconocido') or 'Desconocido',
-            'msi_status': genomics.get('msi_status') or baseline.get('msi_status', 'Estable') or 'Estable',
+            'hrr_status': genomics.get('hrr_overall') or input_snapshot.get('hrr_status') or baseline.get('hrr_status', 'Desconocido') or 'Desconocido',
+            'msi_status': genomics.get('msi_status') or input_snapshot.get('msi_status') or baseline.get('msi_status', 'Estable') or 'Estable',
+            'castration_resistant': current_state in {'m0_crpc', 'm1_crpc'} or str(input_snapshot.get('castration_resistant', '')).lower() in {'1', 'true', 'si', 'sí', 'yes'},
             'prior_therapy': [],
             'prior_prostatectomy': bool(surgery),
             'post_rp_context': current_state in {"post_prostatectomy", "recurrence_bcr"},
-            'psadt_months': post_rp_truth.get("psadt_months") or (record.get("bcr") or {}).get("psadt_at_bcr") or (latest_assessment.get("input_snapshot") or {}).get("psadt_months"),
-            'salvage_local_feasible': (latest_assessment.get("input_snapshot") or {}).get("salvage_local_feasible"),
+            'psadt_months': post_rp_truth.get("psadt_months") or (record.get("bcr") or {}).get("psadt_at_bcr") or input_snapshot.get("psadt_months"),
+            'salvage_local_feasible': input_snapshot.get("salvage_local_feasible"),
             'bone_metastases': metastasis_site in ('Hueso', 'Oseas', 'Bone'),
             'visceral_metastases': metastasis_site in ('Visceral', 'Higado', 'Pulmon'),
             'fit_for_chemotherapy': bool(docetaxel_bundle.get('fit_for_docetaxel')),
@@ -1613,6 +1634,22 @@ def api_pivotal_match(nss):
             'child_pugh_score': docetaxel_payload.get('child_pugh_score'),
             'cv_risk_documented': docetaxel_payload.get('cv_risk_documented'),
             'drug_interaction_reviewed': docetaxel_payload.get('drug_interaction_reviewed'),
+            'psma_pet_result': psma_pet_result,
+            'psma_negative_dominant_lesions': input_snapshot.get('psma_negative_dominant_lesions', latest_psma.get('psma_negative_dominant_lesions', False)),
+            'fdg_discordant_disease': input_snapshot.get('fdg_discordant_disease', False),
+            'brca_status': genomics.get('brca2_status') or genomics.get('brca1_status') or input_snapshot.get('brca_status'),
+            'biomarker_source': input_snapshot.get('biomarker_source'),
+            'hemoglobin': input_snapshot.get('hemoglobin'),
+            'anc': input_snapshot.get('anc'),
+            'platelets': input_snapshot.get('platelets'),
+            'renal_function': input_snapshot.get('renal_function'),
+            'bone_modifying_agent': input_snapshot.get('bone_modifying_agent'),
+            'seizure_history': input_snapshot.get('seizure_history'),
+            'fall_risk': input_snapshot.get('fall_risk'),
+            'soft_tissue_metastases': input_snapshot.get('soft_tissue_metastases'),
+            'blood_pressure_control': input_snapshot.get('blood_pressure_control'),
+            'autoimmune_disease': input_snapshot.get('autoimmune_disease'),
+            'bleeding_risk': input_snapshot.get('bleeding_risk'),
         }
 
         # Construir lista de terapias previas
@@ -1647,7 +1684,21 @@ def api_pivotal_match(nss):
                     'match_score': m.get('match_score', 0),
                     'criteria_met': m.get('criteria_met', []),
                     'criteria_failed': m.get('criteria_failed', []),
+                    'missing_required_inputs': m.get('missing_required_inputs', []),
+                    'contraindication_flags': m.get('contraindication_flags', []),
+                    'adverse_event_watchlist': m.get('adverse_event_watchlist', []),
+                    'clinical_gap_reason': m.get('clinical_gap_reason', ''),
+                    'flagship_patient_match': m.get('flagship_patient_match', {}),
                 },
+                'missing_required_inputs': m.get('missing_required_inputs', []),
+                'contraindication_flags': m.get('contraindication_flags', []),
+                'adverse_event_watchlist': m.get('adverse_event_watchlist', []),
+                'clinical_gap_reason': m.get('clinical_gap_reason', ''),
+                'flagship_patient_match': m.get('flagship_patient_match', {}),
+                'source_citations': study.get('source_citations', []),
+                'regimen_code': study.get('regimen_code', ''),
+                'regimen_label': study.get('regimen_label', ''),
+                'line_of_therapy_context': study.get('line_of_therapy_context', ''),
                 'expected_outcome': study.get('key_result', ''),
                 'applicability': study.get('mexican_applicability', ''),
             }
@@ -1674,6 +1725,8 @@ def api_pivotal_match(nss):
             "success": True,
             "matches": matches_clean,
             "visible_matches": visible_matches_clean,
+            "matched_pivotal_studies": visible_matches_clean,
+            "flagship_patient_matches": [item.get("flagship_patient_match", {}) for item in visible_matches_clean if item.get("flagship_patient_match")],
             "eligible_matches": eligible_matches,
             "partial_matches": partial_matches,
             "ineligible_matches": ineligible_matches,

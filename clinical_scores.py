@@ -415,6 +415,370 @@ def calculate_psa_kinetics(history: list[tuple[str, float]]) -> dict[str, Any]:
         'interpretation': " | ".join(interp)
     }
 
+
+# ============================================================================
+# 3.b. DETECTORES CLÍNICOS PARA TORRE DE CONTROL DEL APE
+# ----------------------------------------------------------------------------
+# Cierran las brechas detectadas en el diagnóstico inicial:
+#   - PCWG3 (Scher 2016) — progresión PSA en CRPC.
+#   - Phoenix (Roach 2006) — BCR post-RT (criterio actual NCCN/EAU).
+#   - ASTRO 1996 (Cox) — BCR post-RT (criterio histórico, conservado para auditoría).
+#   - Bounce post-RT — alza transitoria sin progresión confirmada.
+#   - CHAARTED (Sweeney 2015) — clasificación volumen alto/bajo en mHSPC.
+#   - LATITUDE (Fizazi 2017) — high risk (≥2/3 criterios).
+#
+# Cada detector retorna un dict serializable con `flag`, `evidence` y campos
+# de soporte. Los flags se persisten en `psa_kinetics_snapshot` y alimentan
+# los chips visuales de la torre. Tooltips en UI citan la fuente original.
+# ============================================================================
+def _kinetics_safe_float(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        s = value.strip().lstrip('>').lstrip('<')
+        try:
+            return float(s)
+        except ValueError:
+            return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _kinetics_parse_date(value):
+    if value is None:
+        return None
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except (ValueError, TypeError):
+        return None
+
+
+def _kinetics_normalize_history(history):
+    """Convierte una lista de tuplas/dicts en lista de (date, float) ordenada."""
+    normalized = []
+    for entry in history or []:
+        d = v = None
+        if isinstance(entry, dict):
+            d = _kinetics_parse_date(entry.get('date') or entry.get('sample_date'))
+            v = _kinetics_safe_float(entry.get('value') or entry.get('psa') or entry.get('testosterone'))
+        elif isinstance(entry, (tuple, list)) and len(entry) >= 2:
+            d = _kinetics_parse_date(entry[0])
+            v = _kinetics_safe_float(entry[1])
+        if d is not None and v is not None:
+            normalized.append((d, v))
+    return sorted(normalized, key=lambda x: x[0])
+
+
+def detect_pcwg3_progression(
+    psa_history,
+    testosterone_history=None,
+    nadir_value=None,
+    nadir_date=None,
+    min_separation_days=21,
+):
+    """PCWG3 (Scher et al. JCO 2016) — Criterios de progresión PSA en CRPC.
+
+    Requiere TRES condiciones simultáneas tras el nadir:
+      1. Aumento ≥25% sobre el valor mínimo (nadir) post-tratamiento.
+      2. Aumento absoluto ≥2 ng/mL sobre el nadir.
+      3. Confirmación con segunda medición ≥3 semanas después de la primera.
+      4. Testosterona ≤50 ng/dL (estado castrado).
+
+    Retorna: dict {flag, evidence, criteria_met, rises_count, testosterone_castrate, threshold_value}
+    """
+    psa = _kinetics_normalize_history(psa_history)
+    testo = _kinetics_normalize_history(testosterone_history)
+
+    nadir_v = _kinetics_safe_float(nadir_value) if nadir_value is not None else (
+        min((p for _, p in psa), default=None) if psa else None
+    )
+    nadir_d = _kinetics_parse_date(nadir_date)
+    if nadir_d is None and psa:
+        # Tomar la fecha del nadir si no la pasaron explícita.
+        for d, p in psa:
+            if p == nadir_v:
+                nadir_d = d
+                break
+
+    result = {
+        'flag': False,
+        'evidence': [],
+        'criteria_met': {
+            'rise_25pct_from_nadir': False,
+            'rise_2ngml_from_nadir': False,
+            'confirmation_3wk_separation': False,
+            'testosterone_castrate': False,
+        },
+        'rises_count': 0,
+        'testosterone_castrate': None,
+        'threshold_value': None,
+        'nadir_value': nadir_v,
+        'nadir_date': nadir_d.isoformat() if nadir_d else None,
+        'criterion_source': 'PCWG3 — Scher HI et al. JCO 2016;34(12):1402-18',
+    }
+
+    if not psa or nadir_v is None:
+        result['evidence'].append('Datos insuficientes para evaluar PCWG3.')
+        return result
+
+    # Threshold absoluto requerido para confirmar progresión.
+    threshold = max(nadir_v * 1.25, nadir_v + 2.0)
+    result['threshold_value'] = round(threshold, 3)
+
+    # Mediciones que cumplen ambos criterios cuantitativos tras el nadir.
+    breaches = [
+        (d, p) for (d, p) in psa
+        if (nadir_d is None or d >= nadir_d) and p >= threshold
+    ]
+    result['rises_count'] = len(breaches)
+
+    if breaches:
+        result['criteria_met']['rise_25pct_from_nadir'] = breaches[0][1] >= nadir_v * 1.25
+        result['criteria_met']['rise_2ngml_from_nadir'] = breaches[0][1] >= (nadir_v + 2.0)
+        result['evidence'].append(
+            f"Primera elevación ≥25% y ≥2 ng/mL sobre nadir el {breaches[0][0].isoformat()} "
+            f"(PSA={breaches[0][1]} ng/mL, nadir={nadir_v} ng/mL)."
+        )
+
+    # Confirmación: segunda medición ≥3 semanas después de la primera elevación.
+    if len(breaches) >= 2:
+        delta = (breaches[1][0] - breaches[0][0]).days
+        if delta >= min_separation_days:
+            result['criteria_met']['confirmation_3wk_separation'] = True
+            result['evidence'].append(
+                f"Confirmación a los {delta} días el {breaches[1][0].isoformat()} "
+                f"(PSA={breaches[1][1]} ng/mL)."
+            )
+        else:
+            result['evidence'].append(
+                f"Segunda elevación a {delta} días — insuficiente (requiere ≥{min_separation_days})."
+            )
+
+    # Testosterona ≤50 ng/dL — castración bioquímica confirmada.
+    if testo:
+        last_testo = testo[-1][1]
+        result['testosterone_castrate'] = last_testo <= 50.0
+        result['criteria_met']['testosterone_castrate'] = last_testo <= 50.0
+        result['evidence'].append(
+            f"Última testosterona: {last_testo} ng/dL "
+            f"({'castrado' if last_testo <= 50 else 'NO castrado'})."
+        )
+    else:
+        result['evidence'].append('Sin historial de testosterona — castración no confirmable.')
+
+    result['flag'] = all(result['criteria_met'].values())
+    return result
+
+
+def detect_phoenix_bcr(psa_history, last_rt_date=None, post_rt_nadir=None):
+    """Phoenix (Roach M et al. IJROBP 2006;65:965-74) — BCR post-RT.
+
+    Criterio actual NCCN/EAU: PSA ≥ nadir + 2 ng/mL tras radioterapia.
+    Es más específico que ASTRO 1996 y se aplica con/sin ADT.
+    """
+    psa = _kinetics_normalize_history(psa_history)
+    rt_d = _kinetics_parse_date(last_rt_date)
+    nadir_v = _kinetics_safe_float(post_rt_nadir)
+
+    result = {
+        'flag': False,
+        'evidence': [],
+        'threshold_ng_ml': None,
+        'breach_date': None,
+        'breach_value': None,
+        'post_rt_nadir': nadir_v,
+        'criterion_source': 'Phoenix — Roach M et al. IJROBP 2006;65(4):965-74',
+    }
+
+    post_rt = [(d, p) for d, p in psa if rt_d is None or d >= rt_d]
+    if not post_rt:
+        result['evidence'].append('Sin mediciones PSA post-RT.')
+        return result
+
+    if nadir_v is None:
+        nadir_v = min(p for _, p in post_rt)
+        result['post_rt_nadir'] = nadir_v
+
+    threshold = nadir_v + 2.0
+    result['threshold_ng_ml'] = round(threshold, 3)
+
+    for d, p in post_rt:
+        if p >= threshold:
+            result['flag'] = True
+            result['breach_date'] = d.isoformat()
+            result['breach_value'] = p
+            result['evidence'].append(
+                f"PSA {p} ng/mL el {d.isoformat()} supera nadir+2 (umbral {threshold:.2f}). "
+                "Cumple Phoenix → BCR post-RT."
+            )
+            break
+
+    if not result['flag']:
+        result['evidence'].append(
+            f"PSA máximo post-RT no alcanza umbral Phoenix (nadir={nadir_v}, umbral={threshold:.2f})."
+        )
+    return result
+
+
+def detect_astro_bcr(psa_history):
+    """ASTRO 1996 (Cox JD et al.) — Criterio histórico de BCR post-RT.
+
+    Tres elevaciones consecutivas de PSA tras el nadir post-RT.
+    Conservado para auditoría retrospectiva; Phoenix es el estándar actual.
+    """
+    psa = _kinetics_normalize_history(psa_history)
+
+    result = {
+        'flag': False,
+        'evidence': [],
+        'three_rises_dates': [],
+        'criterion_source': 'ASTRO 1996 — Cox JD et al. IJROBP 1997;37(5):1035-41',
+    }
+
+    if not psa:
+        result['evidence'].append('Sin historial PSA.')
+        return result
+
+    # Detectar nadir y luego buscar 3 ascensos consecutivos.
+    values = [p for _, p in psa]
+    nadir_idx = values.index(min(values))
+    post = psa[nadir_idx:]
+
+    rises = []
+    for i in range(1, len(post)):
+        if post[i][1] > post[i - 1][1]:
+            rises.append(post[i])
+        else:
+            rises = []  # racha rota
+        if len(rises) >= 3:
+            result['flag'] = True
+            result['three_rises_dates'] = [d.isoformat() for d, _ in rises[:3]]
+            result['evidence'].append(
+                f"3 elevaciones consecutivas detectadas a partir de {rises[0][0].isoformat()}. "
+                "Cumple criterio ASTRO 1996."
+            )
+            break
+
+    if not result['flag']:
+        result['evidence'].append('No se detectaron 3 elevaciones consecutivas tras nadir.')
+    return result
+
+
+def detect_post_rt_bounce(psa_history, last_rt_date=None, nadir_value=None,
+                         max_bounce_value=2.0, max_window_months=36):
+    """Bounce post-RT — alza transitoria de PSA tras radioterapia.
+
+    Características clínicas:
+      - Pequeña elevación (típicamente ≤2-3 ng/mL sobre nadir).
+      - Ocurre en los primeros 12-36 meses post-RT.
+      - Resuelve espontáneamente sin progresión confirmada.
+
+    NO debe interpretarse como BCR (Patel 2010, Crook 2014). Distinguirlo evita
+    intervenciones innecesarias.
+    """
+    psa = _kinetics_normalize_history(psa_history)
+    rt_d = _kinetics_parse_date(last_rt_date)
+    nadir_v = _kinetics_safe_float(nadir_value)
+
+    result = {
+        'flag': False,
+        'evidence': [],
+        'bounce_date': None,
+        'peak_value': None,
+        'returned_to_baseline': False,
+        'follow_up_window_months': None,
+        'criterion_source': 'Patel C et al. Brachytherapy 2014;13(4):347-52',
+    }
+
+    post_rt = [(d, p) for d, p in psa if rt_d is None or d >= rt_d]
+    if not post_rt or len(post_rt) < 3:
+        result['evidence'].append('Datos insuficientes para evaluar bounce (<3 mediciones post-RT).')
+        return result
+
+    if nadir_v is None:
+        nadir_v = min(p for _, p in post_rt)
+
+    # Buscar pico transitorio: subida moderada y luego retorno a nadir/baseline.
+    for i in range(1, len(post_rt) - 1):
+        d, p = post_rt[i]
+        if rt_d:
+            months_since_rt = (d - rt_d).days / 30.44
+            if months_since_rt > max_window_months:
+                continue
+        rise = p - nadir_v
+        if 0 < rise <= max_bounce_value:
+            # Ver si en mediciones posteriores retorna ≤ nadir + 0.5
+            tail = post_rt[i + 1:]
+            if any(pp <= nadir_v + 0.5 for _, pp in tail):
+                result['flag'] = True
+                result['bounce_date'] = d.isoformat()
+                result['peak_value'] = p
+                result['returned_to_baseline'] = True
+                if rt_d:
+                    result['follow_up_window_months'] = round((d - rt_d).days / 30.44, 1)
+                result['evidence'].append(
+                    f"Bounce detectado el {d.isoformat()} (PSA pico={p} ng/mL, "
+                    f"+{rise:.2f} sobre nadir, retorno posterior a baseline)."
+                )
+                break
+
+    if not result['flag']:
+        result['evidence'].append('No se identificó patrón de bounce (alza transitoria con retorno).')
+    return result
+
+
+def auto_classify_chaarted_volume(metastasis_profile):
+    """CHAARTED (Sweeney CJ et al. NEJM 2015;373:737) — Volumen alto vs bajo en mHSPC.
+
+    Volumen ALTO si ≥1 de los siguientes:
+      - ≥4 metástasis óseas con ≥1 fuera de columna/pelvis (apendicular).
+      - Cualquier metástasis visceral (hígado, pulmón, etc.).
+    Volumen BAJO en otro caso. Determina elegibilidad de docetaxel + ADT/ARPI.
+    """
+    profile = metastasis_profile or {}
+    bone_count = _kinetics_safe_float(profile.get('bone_metastases_count')) or _kinetics_safe_float(
+        profile.get('bone_count')
+    ) or 0
+    appendicular = bool(profile.get('bone_appendicular') or profile.get('bone_outside_axial'))
+    visceral = bool(profile.get('visceral_mets') or profile.get('visceral_metastases'))
+    visceral_count = _kinetics_safe_float(profile.get('visceral_mets_count')) or 0
+
+    if visceral or visceral_count >= 1:
+        return 'high'
+    if bone_count >= 4 and appendicular:
+        return 'high'
+    return 'low'
+
+
+def auto_classify_latitude(metastasis_profile, gleason=None):
+    """LATITUDE (Fizazi K et al. NEJM 2017;377:352) — High risk en mHSPC.
+
+    High risk si cumple ≥2 de estos 3 criterios:
+      - Gleason ≥8 (ISUP 4-5).
+      - ≥3 metástasis óseas.
+      - Cualquier metástasis visceral.
+    Determina elegibilidad de abiraterona en primera línea.
+    """
+    profile = metastasis_profile or {}
+    g = _kinetics_safe_float(gleason) or _kinetics_safe_float(profile.get('gleason_score'))
+    bone_count = _kinetics_safe_float(profile.get('bone_metastases_count')) or _kinetics_safe_float(
+        profile.get('bone_count')
+    ) or 0
+    visceral = bool(profile.get('visceral_mets') or profile.get('visceral_metastases'))
+    visceral_count = _kinetics_safe_float(profile.get('visceral_mets_count')) or 0
+
+    criteria_met = sum([
+        bool(g and g >= 8),
+        bone_count >= 3,
+        bool(visceral or visceral_count >= 1),
+    ])
+    return 'high_risk' if criteria_met >= 2 else 'low_risk'
+
+
 # ============================================================================
 # 4. CAPRA-S (POST-SURGICAL) SCORE
 # ============================================================================

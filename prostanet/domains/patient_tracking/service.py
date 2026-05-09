@@ -27,6 +27,7 @@ from prostanet.shared.official_diagnosis import (
     NODAL_STATUS_OPTIONS,
 )
 from prostanet.shared.contracts import FieldSpec, RegistrationFragment
+from prostanet.shared.dre import apply_dre_normalization
 from prostanet.shared.field_semantics import (
     CAPTURE_LAYER_METADATA,
     build_score_semantics,
@@ -71,6 +72,11 @@ STATE_SCOPE_MAP = {
     "mcspc_high_volume": "advanced",
     "m0_crpc": "advanced",
     "m1_crpc": "advanced",
+    # FAUBOT BUG-001 fix: oligoprogresión bajo terapia sistémica con castración
+    # confirmada cae al carril avanzado (NO diagnóstico). Sin esta línea el
+    # médico vería campos de wizard diagnóstico para un paciente CRPC con
+    # oligoprogresión, inválido clínicamente.
+    "oligoprogression_post_systemic": "advanced",
 }
 
 SCOPE_CONFIG = {
@@ -120,6 +126,7 @@ CANONICAL_FIELD_MAP = {
     "molecular_assay_source": "biomarker_source",
     "castrate_testosterone_confirmed": "castrate_testosterone_status",
     "positive_cores": "num_cores_positive",
+    "dre_findings": "dre_finding",
 }
 
 CANONICAL_VALUE_MAPS = {
@@ -498,6 +505,9 @@ def _survival_fragment() -> RegistrationFragment:
         "mcspc_high_volume",
         "m0_crpc",
         "m1_crpc",
+        # FAUBOT BUG-004 fix: oligoprogresión también requiere captura de
+        # supervivencia y anclas longitudinales (es un subestado avanzado).
+        "oligoprogression_post_systemic",
     ]
     return _fragment(
         id="fragment_survival_status",
@@ -1061,6 +1071,8 @@ class PatientTrackingService:
             "line_of_therapy_number": assessment_input.get("line_of_therapy_number", assessment_input.get("line_of_therapy", "")),
             "line_of_therapy_context": assessment_input.get("line_of_therapy_context", ""),
             "psa_history": assessment_input.get("psa_history", assessment_input.get("ape_history", [])),
+            "dre_finding": assessment_input.get("dre_finding", assessment_input.get("dre_findings", "")),
+            "dre_suspicious": assessment_input.get("dre_suspicious", ""),
             "registrar_defuncion_en_esta_visita": death_toggle_default,
             "received_radiotherapy_this_visit": rt_toggle_default,
             "vital_status": assessment_input.get("vital_status", "deceased" if death_toggle_default == "1" else ""),
@@ -1157,6 +1169,8 @@ class PatientTrackingService:
 
         if _is_present(canonical.get("drug_scheme")):
             canonical["drug_scheme"] = normalize_regimen_code(canonical.get("drug_scheme"))
+
+        canonical = apply_dre_normalization(canonical, include_clinical_stage=False)
 
         if canonical.get("genomic_test_done") in (None, "", "0", 0, False):
             genomic_markers = [

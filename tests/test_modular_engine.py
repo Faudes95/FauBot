@@ -81,7 +81,7 @@ def test_modular_metadata_and_hub_routes_are_available(app_client):
     classifier_fields = {field["name"]: field for field in classifier_schema_data["schema"]["fields"]}
     assert classifier_fields["prior_prostatectomy"]["label"] == "Prostatectomía radical previa por cáncer de próstata"
     assert classifier_fields["prior_radiation"]["label"] == "Radioterapia previa por cáncer de próstata"
-    assert classifier_fields["bcr2"]["label"] == "Segunda recurrencia bioquímica tras tratamiento local"
+    assert classifier_fields["bcr2"]["label"] == "Recurrencia Bioquímica tras tratamiento local"
     assert "Oligometastatic" not in classifier_fields["metastasis_site"]["options"]
 
     hub_response = client.get("/clinical-hub")
@@ -102,7 +102,7 @@ def test_modular_metadata_and_hub_routes_are_available(app_client):
     assert "Survivorship y toxicidad por tratamiento" in hub_html
     assert "Prostatectomía radical previa por cáncer de próstata" in hub_html
     assert "Radioterapia previa por cáncer de próstata" in hub_html
-    assert "Segunda recurrencia bioquímica tras tratamiento local" in hub_html
+    assert "Recurrencia Bioquímica tras tratamiento local" in hub_html
     assert "Este contexto solo aplica cuando ya existe cáncer de próstata confirmado" in hub_html
     assert 'name="volume_disease"' not in hub_html
     assert 'value="Oligometastatic"' not in hub_html
@@ -1637,8 +1637,8 @@ def test_advanced_modules_surface_sequence_specific_options(app_client):
             "ast": 22,
             "alp": 90,
             "bilirubin": 0.8,
-            "cbc_date": "2026-03-25",
-            "liver_panel_date": "2026-03-25",
+            "cbc_date": (date.today() - timedelta(days=3)).isoformat(),
+            "liver_panel_date": (date.today() - timedelta(days=3)).isoformat(),
             "peripheral_neuropathy_grade": 0,
             "drug_interaction_reviewed": 1,
             "performance_status_driver": "cancer_related",

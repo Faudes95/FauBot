@@ -21,12 +21,17 @@ MHSPC_STATES = {
     "mcspc_high_volume_metachronous",
     "mcspc_high_volume",
 }
+OLIGOPROGRESSION_STATES = {"oligoprogression_post_systemic"}
 ADVANCED_STATES = {
     "adt_progression_verification",
     "m0_crpc",
     "m1_crpc",
-} | MHSPC_STATES
+} | MHSPC_STATES | OLIGOPROGRESSION_STATES
 CRPC_TRACK_STATES = {"adt_progression_verification", "m0_crpc", "m1_crpc"}
+
+# Variantes histológicas reconocidas. `neuroendocrine` y `small_cell` cambian
+# la conducta terapéutica (regímenes con platinos, etc.) y deben dispararse en UI.
+HISTOLOGY_VARIANTS = {"acinar", "intraductal", "neuroendocrine", "small_cell", "mixed"}
 
 _SYSTEMIC_TOKENS = (
     "abirater",
@@ -272,14 +277,34 @@ def _derive_progression_pattern(patient: dict[str, Any], state: str) -> str:
     truth = patient.get("longitudinal_truth_snapshot") or {}
     truth_values = truth.get("field_values") or {}
     explicit_pattern = str(truth_values.get("progression_pattern") or "").strip().lower()
-    if explicit_pattern in {"radiographic", "clinical", "biochemical_only", "mixed"}:
+    if explicit_pattern in {"radiographic", "clinical", "biochemical_only", "mixed", "oligoprogression"}:
         return explicit_pattern
     latest_followup = _latest(patient.get("follow_ups", []), "visit_date")
+
+    # Oligoprogresión: ≤5 lesiones nuevas/progresivas con resto controlado bajo terapia
+    # sistémica. Su detección es prerequisito para terapias dirigidas (SBRT focal,
+    # MDT) sin cambiar línea sistémica. Lit: Foster CC et al. JCO 2018; ESTRO/EAU
+    # consensus 2021.
+    progressing = _safe_int(
+        truth_values.get("lesion_count_progressing")
+        or latest_followup.get("lesion_count_progressing")
+        or truth_values.get("progressing_lesion_count")
+    )
+    stable = _safe_int(
+        truth_values.get("lesion_count_stable")
+        or latest_followup.get("lesion_count_stable")
+        or truth_values.get("stable_lesion_count")
+    )
+    if progressing is not None and 0 < progressing <= 5 and (stable or 0) >= 1:
+        return "oligoprogression"
+
     disease_status = str(
         truth_values.get("disease_status")
         or latest_followup.get("disease_status")
         or ""
     ).lower()
+    if "oligoprogres" in disease_status or "oligo-progres" in disease_status:
+        return "oligoprogression"
     metachronous = _is_metachronous_mhspc(patient)
     if "radiograf" in disease_status:
         return "radiographic"
@@ -714,6 +739,29 @@ def _systemic_target_state(
     if explicit_state in {"m0_crpc", "m1_crpc"}:
         reasons.append("Último assessment ya documenta CRPC.")
         resolved_systemic_context = "confirmed_crpc"
+
+    # Oligoprogresión bajo terapia sistémica con castración: subestado paralelo a
+    # CRPC. Permite considerar terapia dirigida focal (SBRT/MDT) sin cambiar la
+    # línea sistémica. Se identifica antes del branch CRPC clásico para no
+    # colapsar todo a m0/m1_crpc cuando el patrón es realmente oligoprogresivo.
+    if castrate_status == "confirmed_castrate" and progression_pattern == "oligoprogression":
+        reasons.append("Oligoprogresión (≤5 lesiones progresivas, resto estable) bajo terapia sistémica con castración.")
+        phenotype_state = "oligoprogression_post_systemic"
+        resolved_systemic_context = "confirmed_crpc"
+        return {
+            "state": phenotype_state,
+            "phenotype_state": phenotype_state,
+            "reasons": reasons,
+            **build_progression_gate(
+                systemic_progression_context=resolved_systemic_context,
+                on_adt=adt_context != "none",
+                castrate_status=castrate_status,
+                progression_pattern=progression_pattern,
+                prior_prostatectomy=_has_post_prostatectomy_context(patient),
+                prior_radiation=bool(patient.get("radiation")),
+                phenotype_state=phenotype_state,
+            ),
+        }
 
     if castrate_status == "confirmed_castrate" and progression_pattern in {"radiographic", "clinical", "mixed"}:
         reasons.append("Progresión avanzada con testosterona en rango de castración.")

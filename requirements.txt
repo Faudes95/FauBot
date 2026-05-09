@@ -6,3 +6,5 @@ scikit-learn
 joblib
 requests
 lifelines
+python-docx
+pypdf

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from prostanet.shared.dre import dre_to_tstage as normalize_dre_to_tstage
 from prostanet.shared.metastatic_profile import build_metastatic_profile, summarize_metastatic_profile
 from prostanet.shared.tnm_metastatic_renderer import render_m_stage_visual
 
@@ -329,16 +330,7 @@ class TNMEngine:
         - ``"T2a - Afecta ..."`` → ``"T2a"``
         - ``"T3a"`` etc. → pass-through
         """
-        if not dre_value or str(dre_value).strip() in ("", "0", "Normal"):
-            return None
-        if str(dre_value).strip() == "1":
-            return "T2a"  # Legacy sospechoso → estimación conservadora
-        # Intentar mapeo por nombre descriptivo
-        mapped = _DRE_FINDING_TO_TSTAGE.get(str(dre_value).strip())
-        if mapped is not None:
-            return mapped
-        # Pass-through si ya es un T-stage válido
-        return _canonical_t_stage_label(dre_value)
+        return normalize_dre_to_tstage(dre_value)
 
     @staticmethod
     def get_t_image_path(t_stage: str | None) -> str | None:

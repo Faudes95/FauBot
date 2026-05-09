@@ -15,6 +15,7 @@ from clinical_scores import (
 )
 
 from prostanet.domains.patient_tracking.event_graph import merge_record_into_assessment_payload
+from prostanet.shared.dre import DRE_FINDING_OPTIONS, apply_dre_normalization, has_dre_documentation, normalize_dre
 
 
 DIAGNOSTIC_STATES = {"diagnostic_workup", "post_negative_biopsy_followup"}
@@ -30,6 +31,14 @@ FIELD_REGISTRY: dict[str, dict[str, Any]] = {
         "field_type": FIELDTYPE_SELECT,
         "options": ["", "0", "1"],
         "help_text": "0 = no sospechoso, 1 = sospechoso.",
+        "required_by_context": "diagnostic",
+        "intake_priority": 1,
+    },
+    "dre_finding": {
+        "label": "Hallazgo al tacto rectal",
+        "field_type": FIELDTYPE_SELECT,
+        "options": ["", *DRE_FINDING_OPTIONS],
+        "help_text": "Hallazgo estructurado; T2 o mayor se normaliza como tacto rectal sospechoso.",
         "required_by_context": "diagnostic",
         "intake_priority": 1,
     },
@@ -284,6 +293,8 @@ def _score_missing_inputs(payload: dict[str, Any], score_key: str) -> list[str]:
             continue
         if field == "age" and (_is_present(payload.get("age")) or _is_present(payload.get("dob"))):
             continue
+        if field == "dre_suspicious" and has_dre_documentation(payload):
+            continue
         if not _is_present(payload.get(field)):
             missing.append(field)
     if score_key == "capra":
@@ -307,6 +318,8 @@ def _normalize_payload(
     baseline = (patient or {}).get("baseline") or {}
     surgery = (patient or {}).get("surgery") or {}
     identity = (patient or {}).get("identity") or {}
+
+    merged = apply_dre_normalization(merged, include_clinical_stage=False)
 
     if not _is_present(merged.get("psa")):
         merged["psa"] = merged.get("baseline_psa") or baseline.get("baseline_psa")
@@ -480,7 +493,7 @@ def _erspc_card(payload: dict[str, Any], *, rebiopsy: bool) -> dict[str, Any]:
         {
             "age": payload.get("age"),
             "psa": payload.get("psa") or payload.get("baseline_psa"),
-            "dre_abnormal": _normalize_bool_like(payload.get("dre_suspicious")),
+            "dre_abnormal": normalize_dre(payload, include_clinical_stage=False).is_suspicious,
             "prostate_volume_ml": payload.get("prostate_volume_ml"),
             "prior_biopsy": _safe_int(payload.get("prior_biopsy_count")) not in (None, 0),
             "family_history": bool(payload.get("family_history_detail")),
@@ -495,7 +508,7 @@ def _erspc_card(payload: dict[str, Any], *, rebiopsy: bool) -> dict[str, Any]:
         primary_result=f"{result.get('any_cancer_probability_pct')}% cáncer / {result.get('high_grade_probability_pct')}% alto grado",
         meaning=result.get("recommendation") or "Estimación referencial de riesgo prebiopsia.",
         clinical_relation="Se relaciona con decisión de biopsia o rebiopsia y con riesgo de cáncer clínicamente significativo.",
-        inputs_used=_stringify_inputs(payload, ["psa", "dre_suspicious", "prior_biopsy_count", "prostate_volume_ml"]),
+        inputs_used=_stringify_inputs(payload, ["psa", "dre_finding", "dre_suspicious", "prior_biopsy_count", "prostate_volume_ml"]),
         source_summary="Estimación referencial local basada en modelo ERSPC/PCPT simplificado; úsela como apoyo y no como sustituto de guías.",
         badge="Estimación referencial",
         result_data=result,
@@ -1054,6 +1067,7 @@ def build_intake_score_requirements(
     assessment_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = deepcopy(assessment_input or {})
+    payload = apply_dre_normalization(payload, include_clinical_stage=False)
     if _is_present(payload.get("psa")) and not _is_present(payload.get("baseline_psa")):
         payload["baseline_psa"] = payload.get("psa")
     consideration = _treatment_consideration(payload, assessment_result)

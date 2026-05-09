@@ -271,7 +271,7 @@ class M0CrpcService:
             contraindications=legacy.get("contraindications", []),
             durations_and_conditions=["Mantener la castracion con ADT durante toda la estrategia seleccionada.", "Si se inicia ARPI, continuar hasta progresion o toxicidad inaceptable."],
             evidence_trace=[self.registry.get_module_evidence(self.module_id)],
-            trial_matches=[{"trial": "SPARTAN", "match": nccn["high_risk_nmcrpc"]}, {"trial": "ARAMIS", "match": True}],
+            trial_matches=[{"trial": "SPARTAN", "match": nccn["high_risk_nmcrpc"]}, {"trial": "PROSPER", "match": nccn["high_risk_nmcrpc"]}, {"trial": "ARAMIS", "match": True}],
             applicability_badge="guideline-consistent" if castrate_confirmed else "selected_candidate",
             report_sections={"summary": "M0 CRPC risk-adapted intensification pathway.", "psadt_advisory": psadt_advisory_note},
             decision_quality={

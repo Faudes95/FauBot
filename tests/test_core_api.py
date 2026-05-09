@@ -5518,7 +5518,7 @@ def test_pivotal_match_restricts_post_rp_bcr_to_salvage_trials_and_uses_backbone
     assert data["success"] is True
     visible_names = {str(item.get("study_name", "")) for item in data["eligible_matches"] + data["partial_matches"] + data["ineligible_matches"]}
     assert visible_names
-    assert visible_names <= {"RAVES", "RADICALS-RT", "ARTISTIC", "GETUG-AFU 16", "RTOG 9601", "SPPORT", "EMBARK", "EMPIRE-1"}
+    assert visible_names <= {"RAVES", "RADICALS-RT", "ARTISTIC", "GETUG-AFU 16", "RTOG 9601", "SPPORT", "EMBARK", "EMPIRE-1", "PRESTO / AFT-19"}
     assert "PROTECT" not in visible_names
     assert "CHAARTED" not in visible_names
     getug = next((item for item in data["partial_matches"] + data["ineligible_matches"] if item.get("study_name") == "GETUG-AFU 16"), {})

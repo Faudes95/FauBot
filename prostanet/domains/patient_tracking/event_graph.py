@@ -3,6 +3,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from prostanet.shared.dre import apply_dre_normalization
+
 
 STATE_EVENT_EXPECTATIONS = {
     "diagnostic_workup": ["clinical_baseline", "mri_facts", "diagnostic_plan", "biopsy_trigger", "family_history_detail", "structured_biopsy"],
@@ -222,7 +224,7 @@ def merge_record_into_assessment_payload(assessment_input: dict[str, Any], recor
     if not _present(merged.get("molecular_assay_source")) and _present(genomics.get("actionable_findings")):
         merged["molecular_assay_source"] = merged.get("biomarker_source") or "Documento longitudinal"
 
-    return merged
+    return apply_dre_normalization(merged, include_clinical_stage=False)
 
 
 def derive_management_intent_status(state: str, result: dict[str, Any] | None, record: dict[str, Any] | None) -> str:
